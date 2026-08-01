@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Generated CSS (rebuilt from source)
+public/assets/css/tailwind.css
+
+# Environment file (contains passwords — never commit this)
+.env
+
+# Storage (logs and cache)
+storage/logs/
+storage/cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+ai-pricing-prompt.md
+project-functional-scope.md
