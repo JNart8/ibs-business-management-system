@@ -28,7 +28,7 @@
                 <div>
                     <label class="block text-sm font-semibold text-gray-700 mb-1">Pay From Account *</label>
                     <select name="account_id" id="account_id" required onchange="updateAccountBalance()"
-                        class="w-full border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                         <option value="">-- Select Account --</option>
                         <?php foreach ($accounts as $account): ?>
                             <option value="<?= $account['id'] ?>" data-balance="<?= $account['balance'] ?>">
@@ -44,7 +44,7 @@
                 <div>
                     <label class="block text-sm font-semibold text-gray-700 mb-1">Category *</label>
                     <select name="category" id="category_select" onchange="toggleNewCategory()"
-                        class="w-full border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                         <option value="">-- Select or Create New --</option>
                         <?php foreach ($categories as $cat): ?>
                             <option value="<?= e($cat['category']) ?>"><?= e($cat['category']) ?></option>

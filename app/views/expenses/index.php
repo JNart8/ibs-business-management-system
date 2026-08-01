@@ -33,7 +33,7 @@
         <div>
             <label class="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Category</label>
             <select name="category"
-                class="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                class="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                 <option value="">-- All Categories --</option>
                 <?php foreach ($categories as $cat): ?>
                     <option value="<?= e($cat['category']) ?>" <?= $category === $cat['category'] ? 'selected' : '' ?>>
@@ -45,7 +45,7 @@
         <div>
             <label class="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Payment Account</label>
             <select name="account_id"
-                class="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                class="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                 <option value="">-- All Accounts --</option>
                 <?php foreach ($accounts as $acc): ?>
                     <option value="<?= $acc['id'] ?>" <?= $accountId == $acc['id'] ? 'selected' : '' ?>>
