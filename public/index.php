@@ -129,7 +129,7 @@ $planFeatureMap = [
     '/import'               => 'imports_exports',
     '/export'               => 'imports_exports',
     '/suspense'             => 'suspense',
-    '/financial-accounts'   => 'financial_accounts',
+    '/financial-accounts/store' => 'manage_financial_accounts',
     '/expenses'             => 'expenses',
     '/distributor'          => 'distributor',
 ];

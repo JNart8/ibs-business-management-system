@@ -34,6 +34,11 @@ switch ($action) {
         if (!$id) redirect(BASE_URL . '/financial-accounts', 'error', 'Account ID required');
         showTransactions($db, $id);
         break;
+    case 'edit':
+    case 'update':
+        if (!$id) redirect(BASE_URL . '/financial-accounts', 'error', 'Account ID required');
+        $method === 'POST' ? updateAccount($db, $id) : showEditForm($db, $id);
+        break;
     default:
         http_response_code(404);
         echo "<h1>Page Not Found</h1><a href='" . BASE_URL . "/financial-accounts'>← Back to Accounts</a>";
@@ -219,3 +224,56 @@ function showTransactions($db, $id)
     $pageTitle = 'Account Ledger: ' . $account['name'];
     include APP_PATH . '/views/financial_accounts/transactions.php';
 }
+
+function showEditForm($db, $id)
+{
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$id]);
+    if (!$account) {
+        redirect(BASE_URL . '/financial-accounts', 'error', 'Account not found.');
+    }
+
+    $pageTitle = 'Edit Account: ' . $account['name'];
+    include APP_PATH . '/views/financial_accounts/edit.php';
+}
+
+function updateAccount($db, $id)
+{
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$id]);
+    if (!$account) {
+        redirect(BASE_URL . '/financial-accounts', 'error', 'Account not found.');
+    }
+
+    $name          = trim($_POST['name'] ?? '');
+    $provider      = trim($_POST['provider'] ?? '');
+    $accountNumber = trim($_POST['account_number'] ?? '');
+    $isActive      = isset($_POST['is_active']) ? 1 : 0;
+
+    if (empty($name)) {
+        redirect(BASE_URL . '/financial-accounts/edit/' . $id, 'error', 'Account name is required.');
+    }
+
+    if ($isActive === 0 && $account['is_active'] == 1) {
+        $otherActive = $db->fetchOne("SELECT COUNT(*) as c FROM accounts WHERE is_active = 1 AND id != ?", [$id]);
+        if (intval($otherActive['c'] ?? 0) === 0) {
+            redirect(BASE_URL . '/financial-accounts/edit/' . $id, 'error',
+                'You cannot deactivate the last active account — sales and purchases need at least one to post to.');
+        }
+    }
+
+    // Deliberately NOT editable here:
+    // - `type` (cash/mobile_money/bank) — changing it after transactions exist would
+    //   misclassify historical records and the color-coded UI relies on it being stable.
+    // - `balance` — must only ever change through a deposit/transfer/sale transaction,
+    //   never a direct edit, or the account_transactions ledger stops reconciling with
+    //   the account's actual balance.
+    // If a client genuinely picked the wrong type when an account was created, that's a
+    // one-off data fix via phpMyAdmin, not something exposed in the UI.
+    $db->query("
+        UPDATE accounts
+        SET name = ?, provider = ?, account_number = ?, is_active = ?
+        WHERE id = ?
+    ", [$name, $provider ?: null, $accountNumber ?: null, $isActive, $id]);
+
+    redirect(BASE_URL . '/financial-accounts', 'success', 'Account updated successfully.');
+}
+

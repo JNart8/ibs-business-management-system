@@ -236,11 +236,9 @@
                                 <a href="<?= BASE_URL ?>/transactions" class="dropdown-item">
                                     💳 Customer Transactions
                                 </a>
-                                <?php if (planAllows('financial_accounts')): ?>
                                 <a href="<?= BASE_URL ?>/financial-accounts" class="dropdown-item">
                                     💳 Financial Accounts
                                 </a>
-                                <?php endif; ?>
                                 <?php if (planAllows('expenses')): ?>
                                 <a href="<?= BASE_URL ?>/expenses" class="dropdown-item">
                                     💸 Expenses
@@ -459,13 +457,11 @@
                                     @click="mobileOpen = false">
                                     💳 Customer Transactions
                                 </a>
-                                <?php if (planAllows('financial_accounts')): ?>
                                 <a href="<?= BASE_URL ?>/financial-accounts"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💳 Financial Accounts
                                 </a>
-                                <?php endif; ?>
                                 <?php if (planAllows('expenses')): ?>
                                 <a href="<?= BASE_URL ?>/expenses"
                                     class="nav-link block"

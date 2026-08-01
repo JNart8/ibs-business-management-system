@@ -11,10 +11,16 @@
             class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition flex items-center gap-1">
             🔄 Move Funds
         </a>
+        <?php if (planAllows('manage_financial_accounts')): ?>
         <button onclick="document.getElementById('addAccountModal').classList.remove('hidden')"
             class="bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition flex items-center gap-1">
             + Add Account
         </button>
+        <?php else: ?>
+        <span class="text-gray-400 text-sm px-4 py-2.5" title="Upgrade your plan to add more accounts">
+            🔒 Add Account (upgrade)
+        </span>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -73,11 +79,17 @@
                             <?= formatMoney($account['balance']) ?>
                         </div>
                     </div>
-                    
-                    <a href="<?= BASE_URL ?>/financial-accounts/transactions/<?= $account['id'] ?>" 
-                        class="bg-white/20 hover:bg-white/30 text-white text-xs font-semibold py-1 px-3 rounded transition z-20">
-                        View Ledger →
-                    </a>
+
+                    <div class="flex gap-2">
+                        <a href="<?= BASE_URL ?>/financial-accounts/edit/<?= $account['id'] ?>"
+                            class="bg-white/20 hover:bg-white/30 text-white text-xs font-semibold py-1 px-3 rounded transition z-20">
+                            ✏️ Edit
+                        </a>
+                        <a href="<?= BASE_URL ?>/financial-accounts/transactions/<?= $account['id'] ?>"
+                            class="bg-white/20 hover:bg-white/30 text-white text-xs font-semibold py-1 px-3 rounded transition z-20">
+                            View Ledger →
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>

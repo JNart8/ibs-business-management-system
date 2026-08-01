@@ -24,6 +24,7 @@ return [
             'purchases',
             'inventory',
             'basic_reports',
+            'financial_accounts',
         ],
     ],
 
@@ -40,6 +41,7 @@ return [
             'imports_exports',
             'suspense',
             'financial_accounts',
+            'manage_financial_accounts',
             'expenses',
         ],
     ],
@@ -57,6 +59,7 @@ return [
             'imports_exports',
             'suspense',
             'financial_accounts',
+            'manage_financial_accounts',
             'expenses',
             'distributor',
             'advanced_permissions',
