@@ -40,7 +40,8 @@ a plan change takes effect on the client's very next page load, no redeploy or l
 | Advanced reports: profit margin, profit & loss, dead stock, receivables, payables | — | ✅ | ✅ |
 | Bulk import/export | — | ✅ | ✅ |
 | Suspense transactions | — | ✅ | ✅ |
-| Financial accounts (+ internal transfers) | — | ✅ | ✅ |
+| Financial accounts — view balances, view/edit account details, view transaction history, transfer funds | ✅ | ✅ | ✅ |
+| Financial accounts — create new accounts | — | ✅ | ✅ |
 | Expenses tracking | — | ✅ | ✅ |
 | Distributor deliveries | — | — | ✅ |
 | Multi-branch (stock/sales/purchases + transfers) | — | — | 🔜 Phase 3 |
@@ -171,18 +172,80 @@ is currently a single global integer, not a per-location table — every control
 reads or writes stock needs to change, not just the schema. Recommendation stands: don't
 bundle this into Phase 1/2, build it once there's a real Enterprise client to build against.
 
+### 5.8 "Core can't see account balances at all — but sales already let you pick which account a sale posts to"
+
+**Client's proposal:** Core should be able to *view* the Financial Accounts page (balances,
+transaction history) and *move funds between accounts* (transfer), but not *create* new
+accounts. Two default accounts (Cash, Mobile Money) get seeded at implementation time so
+Core clients never need to create one.
+
+**Recommendation: agreed, with one addition** — bundle per-account transaction history
+into the same "base" access as balances. Viewing a balance without being able to see how
+it was arrived at undermines trust in the number; both are read-only and equally low-risk
+to expose.
+
+**Design:** split the single `financial_accounts` feature into two keys:
+- `financial_accounts` (view balances, view transaction history, transfer funds) → **all plans**.
+- `manage_financial_accounts` (create new accounts) → **Growth+ only**.
+
+The "+ Add Account" button/modal is gated in the view; the actual enforcement is at the
+router level (`/financial-accounts/store` requires `manage_financial_accounts`), consistent
+with how role restrictions are enforced elsewhere in this app — hiding the button is a UX
+nicety, the backend check is what actually matters.
+
+**Status:** done. See §6.
+
+### 5.9 "Is an in-app edit screen for accounts (name/number) a must-have?"
+
+**Yes — and this stopped being a "someday" gap the moment §5.8/§6 shipped a default
+Mobile Money account with `provider = NULL` and `account_number = NULL`.** Without an edit
+screen, the only way for a client to record their real MoMo number would be a manual DB
+edit on your end, for every single client, immediately after onboarding. That's the kind
+of gap worth flagging as soon as it's spotted rather than waiting to be asked, per your
+standing instruction — so: flagging it now, and I've built it rather than leaving it open.
+
+**What's editable:** `name`, `provider`, `account_number`, and an active/inactive toggle
+(soft-retire an account without deleting it — deletion isn't offered anywhere in this app,
+correctly, since `account_transactions`/`account_transfers` reference accounts by ID and a
+hard delete would orphan financial history).
+
+**What's deliberately *not* editable, and why:**
+- **`type`** (cash/mobile_money/bank) — changing it after transactions exist would
+  misclassify historical records; the color-coded UI and reporting logic assume it's stable.
+- **`balance`** — must only ever move through a deposit/transfer/sale, never a direct edit,
+  or the `account_transactions` ledger stops reconciling with the account's actual balance.
+- **Default accounts (`is_default = 1`) can't be deactivated** — Core clients only have
+  these two; removing the ability to post sales entirely would be a bigger problem than
+  the typo it might be fixing.
+- **The last active account overall can't be deactivated**, regardless of plan — sales and
+  purchases need at least one account to post to.
+
+**Access:** bundled into the same base tier as viewing balances/transfers (§5.8) — editing
+your own account's contact details is basic upkeep, not "adding capacity," so it's
+available on every plan, not just Growth+.
+
+**Status:** done. See §6.
+
 ## 6. What's actually been built (Phase 1 + 1b)
 
 | File | Change |
 |---|---|
 | `database/migrations/2026_08_01_phase1_plans_and_branches.sql` | `settings.plan`; `branches` table seeded with "Main Branch"; `branch_id` (default 1) on `sales`, `purchases`, `stock_movements`, `expenses`. |
 | `database/migrations/2026_08_02_phase1b_accounts_users_branch.sql` | `accounts.branch_id` (nullable, default 1 — set to `NULL` later to mark an account as shared/company-wide); `users.branch_id` (nullable, default `NULL` — unused until Phase 3 ships a branch-aware login/POS flow). |
+| `database/migrations/2026_08_03_phase1c_seed_default_momo_account.sql` | Seeds a default Mobile Money account (idempotent) alongside the existing default Cash Account, so Core clients — who can't create accounts — have both out of the box. |
+| `app/config/plans.php` (updated) | Split `financial_accounts` (view/transfer — now on all plans) from `manage_financial_accounts` (create accounts — Growth+ only). |
+| `public/index.php` (updated) | Route gate narrowed from all of `/financial-accounts` to just `/financial-accounts/store`. |
+| `app/views/layout/header.php` (updated) | Financial Accounts nav link now visible on all plans. |
+| `app/views/financial_accounts/index.php` (updated) | "+ Add Account" button gated behind `manage_financial_accounts`; "Move Funds" visible to all; each account card now has an Edit link. |
+| `app/controllers/FinancialAccountsController.php` (updated) | New `edit`/`update` actions — editable: name, provider, account number, active status. Locked: type, balance. Guards against deactivating a default or the last active account. |
+| `app/views/financial_accounts/edit.php` (new) | The edit form itself. |
 | `app/config/plans.php` | Single source of truth for Core/Growth/Enterprise feature lists and limits. |
 | `app/helpers/functions.php` | `currentPlan()`, `currentPlanDefinition()`, `planAllows()`, `withinUserLimit()`, `planUpgradeNotice()`. |
 | `public/index.php` | Plan-gating block (403s a route if the current plan doesn't include its feature), next to the existing role-restriction block. |
 | `app/views/layout/header.php` | Desktop + mobile nav hide items the current plan doesn't include. |
 | `app/controllers/UserController.php` | Blocks creating a new user once `max_users` is hit. |
 | `app/views/settings/index.php` | Read-only "Current plan" panel. |
+
 
 **Not yet built:** anything that *reads* `branch_id` to actually scope behavior — today
 every table has the column, but every query still behaves as if there's one branch,
