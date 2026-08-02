@@ -28,7 +28,7 @@
                     <div class="text-gray-500 text-sm font-medium whitespace-nowrap">👤 Customer:</div>
                     <div class="flex-1 relative">
                         <input type="text"
-                            placeholder="Walk-in (default) — or search customer..."
+                            placeholder="<?= $walkIn ? 'Walk-in (default) — or search customer...' : 'Search or select a customer...' ?>"
                             x-model="customerSearch"
                             @input.debounce.300ms="searchCustomers()"
                             @focus="showCustomerDrop = true"
@@ -77,7 +77,7 @@
                     </span>
                 </div>
             </div>
-            <?php if ((currentUser()['role'] ?? '') === 'admin'): ?>
+            <?php if (can('sales.backdate')): ?>
                 <!-- Admin: Sale Date Override -->
                 <div class="bg-orange-50 border border-orange-300 rounded-lg p-2.5 mb-3">
                     <div class="flex items-center gap-3">
@@ -241,7 +241,7 @@
                                     <input type="number"
                                         x-model.number="item.quantity"
                                         @change="validateQty(idx)"
-                                        min="1" :max="item.stock"
+                                        min="0.01" step="0.01" :max="item.stock"
                                         class="w-[76px] min-w-0 text-center text-xs py-0.5 border-x focus:outline-none">
                                     <button @click="changeQty(idx, 1)"
                                         class="px-1.5 py-0.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-bold">+</button>
@@ -744,7 +744,7 @@
                         unit: product.unit,
                         price: parseFloat(product.selling_price),
                         quantity: 1,
-                        stock: parseInt(product.current_stock),
+                        stock: parseFloat(product.current_stock),
                         discount: 0,
                     });
                 }
@@ -760,8 +760,8 @@
 
             changeQty(idx, delta) {
                 const item = this.cart[idx];
-                const newQty = item.quantity + delta;
-                if (newQty < 1) {
+                const newQty = Math.round((item.quantity + delta) * 100) / 100;
+                if (newQty < 0.01) {
                     this.removeFromCart(idx);
                     return;
                 }
@@ -775,7 +775,7 @@
 
             validateQty(idx) {
                 const item = this.cart[idx];
-                if (item.quantity < 1) item.quantity = 1;
+                if (item.quantity < 0.01) item.quantity = 0.01;
                 if (item.quantity > item.stock) item.quantity = item.stock;
                 this.updateAmountPaid();
             },

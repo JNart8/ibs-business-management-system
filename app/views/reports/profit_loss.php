@@ -321,7 +321,7 @@
                     <tr class="hover:bg-gray-50">
                         <td class="px-4 py-3 text-sm font-medium text-gray-800"><?= e($cat['category_name']) ?></td>
                         <td class="px-4 py-3 text-sm text-right text-gray-700"><?= $cat['sale_count'] ?></td>
-                        <td class="px-4 py-3 text-sm text-right text-gray-700"><?= number_format($cat['total_quantity']) ?></td>
+                        <td class="px-4 py-3 text-sm text-right text-gray-700"><?= formatQty($cat['total_quantity']) ?></td>
                         <td class="px-4 py-3 text-sm text-right text-gray-700"><?= formatMoney($cat['revenue']) ?></td>
                         <td class="px-4 py-3 text-sm text-right text-red-600"><?= formatMoney($cat['cogs']) ?></td>
                         <td class="px-4 py-3 text-sm text-right font-bold text-green-600"><?= formatMoney($cat['profit']) ?></td>

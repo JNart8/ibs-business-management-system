@@ -310,7 +310,7 @@
                         <tr class="hover:bg-gray-50">
                             <td class="px-4 py-2 text-sm text-gray-500"><?= $idx + 1 ?></td>
                             <td class="px-4 py-2 text-sm font-medium text-gray-800"><?= e($product['product_name']) ?></td>
-                            <td class="px-4 py-2 text-sm text-right font-bold text-blue-600"><?= number_format($product['total_quantity']) ?></td>
+                            <td class="px-4 py-2 text-sm text-right font-bold text-blue-600"><?= formatQty($product['total_quantity']) ?></td>
                             <td class="px-4 py-2 text-sm text-right text-gray-700"><?= formatMoney($product['total_revenue']) ?></td>
                         </tr>
                     <?php endforeach; ?>
@@ -347,7 +347,7 @@
                             <td class="px-4 py-2 text-sm text-gray-500"><?= $idx + 1 ?></td>
                             <td class="px-4 py-2 text-sm font-medium text-gray-800"><?= e($product['product_name']) ?></td>
                             <td class="px-4 py-2 text-sm text-right font-bold text-green-600"><?= formatMoney($product['total_revenue']) ?></td>
-                            <td class="px-4 py-2 text-sm text-right text-gray-700"><?= number_format($product['total_quantity']) ?></td>
+                            <td class="px-4 py-2 text-sm text-right text-gray-700"><?= formatQty($product['total_quantity']) ?></td>
                         </tr>
                     <?php endforeach; ?>
                     <?php if (empty($topRevenue)): ?>

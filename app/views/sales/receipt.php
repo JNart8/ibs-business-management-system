@@ -122,7 +122,7 @@
     <?php foreach ($items as $item): ?>
         <div class="bold"><?= e($item['product_name']) ?></div>
         <div class="row">
-            <span><?= $item['quantity'] ?> x <?= CURRENCY_HOLDER ?> <?= number_format($item['unit_price'], 2) ?>
+            <span><?= formatQty($item['quantity']) ?> x <?= CURRENCY_HOLDER ?> <?= number_format($item['unit_price'], 2) ?>
                 <?php if (($item['discount_amount'] ?? 0) > 0 || ($item['discount_percent'] ?? 0) > 0): ?>
                     <?= ($item['discount_type'] ?? 'percentage') === 'flat'
                         ? '(-' . formatMoney($item['discount_amount']) . ')'

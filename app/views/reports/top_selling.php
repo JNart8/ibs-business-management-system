@@ -88,7 +88,7 @@
                         <div class="font-medium"><?= e($product['name']) ?></div>
                         <div class="text-xs text-gray-400"><?= e($product['sku']) ?></div>
                     </td>
-                    <td class="px-4 py-2 text-right font-bold text-blue-600"><?= number_format($product['total_quantity']) ?></td>
+                    <td class="px-4 py-2 text-right font-bold text-blue-600"><?= formatQty($product['total_quantity']) ?></td>
                     <td class="px-4 py-2 text-right"><?= formatMoney($product['total_revenue']) ?></td>
                     <td class="px-4 py-2 text-right text-green-600"><?= formatMoney($product['total_profit']) ?></td>
                     <td class="px-4 py-2 text-right font-semibold"><?= number_format($product['profit_margin_pct'], 1) ?>%</td>

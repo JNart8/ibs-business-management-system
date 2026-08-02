@@ -271,7 +271,7 @@ include APP_PATH . '/views/layout/header.php';
                                     </a>
 
                                     <!-- Edit (Admin/Manager Only) -->
-                                    <?php if (in_array(currentUser()['role'] ?? '', ['admin', 'manager'])): ?>
+                                    <?php if (can('sales.edit')): ?>
                                         <a href="<?= BASE_URL ?>/sales/edit/<?= $s['id'] ?>"
                                             class="p-1.5 rounded bg-yellow-50 text-yellow-600 hover:bg-yellow-100"
                                             title="Edit Sale">

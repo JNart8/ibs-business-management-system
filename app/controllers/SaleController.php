@@ -87,13 +87,14 @@ switch ($action) {
  */
 function showPOS($db)
 {
-    // Load walk-in customer as default
-    $walkIn = $db->fetchOne(
-        "SELECT * FROM customers WHERE is_default = 1 LIMIT 1"
-    );
-
-    // Load settings for receipt
+    // Load settings for receipt + POS behavior
     $settings = $db->fetchOne("SELECT * FROM settings LIMIT 1");
+
+    // Load walk-in customer as default, unless this install has opted out
+    // via the "Default POS customer to Walk-in" setting.
+    $walkIn = ($settings['pos_default_walkin'] ?? 1)
+        ? $db->fetchOne("SELECT * FROM customers WHERE is_default = 1 LIMIT 1")
+        : null;
 
     // Recent products for quick access (last 12 most sold)
     $quickProducts = $db->fetchAll("
@@ -174,10 +175,9 @@ function completeSale($db)
     // Validate custom date (admin only)
     $saleDate = null;
     if (!empty($customDate)) {
-        // Check if user is admin
-        $user = currentUser();
-        if (($user['role'] ?? '') !== 'admin') {
-            echo json_encode(['success' => false, 'message' => 'Only admins can back-date sales']);
+        // Check if user has backdate permission
+        if (!can('sales.backdate')) {
+            echo json_encode(['success' => false, 'message' => 'You do not have permission to back-date sales']);
             return;
         }
 
@@ -244,7 +244,7 @@ function completeSale($db)
 
     foreach ($items as $item) {
         $productId = intval($item['product_id'] ?? 0);
-        $qty       = intval($item['quantity']   ?? 0);
+        $qty       = floatval($item['quantity']   ?? 0);
         $unitPrice = floatval($item['price']    ?? 0);
         $itemDisc  = floatval($item['discount'] ?? 0);
 
@@ -431,7 +431,7 @@ function completeSale($db)
                 $vi['lineTotal']
             ]);
 
-            $prevStock = intval($p['current_stock']);
+            $prevStock = floatval($p['current_stock']);
             $newStock  = $prevStock - $vi['qty'];
 
             // Update stock
@@ -845,10 +845,9 @@ function viewSale($db, $id)
  */
 function showEditForm($db, $id)
 {
-    // Check permissions - only admin/manager can edit sales
-    $currentUser = currentUser();
-    if (!in_array($currentUser['role'] ?? '', ['admin', 'manager'])) {
-        redirect(BASE_URL . '/sales', 'error', 'Only admins and managers can edit sales');
+    // Check permissions - requires sales.edit permission
+    if (!can('sales.edit')) {
+        redirect(BASE_URL . '/sales', 'error', 'You do not have permission to edit sales');
         return;
     }
 
@@ -907,10 +906,9 @@ function updateSale($db, $id)
         return;
     }
 
-    // Check permissions
-    $currentUser = currentUser();
-    if (!in_array($currentUser['role'] ?? '', ['admin', 'manager'])) {
-        redirect(BASE_URL . '/sales', 'error', 'Only admins and managers can edit sales');
+    // Check permissions - requires sales.edit permission
+    if (!can('sales.edit')) {
+        redirect(BASE_URL . '/sales', 'error', 'You do not have permission to edit sales');
         return;
     }
 
@@ -1403,7 +1401,7 @@ function voidSale($db, $id)
         // Reverse stock for each item
         foreach ($items as $item) {
             $product   = $db->fetchOne("SELECT current_stock FROM products WHERE id = ?", [$item['product_id']]);
-            $prevStock = intval($product['current_stock']);
+            $prevStock = floatval($product['current_stock']);
             $newStock  = $prevStock + $item['quantity'];
 
             $db->query("UPDATE products SET current_stock = ? WHERE id = ?", [$newStock, $item['product_id']]);
