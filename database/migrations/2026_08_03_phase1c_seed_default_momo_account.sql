@@ -9,7 +9,9 @@
 -- Safe to run multiple times: only inserts if a mobile_money
 -- account named 'Mobile Money Account' doesn't already exist.
 -- Rename/set the provider (MTN, Telecel, AirtelTigo, etc.) per
--- client right after running this
+-- client right after running this — there is no in-app edit
+-- screen for accounts, so do it via phpMyAdmin during onboarding
+-- if the client uses a specific provider.
 -- ============================================================
 
 INSERT INTO `accounts` (`name`, `type`, `provider`, `account_number`, `balance`, `is_default`, `is_active`)

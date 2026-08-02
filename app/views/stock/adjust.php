@@ -43,7 +43,7 @@
                 New Stock Quantity <span class="text-red-500">*</span>
             </label>
             <input type="number" name="new_stock"
-                min="0" required
+                min="0" step="0.01" required
                 x-model="newStock"
                 class="w-full px-4 py-3 border border-gray-300 rounded-lg text-2xl font-bold text-center
                           focus:ring-2 focus:ring-purple-500 focus:border-transparent">
@@ -57,7 +57,7 @@
                     ↓ Decrease by <span x-text="current - newStock"></span> <?= e($product['unit']) ?>
                 </span>
             </div>
-            <div class="mt-2 text-center text-sm text-gray-400" x-show="parseInt(newStock) === current">
+            <div class="mt-2 text-center text-sm text-gray-400" x-show="parseFloat(newStock) === current">
                 No change
             </div>
         </div>
@@ -68,7 +68,7 @@
             <div class="flex flex-wrap gap-2 justify-center">
                 <?php foreach ([-10, -5, -1, 1, 5, 10, 50, 100] as $adj): ?>
                     <button type="button"
-                        @click="newStock = Math.max(0, parseInt(newStock || 0) + <?= $adj ?>)"
+                        @click="newStock = Math.max(0, Math.round((parseFloat(newStock || 0) + <?= $adj ?>) * 100) / 100)"
                         class="px-3 py-1.5 text-sm border rounded-lg
                                    <?= $adj > 0 ? 'hover:bg-green-50 hover:border-green-400 text-green-700'
                                         : 'hover:bg-red-50 hover:border-red-400 text-red-600' ?>

@@ -161,8 +161,8 @@ function createProduct($db)
     $supplier_id   = !empty($_POST['supplier_id'])  ? (int)$_POST['supplier_id']  : null;
     $cost_price    = floatval($_POST['cost_price']   ?? 0);
     $selling_price = floatval($_POST['selling_price'] ?? 0);
-    $current_stock = intval($_POST['current_stock']  ?? 0);
-    $reorder_level = intval($_POST['reorder_level']  ?? 10);
+    $current_stock = floatval($_POST['current_stock']  ?? 0);
+    $reorder_level = floatval($_POST['reorder_level']  ?? 10);
     $unit          = normalizeUnit($_POST['unit'] ?? 'pcs');
 
     $errors = [];
@@ -260,7 +260,7 @@ function updateProduct($db, $id)
     $supplier_id   = !empty($_POST['supplier_id'])  ? (int)$_POST['supplier_id']  : null;
     $cost_price    = floatval($_POST['cost_price']   ?? 0);
     $selling_price = floatval($_POST['selling_price'] ?? 0);
-    $reorder_level = intval($_POST['reorder_level']  ?? 10);
+    $reorder_level = floatval($_POST['reorder_level']  ?? 10);
     $unit          = normalizeUnit($_POST['unit'] ?? 'pcs');
     $is_active     = isset($_POST['is_active']) ? 1 : 0;
 

@@ -198,7 +198,7 @@
                     type="number"
                     name="current_stock"
                     value="<?= e(old('current_stock', '0')) ?>"
-                    min="0"
+                    min="0" step="0.01"
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="0">
                 <p class="text-xs text-gray-500 mt-1">Opening stock (can be updated later)</p>
@@ -213,7 +213,7 @@
                     type="number"
                     name="reorder_level"
                     value="<?= e(old('reorder_level', '10')) ?>"
-                    min="0"
+                    min="0" step="0.01"
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="10">
                 <p class="text-xs text-gray-500 mt-1">Alert when stock falls below this level</p>

@@ -19,12 +19,83 @@
     </div>
 </div>
 
+<!-- Filters + Export -->
+<?php
+    $ledgerFilterParams = array_filter([
+        'type'      => $_GET['type']      ?? '',
+        'date_from' => $_GET['date_from'] ?? '',
+        'date_to'   => $_GET['date_to']   ?? '',
+    ]);
+    $exportUrl = BASE_URL . '/export/account-ledger?account_id=' . $account['id']
+        . (!empty($ledgerFilterParams) ? '&' . http_build_query($ledgerFilterParams) : '');
+?>
+<div class="bg-white rounded-lg shadow-sm p-4 mb-4">
+    <form method="GET" action="<?= BASE_URL ?>/financial-accounts/transactions/<?= $account['id'] ?>"
+        class="flex flex-wrap items-end gap-3">
+
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 mb-1">Type</label>
+            <select name="type"
+                class="text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <option value="">All Types</option>
+                <?php foreach (['deposit', 'withdrawal', 'transfer_in', 'transfer_out', 'charge'] as $t): ?>
+                    <option value="<?= $t ?>" <?= ($_GET['type'] ?? '') === $t ? 'selected' : '' ?>>
+                        <?= ucfirst(str_replace('_', ' ', $t)) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 mb-1">From</label>
+            <input type="date" name="date_from" value="<?= e($_GET['date_from'] ?? '') ?>"
+                class="text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 mb-1">To</label>
+            <input type="date" name="date_to" value="<?= e($_GET['date_to'] ?? '') ?>"
+                class="text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        </div>
+
+        <button type="submit"
+            class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition">
+            Filter
+        </button>
+
+        <?php if (!empty($_GET['type']) || !empty($_GET['date_from']) || !empty($_GET['date_to'])): ?>
+            <a href="<?= BASE_URL ?>/financial-accounts/transactions/<?= $account['id'] ?>"
+                class="text-sm text-gray-500 hover:text-gray-700 px-2">
+                Clear
+            </a>
+        <?php endif; ?>
+
+        <?php if (planAllows('imports_exports')): ?>
+            <a href="<?= e($exportUrl) ?>"
+                class="ml-auto bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition">
+                ⬇ Export CSV
+            </a>
+        <?php else: ?>
+            <span class="ml-auto text-sm text-gray-400 px-4 py-2" title="Upgrade your plan to export">
+                🔒 Export CSV (upgrade)
+            </span>
+        <?php endif; ?>
+    </form>
+</div>
+
 <!-- Transactions Table -->
 <div class="bg-white rounded-lg shadow-sm p-6">
-    <h2 class="text-lg font-bold text-gray-800 mb-4">📜 Transaction History</h2>
+    <h2 class="text-lg font-bold text-gray-800 mb-4">
+        📜 Transaction History
+        <span class="text-sm font-normal text-gray-400">(<?= count($transactions) ?> <?= !empty($ledgerFilterParams) ? 'matching' : '' ?> <?= count($transactions) === 1 ? 'entry' : 'entries' ?>)</span>
+    </h2>
     <?php if (empty($transactions)): ?>
         <div class="text-center py-12 text-gray-400">
-            <p class="text-sm">No transactions recorded for this account.</p>
+            <?php if (!empty($ledgerFilterParams)): ?>
+                <p class="text-sm">No transactions match this filter. <a href="<?= BASE_URL ?>/financial-accounts/transactions/<?= $account['id'] ?>" class="text-blue-600 hover:underline">Clear filters</a> to see everything.</p>
+            <?php else: ?>
+                <p class="text-sm">No transactions recorded for this account.</p>
+            <?php endif; ?>
         </div>
     <?php else: ?>
         <div class="overflow-x-auto">

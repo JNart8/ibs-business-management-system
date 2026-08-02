@@ -125,7 +125,7 @@
                                 <td class="px-4 py-3.5 text-center">
                                     <div class="flex items-center justify-center border border-gray-300 rounded-lg overflow-hidden w-24 mx-auto">
                                         <button type="button" @click="changeQty(idx, -1)" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold transition">-</button>
-                                        <input type="number" x-model.number="item.quantity" @change="validateQty(idx)" class="w-10 text-center border-0 py-1 text-sm focus:ring-0 focus:outline-none" min="1">
+                                        <input type="number" x-model.number="item.quantity" @change="validateQty(idx)" class="w-10 text-center border-0 py-1 text-sm focus:ring-0 focus:outline-none" min="0.01" step="0.01">
                                         <button type="button" @click="changeQty(idx, 1)" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold transition">+</button>
                                     </div>
                                 </td>
@@ -373,8 +373,8 @@
 
             changeQty(idx, delta) {
                 const item = this.cart[idx];
-                const newQty = item.quantity + delta;
-                if (newQty < 1) {
+                const newQty = Math.round((item.quantity + delta) * 100) / 100;
+                if (newQty < 0.01) {
                     this.removeFromCart(idx);
                     return;
                 }
@@ -384,7 +384,7 @@
 
             validateQty(idx) {
                 const item = this.cart[idx];
-                if (item.quantity < 1) item.quantity = 1;
+                if (item.quantity < 0.01) item.quantity = 0.01;
                 this.updateAmounts();
             },
 

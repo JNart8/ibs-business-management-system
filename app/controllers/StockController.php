@@ -208,7 +208,7 @@ function processStockIn($db)
     }
 
     $productId  = intval($_POST['product_id']  ?? 0);
-    $quantity   = intval($_POST['quantity']    ?? 0);
+    $quantity   = floatval($_POST['quantity']    ?? 0);
     $costPrice  = floatval($_POST['cost_price'] ?? 0);
     $notes      = trim($_POST['notes']         ?? '');
     $reference  = trim($_POST['reference']     ?? '');
@@ -231,7 +231,7 @@ function processStockIn($db)
         return;
     }
 
-    $prevStock = intval($product['current_stock']);
+    $prevStock = floatval($product['current_stock']);
     $newStock  = $prevStock + $quantity;
 
     try {
@@ -299,7 +299,7 @@ function processStockOut($db)
     }
 
     $productId = intval($_POST['product_id'] ?? 0);
-    $quantity  = intval($_POST['quantity']   ?? 0);
+    $quantity  = floatval($_POST['quantity']   ?? 0);
     $reason    = trim($_POST['reason']       ?? '');
     $notes     = trim($_POST['notes']        ?? '');
     $userId    = $_SESSION['user_id']        ?? null;
@@ -312,7 +312,7 @@ function processStockOut($db)
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ? AND is_active = 1", [$productId]);
     if (!$product) {
         $errors[] = 'Product not found';
-    } elseif ($quantity > intval($product['current_stock'])) {
+    } elseif ($quantity > floatval($product['current_stock'])) {
         $errors[] = "Not enough stock. Available: {$product['current_stock']} {$product['unit']}";
     }
 
@@ -322,7 +322,7 @@ function processStockOut($db)
         return;
     }
 
-    $prevStock = intval($product['current_stock']);
+    $prevStock = floatval($product['current_stock']);
     $newStock  = $prevStock - $quantity;
 
     try {
@@ -391,7 +391,7 @@ function processAdjustment($db, $id)
         return;
     }
 
-    $newStock = intval($_POST['new_stock'] ?? 0);
+    $newStock = floatval($_POST['new_stock'] ?? 0);
     $notes    = trim($_POST['notes']       ?? '');
     $userId   = $_SESSION['user_id']       ?? null;
 
@@ -405,10 +405,10 @@ function processAdjustment($db, $id)
         return;
     }
 
-    $prevStock = intval($product['current_stock']);
-    $diff      = $newStock - $prevStock;
+    $prevStock = floatval($product['current_stock']);
+    $diff      = round($newStock - $prevStock, 3);
 
-    if ($diff === 0) {
+    if (abs($diff) < 0.001) {
         redirect(BASE_URL . '/stock', 'info', 'No changes made — stock quantity is the same');
         return;
     }

@@ -318,8 +318,8 @@ function validateRow($type, $row, $mode, $db)
                 return ['valid' => false, 'error' => "Product SKU '{$skuVal}' not found or inactive"];
             }
 
-            if (!isset($row['quantity']) || !is_numeric($row['quantity']) || intval($row['quantity']) <= 0) {
-                return ['valid' => false, 'error' => 'Quantity must be a positive integer'];
+            if (!isset($row['quantity']) || !is_numeric($row['quantity']) || floatval($row['quantity']) <= 0) {
+                return ['valid' => false, 'error' => 'Quantity must be a positive number'];
             }
 
             if (!isset($row['unit_cost']) || !is_numeric($row['unit_cost']) || floatval($row['unit_cost']) <= 0) {
@@ -454,8 +454,8 @@ function importProduct($db, $row, $mode, $userId)
             floatval($row['selling_price']),
             isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
             isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-            isset($row['current_stock']) ? intval($row['current_stock']) : 0,
-            isset($row['reorder_level']) ? intval($row['reorder_level']) : 10,
+            isset($row['current_stock']) ? floatval($row['current_stock']) : 0,
+            isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
             normalizeUnit($row['unit'] ?? 'pcs'),
             $row['barcode'] ?? null,
             $existing['id']
@@ -477,8 +477,8 @@ function importProduct($db, $row, $mode, $userId)
         floatval($row['selling_price']),
         isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
         isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-        isset($row['current_stock']) ? intval($row['current_stock']) : 0,
-        isset($row['reorder_level']) ? intval($row['reorder_level']) : 10,
+        isset($row['current_stock']) ? floatval($row['current_stock']) : 0,
+        isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
         normalizeUnit($row['unit'] ?? 'pcs'),
         $row['barcode'] ?? null
     ]);
@@ -747,7 +747,7 @@ function importPurchaseGroup($db, $group)
     // Calculate totals
     $subtotal = 0;
     foreach ($group['items'] as $item) {
-        $qty = intval($item['quantity']);
+        $qty = floatval($item['quantity']);
         $unitCost = floatval($item['unit_cost']);
         $subtotal += $qty * $unitCost;
     }
@@ -826,7 +826,7 @@ function importPurchaseGroup($db, $group)
     // 3. Insert purchase items, update stock & WMA cost
     foreach ($group['items'] as $item) {
         $p = $item['_product'];
-        $qty = intval($item['quantity']);
+        $qty = floatval($item['quantity']);
         $unitCost = floatval($item['unit_cost']);
         $lineTotal = $qty * $unitCost;
 
@@ -846,7 +846,7 @@ function importPurchaseGroup($db, $group)
         ]);
 
         // Calculate new weighted average cost
-        $currentStock   = intval($p['current_stock']);
+        $currentStock   = floatval($p['current_stock']);
         $currentAvgCost = floatval($p['average_cost']);
 
         if ($currentStock + $qty > 0) {

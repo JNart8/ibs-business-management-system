@@ -198,7 +198,7 @@ function completeDistributorDelivery($db)
         // Validate items and calculate subtotals
         foreach ($items as $item) {
             $productId    = intval($item['product_id'] ?? 0);
-            $qty          = intval($item['quantity'] ?? 0);
+            $qty          = floatval($item['quantity'] ?? 0);
             $purchaseCost = floatval($item['purchase_cost'] ?? 0);
             $sellingPrice = floatval($item['selling_price'] ?? 0);
 
@@ -347,7 +347,7 @@ function completeDistributorDelivery($db)
             ]);
 
             // Stock movements
-            $stockBefore = intval($p['current_stock']);
+            $stockBefore = floatval($p['current_stock']);
             
             // Movement IN from Purchase
             $db->query("

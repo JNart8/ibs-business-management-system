@@ -454,7 +454,7 @@
                                 <div class="product-sku">SKU: <?= e($item['sku']) ?></div>
                             </td>
                             <td class="text-center">
-                                <strong><?= number_format($item['quantity']) ?></strong> <?= e($item['unit'] ?? 'pcs') ?>
+                                <strong><?= formatQty($item['quantity']) ?></strong> <?= e($item['unit'] ?? 'pcs') ?>
                             </td>
                             <td class="text-right" style="font-family: monospace;">
                                 <?= formatMoney($item['unit_cost']) ?>

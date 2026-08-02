@@ -204,7 +204,7 @@ function completePurchase($db)
 
     foreach ($items as $item) {
         $productId = intval($item['product_id'] ?? 0);
-        $qty       = intval($item['quantity']   ?? 0);
+        $qty       = floatval($item['quantity']   ?? 0);
         $unitCost  = floatval($item['cost']     ?? 0);
         $itemDisc  = floatval($item['discount'] ?? 0);
 
@@ -348,7 +348,7 @@ function completePurchase($db)
             ]);
 
             // Calculate new weighted average cost
-            $currentStock   = intval($p['current_stock']);
+            $currentStock   = floatval($p['current_stock']);
             $currentAvgCost = floatval($p['average_cost']);
             $newQty         = $vi['qty'];
             $newCost        = $vi['unitCost'];
@@ -942,7 +942,7 @@ function updatePurchase($db, $id)
 
     foreach ($items as $item) {
         $productId = intval($item['product_id'] ?? 0);
-        $qty       = intval($item['quantity']   ?? 0);
+        $qty       = floatval($item['quantity']   ?? 0);
         $unitCost  = floatval($item['cost']     ?? 0);
         $itemDisc  = floatval($item['discount'] ?? 0);
 
@@ -990,14 +990,14 @@ function updatePurchase($db, $id)
     $stockChecks = [];
 
     foreach ($allProductIds as $pid) {
-        $oldQty = isset($oldItemsMap[$pid]) ? intval($oldItemsMap[$pid]['quantity']) : 0;
-        $newQty = isset($newItemsMap[$pid]) ? intval($newItemsMap[$pid]['qty']) : 0;
+        $oldQty = isset($oldItemsMap[$pid]) ? floatval($oldItemsMap[$pid]['quantity']) : 0;
+        $newQty = isset($newItemsMap[$pid]) ? floatval($newItemsMap[$pid]['qty']) : 0;
         $diff = $newQty - $oldQty;
 
         if ($diff < 0) {
             // Check product current stock
             $p = $db->fetchOne("SELECT name, current_stock FROM products WHERE id = ?", [$pid]);
-            $currentStock = intval($p['current_stock'] ?? 0);
+            $currentStock = floatval($p['current_stock'] ?? 0);
             if ($currentStock + $diff < 0) {
                 echo json_encode([
                     'success' => false,
@@ -1033,13 +1033,13 @@ function updatePurchase($db, $id)
         // 1. Revert stock and average cost logic
         foreach ($allProductIds as $pid) {
             $p = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$pid]);
-            $currentStock   = intval($p['current_stock']);
+            $currentStock   = floatval($p['current_stock']);
             $currentAvgCost = floatval($p['average_cost']);
 
-            $oldQty  = isset($oldItemsMap[$pid]) ? intval($oldItemsMap[$pid]['quantity']) : 0;
+            $oldQty  = isset($oldItemsMap[$pid]) ? floatval($oldItemsMap[$pid]['quantity']) : 0;
             $oldCost = isset($oldItemsMap[$pid]) ? floatval($oldItemsMap[$pid]['unit_cost']) : 0;
 
-            $newQty  = isset($newItemsMap[$pid]) ? intval($newItemsMap[$pid]['qty']) : 0;
+            $newQty  = isset($newItemsMap[$pid]) ? floatval($newItemsMap[$pid]['qty']) : 0;
             $newCost = isset($newItemsMap[$pid]) ? floatval($newItemsMap[$pid]['cost']) : 0;
 
             // Revert old purchase effect:
@@ -1097,7 +1097,7 @@ function updatePurchase($db, $id)
             // Log stock movement
             // Retrieve updated stock after our adjustment above
             $updatedProduct = $db->fetchOne("SELECT current_stock, average_cost FROM products WHERE id = ?", [$p['id']]);
-            $currentStockAfter = intval($updatedProduct['current_stock']);
+            $currentStockAfter = floatval($updatedProduct['current_stock']);
             $currentStockBefore = $currentStockAfter - $vi['qty'];
 
             $db->query("
@@ -1298,8 +1298,8 @@ function voidPurchase($db, $id)
         $p = $db->fetchOne("SELECT name, current_stock FROM products WHERE id = ?", [$item['product_id']]);
         if (!$p) continue;
         
-        $currentStock = intval($p['current_stock']);
-        $qty = intval($item['quantity']);
+        $currentStock = floatval($p['current_stock']);
+        $qty = floatval($item['quantity']);
         if ($currentStock - $qty < 0) {
             redirect(BASE_URL . '/purchases/view/' . $id, 'error', "Cannot void purchase. Deducting {$qty} from '{$p['name']}' would reduce stock below zero (Current stock: {$currentStock}).");
             return;
@@ -1315,9 +1315,9 @@ function voidPurchase($db, $id)
             $p = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$pid]);
             if (!$p) continue;
 
-            $currentStock   = intval($p['current_stock']);
+            $currentStock   = floatval($p['current_stock']);
             $currentAvgCost = floatval($p['average_cost']);
-            $oldQty         = intval($item['quantity']);
+            $oldQty         = floatval($item['quantity']);
             $oldCost        = floatval($item['unit_cost']);
 
             $newStock = $currentStock - $oldQty;

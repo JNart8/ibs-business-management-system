@@ -23,6 +23,7 @@ if (!in_array($type, [
     'customers',
     'sales',
     'transactions',
+    'account-ledger',
     'stocks',
     'stock-valuation',
     'receivables',
@@ -35,6 +36,33 @@ if (!in_array($type, [
     'profit-margin'
 ])) {
     redirect(BASE_URL . '/', 'error', 'Invalid export type');
+    exit;
+}
+
+// ── Permission gate ─────────────────────────────────────────────
+// Each export type requires the same permission its corresponding
+// module page requires (see public/index.php's $permissionRestrictions),
+// closing a gap where exports were plan-gated but not permission-gated —
+// a cashier without financial_accounts.access, for example, couldn't
+// reach the ledger through the UI but could previously still hit
+// /export/account-ledger directly. Report exports (sales-report,
+// stock-valuation, receivables, payables, profit-loss, top-selling,
+// low-stock, dead-stock, profit-margin) and 'sales' intentionally have
+// no entry here — their source pages (/reports/*, /sales) have never
+// required a permission either, so this preserves that behavior rather
+// than introducing a new restriction nobody asked for.
+$exportPermissionMap = [
+    'categories'      => 'categories.manage',
+    'products'        => 'products.manage',
+    'suppliers'       => 'suppliers.manage',
+    'customers'       => 'customers.manage',
+    'transactions'    => 'transactions.manage',
+    'account-ledger'  => 'financial_accounts.access',
+    'stocks'          => 'stock.manage',
+];
+
+if (isset($exportPermissionMap[$type]) && !can($exportPermissionMap[$type])) {
+    redirect(BASE_URL . '/', 'error', 'You do not have permission to export this data.');
     exit;
 }
 
@@ -77,6 +105,9 @@ function exportData($db, $type)
             break;
         case 'transactions':
             exportTransactions($db, $output);
+            break;
+        case 'account-ledger':
+            exportAccountLedger($db, $output);
             break;
         case 'stocks':
             exportStocks($db, $output);
@@ -585,6 +616,86 @@ function exportTransactions($db, $output)
         }
         if (!empty($dateTo)) {
             fputcsv($output, ['Date To:', $dateTo]);
+        }
+    }
+}
+
+/**
+ * Export a single financial account's ledger (deposits, withdrawals,
+ * transfers, charges) — filtered the same way as the on-screen ledger,
+ * using the same shared buildLedgerWhere() helper, so the export can
+ * never drift from what the user is actually looking at.
+ */
+function exportAccountLedger($db, $output)
+{
+    $accountId = intval($_GET['account_id'] ?? 0);
+    $account = $accountId ? $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$accountId]) : null;
+
+    if (!$account) {
+        fputcsv($output, ['Error: account not found or account_id missing.']);
+        return;
+    }
+
+    $filters = ledgerFilters();
+    [$where, $params] = buildLedgerWhere($accountId, $filters);
+
+    // Write headers
+    fputcsv($output, [
+        'date_time',
+        'transaction_type',
+        'reference_type',
+        'reference_id',
+        'amount',
+        'balance_before',
+        'balance_after',
+        'notes',
+        'recorded_by'
+    ]);
+
+    // Fetch filtered ledger entries — same WHERE the ledger page used
+    $transactions = $db->fetchAll("
+        SELECT t.*, u.full_name as user_name
+        FROM account_transactions t
+        LEFT JOIN users u ON t.user_id = u.id
+        $where
+        ORDER BY t.created_at DESC
+    ", $params);
+
+    // Write data rows
+    foreach ($transactions as $txn) {
+        fputcsv($output, [
+            $txn['created_at'],
+            $txn['transaction_type'],
+            $txn['reference_type'] ?? '',
+            $txn['reference_id'] ?? '',
+            number_format($txn['amount'], 2, '.', ''),
+            number_format($txn['balance_before'], 2, '.', ''),
+            number_format($txn['balance_after'], 2, '.', ''),
+            $txn['notes'] ?? '',
+            $txn['user_name'] ?? 'System'
+        ]);
+    }
+
+    // Summary
+    fputcsv($output, []);
+    fputcsv($output, ['=== EXPORT SUMMARY ===']);
+    fputcsv($output, ['Account:', $account['name']]);
+    fputcsv($output, ['Current Balance:', number_format($account['balance'], 2, '.', '')]);
+    fputcsv($output, ['Export Date:', date('Y-m-d H:i:s')]);
+    fputcsv($output, ['Total Records:', count($transactions)]);
+
+    // Filter info, if any were applied
+    if (!empty($filters['type']) || !empty($filters['date_from']) || !empty($filters['date_to'])) {
+        fputcsv($output, []);
+        fputcsv($output, ['Filters Applied:']);
+        if (!empty($filters['type'])) {
+            fputcsv($output, ['Type:', ucfirst(str_replace('_', ' ', $filters['type']))]);
+        }
+        if (!empty($filters['date_from'])) {
+            fputcsv($output, ['Date From:', $filters['date_from']]);
+        }
+        if (!empty($filters['date_to'])) {
+            fputcsv($output, ['Date To:', $filters['date_to']]);
         }
     }
 }
@@ -1294,7 +1405,7 @@ function exportTopSelling($db, $output)
             $product['name'],
             $product['sku'],
             $product['category_name'] ?? 'N/A',
-            number_format($product['total_quantity']),
+            number_format($product['total_quantity'], 3, '.', ''),
             $product['order_count'],
             number_format($product['total_revenue'], 2, '.', ''),
             number_format($product['total_cogs'], 2, '.', ''),
@@ -1310,7 +1421,7 @@ function exportTopSelling($db, $output)
         '',
         '',
         '',
-        number_format(array_sum(array_column($topProducts, 'total_quantity'))),
+        number_format(array_sum(array_column($topProducts, 'total_quantity')), 3, '.', ''),
         '',
         number_format(array_sum(array_column($topProducts, 'total_revenue')), 2, '.', ''),
         number_format(array_sum(array_column($topProducts, 'total_cogs')), 2, '.', ''),

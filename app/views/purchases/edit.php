@@ -185,7 +185,7 @@
                                     <input type="number"
                                         x-model.number="item.quantity"
                                         @change="validateQty(idx)"
-                                        min="1"
+                                        min="0.01" step="0.01"
                                         class="w-8 text-center text-xs py-0.5 border-x focus:outline-none">
                                     <button @click="changeQty(idx, 1)"
                                         class="px-1.5 py-0.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-bold transition">+</button>
@@ -411,7 +411,7 @@
                     unit: <?= json_encode($item['unit'] ?? 'pcs') ?>,
                     cost: <?= floatval($item['unit_cost']) ?>,
                     avgCost: <?= floatval($item['average_cost'] ?? $item['unit_cost']) ?>,
-                    quantity: <?= intval($item['quantity']) ?>,
+                    quantity: <?= floatval($item['quantity']) ?>,
                     discount: <?= floatval($item['discount_percent']) ?>,
                 },
                 <?php endforeach; ?>
@@ -515,8 +515,8 @@
 
             changeQty(idx, delta) {
                 const item = this.cart[idx];
-                const newQty = item.quantity + delta;
-                if (newQty < 1) {
+                const newQty = Math.round((item.quantity + delta) * 100) / 100;
+                if (newQty < 0.01) {
                     this.removeFromCart(idx);
                     return;
                 }
@@ -526,7 +526,7 @@
 
             validateQty(idx) {
                 const item = this.cart[idx];
-                if (item.quantity < 1) item.quantity = 1;
+                if (item.quantity < 0.01) item.quantity = 0.01;
                 this.updateAmountPaid();
             },
 

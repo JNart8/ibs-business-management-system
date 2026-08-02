@@ -112,7 +112,7 @@
                                         </div>
                                     </td>
                                     <td class="px-4 py-3 text-center">
-                                        <span class="font-semibold"><?= number_format($item['quantity']) ?></span>
+                                        <span class="font-semibold"><?= formatQty($item['quantity']) ?></span>
                                         <span class="text-xs text-gray-400 ml-1"><?= e($item['unit'] ?? 'pcs') ?></span>
                                     </td>
                                     <td class="px-4 py-3 text-right font-mono text-sm">

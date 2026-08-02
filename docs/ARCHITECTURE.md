@@ -159,10 +159,27 @@ exists; fold into the Phase 3 build rather than treating it as a separate phase.
 `admin`/`staff`/`cashier` roles behave *exactly* as they do today. All plans use the same
 `can($permission)` check everywhere; Core/Growth simply never see the "manage roles"
 screen (gated by `planAllows('advanced_permissions')`). Enterprise unlocks a UI to create
-custom roles and toggle per-feature checkboxes. Safe to build without touching anything
-in Phase 1/1b — it only adds new tables.
+custom roles and toggle per-feature checkboxes.
 
-**Status:** not started (Phase 2).
+**Status:** done. See §6 for what shipped, and §5.10 for a gap found while building it.
+
+### 5.10 Gap found while building Phase 2: `/purchases` had no role restriction at all
+
+While mapping every existing role check onto the new permission catalog, I found that
+`/purchases` was dispatched to `PurchaseController` but was **never listed** in the old
+`$roleRestrictions` array — meaning any logged-in user, including a cashier, could reach
+it directly by URL. The dashboard only *hid* the "New Purchase" button for cashiers; it
+never actually blocked the route. Flagging this immediately per your standing instruction,
+rather than leaving it for later.
+
+**Fix:** added a `purchases.manage` permission (granted to Admin/Staff by default, matching
+every other inventory-adjacent module) and included `/purchases` in the new
+`$permissionRestrictions` map in `public/index.php`. This is a small, deliberate behavior
+change for Core/Growth Cashier accounts: as of this migration, they can no longer reach
+`/purchases` by direct URL (they never could through the UI anyway, so the practical
+impact should be limited to closing a URL-guessing gap, not to anyone's normal workflow).
+
+**Status:** done. See §6.
 
 ### 5.7 Multi-branch build scope
 
@@ -226,6 +243,42 @@ available on every plan, not just Growth+.
 
 **Status:** done. See §6.
 
+### 5.11 "The account ledger can grow enormously — add filtering and export"
+
+**Concern:** an account's transaction history has no practical ceiling — it only grows,
+never gets archived — so scrolling through it to find something becomes unworkable over
+time, and there was no way to get the data out for offline analysis or a client's
+bookkeeper.
+
+**Built:** a filter bar on the ledger page (type: deposit/withdrawal/transfer in/transfer
+out/charge; date range) and a CSV export button. The critical design decision: **the export
+must never diverge from what's filtered on screen**, so both the ledger page
+(`FinancialAccountsController::showTransactions()`) and the CSV export
+(`ExportController::exportAccountLedger()`) call the exact same two shared helper functions
+— `ledgerFilters()` and `buildLedgerWhere()` — added to the global `functions.php` rather
+than duplicated per-controller (unlike most other exports in this app, which each rebuild
+their own filter logic inline; this one case justified sharing code across controllers
+specifically because "export matches the screen" was the explicit requirement, and any
+future filter added to one place is now guaranteed to apply to the other automatically).
+
+**Access:** the export button is gated behind the existing `imports_exports` plan feature
+(Growth+) — the same gate every other CSV export in the app already uses. Filtering and
+viewing the ledger itself stays available on every plan, matching §5.8. This means Core can
+filter the on-screen ledger but not export it; flagging this explicitly in case Core should
+be able to export its own ledger too — it wasn't asked for, so I kept the existing boundary
+rather than assuming an upsell opportunity should be removed.
+
+**Known systemic gap, not introduced here:** none of the CSV export types in this app
+(products, customers, sales, transactions, and now the account ledger) are permission-gated
+— only plan-gated. A cashier without `financial_accounts.access` couldn't discover an
+account's ledger through the UI, but could still hit `/export/account-ledger?account_id=1`
+directly if they guessed the URL, the same way they always could for `/export/customers`,
+`/export/sales`, etc. This predates this change and applies across the board — worth a
+dedicated pass if it matters for your threat model, but out of scope for this specific
+request.
+
+**Status:** done. See §6c.
+
 ## 6. What's actually been built (Phase 1 + 1b)
 
 | File | Change |
@@ -251,14 +304,124 @@ available on every plan, not just Growth+.
 every table has the column, but every query still behaves as if there's one branch,
 because there is only one branch per install right now. That's intentional — see §5.1.
 
+## 6b. What's actually been built (Phase 2)
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_04_phase2_permissions.sql` | New `roles`, `permissions`, `role_permissions` tables; `users.role_id`. Seeded to reproduce today's access rules exactly, plus closes the `/purchases` gap (§5.10). All existing users backfilled to their matching system role. |
+| `app/helpers/functions.php` (updated) | New `can()`, `currentUserPermissions()`, `roleSlug()`, `roleName()`, `assignableRoles()`, `canManageAnything()`. |
+| `public/index.php` (updated) | `$roleRestrictions` replaced with a permission-based `$permissionRestrictions` map; `/roles` added to the dispatch table and gated by `roles.manage` + the `advanced_permissions` plan feature. |
+| `app/controllers/UserController.php` (updated) | Admin-only gate now `can('users.manage')`; create/edit now read/write `role_id` (validated against `assignableRoles()`), keeping the legacy `role` enum in sync for the few remaining cosmetic reads. |
+| `app/controllers/SettingsController.php` (updated) | Admin-only gate now `can('settings.manage')`. |
+| `app/controllers/SaleController.php` (updated) | Back-date check now `can('sales.backdate')`; both edit/void checks now `can('sales.edit')` (previously referenced a `'manager'` role that was never actually assignable). |
+| `app/views/users/create.php`, `edit.php` (updated) | Role dropdown now built from `assignableRoles()` — shows custom roles too when the plan allows it — and posts `role_id` instead of a hardcoded string. |
+| `app/views/users/index.php`, `app/views/account/index.php` (updated) | Role badge now shows the real role name via `role_id` (so custom role names display correctly), not just the 3-value enum. |
+| `app/views/dashboard/index.php`, `sales/index.php`, `sales/pos.php` (updated) | UI conditionals converted from hardcoded role checks to `can()`. |
+| `app/views/layout/header.php` (updated) | Users/Settings nav links now permission-based; whole back-office nav section visibility now uses new `canManageAnything()` helper instead of an admin/staff string check; new Roles nav link (Enterprise + `roles.manage` only). |
+| `app/controllers/RoleController.php` (new) | Full CRUD for roles: list, create custom role, edit any role's permission set (including system roles), delete (custom roles only, only if unassigned). Guards the built-in Admin role from ever losing `users.manage`/`roles.manage` via the UI. |
+| `app/views/roles/index.php`, `create.php`, `edit.php` (new) | The role management screens themselves. |
+
+**Not built (deliberately deferred):** permission granularity stops at the module level
+(e.g. one `products.manage` toggle, not separate view/create/edit/delete toggles per
+module) — this matches the granularity the app already enforced before Phase 2, and going
+finer is a bigger UI/UX exercise better scoped if a real client asks for it.
+
+## 6c. What's actually been built (account ledger filtering + export)
+
+| File | Change |
+|---|---|
+| `app/helpers/functions.php` (updated) | New shared `ledgerFilters()` and `buildLedgerWhere()` — used by both the ledger screen and its export so they can never drift apart. |
+| `app/controllers/FinancialAccountsController.php` (updated) | `showTransactions()` now applies type + date-range filters via the shared helpers. |
+| `app/controllers/ExportController.php` (updated) | New `account-ledger` export type; `exportAccountLedger()` reuses the same shared helpers. |
+| `app/views/financial_accounts/transactions.php` (updated) | Filter bar (type + date range), result count, "no matches" vs. "no transactions" empty states, and an Export CSV button gated behind `imports_exports` (Growth+). |
+
+## 6d. What's actually been built (export permissions, decimal stock, single-session login)
+
+### Export permission gap — closed
+| File | Change |
+|---|---|
+| `app/controllers/ExportController.php` (updated) | New `$exportPermissionMap` checked via `can()` before any export runs: `categories`→`categories.manage`, `products`→`products.manage`, `suppliers`→`suppliers.manage`, `customers`→`customers.manage`, `transactions`→`transactions.manage`, `account-ledger`→`financial_accounts.access`, `stocks`→`stock.manage`. Report exports and `sales` intentionally left ungated, matching their source pages. |
+
+Confirmed separately: Core already couldn't reach any `/export/*` route (including the ledger), since the whole prefix requires the Growth+ `imports_exports` plan feature — no change was needed there.
+
+### Decimal stock quantities
+Products sold by weight/volume (e.g. "0.5 kg") couldn't be recorded — every quantity field
+only accepted whole numbers, both in the database (`INT` columns) and in the UI (`min="1"`,
+`parseInt()`, integer-only stepper clamps). Products sold by count (pcs, box, dozen) are
+unaffected by this change — decimals are now merely *allowed*, not required of anyone.
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_05_decimal_stock_quantities.sql` (new) | Converts `products.current_stock`/`reorder_level`, `stock_movements.quantity`/`previous_stock`/`new_stock`, `sale_items.quantity`, `purchase_items.quantity`, and `product_cost_history.quantity`/`stock_before`/`stock_after` from `INT` to `DECIMAL(12,3)`. Existing whole numbers convert losslessly. |
+| `app/controllers/DistributorController.php`, `ImportController.php`, `PurchaseController.php`, `SaleController.php`, `StockController.php`, `ProductController.php` (updated) | Every `intval()` applied to a quantity or stock value changed to `floatval()` (roughly 20 call sites across these six files, including a third stock-adjustment action in `StockController` found while sweeping). One float-equality comparison (`$diff === 0` in the stock-adjustment save) changed to an epsilon check, since exact `===` comparison on floats is unreliable. |
+| `app/views/sales/pos.php`, `purchases/create.php`, `purchases/edit.php`, `distributor/create.php`, `stock/stock-in.php`, `stock/stock-out.php`, `stock/adjust.php`, `products/create.php`, `products/edit.php` (updated) | Quantity inputs: `min`/`step` now allow decimals; JS quantity clamps lowered from `1` to `0.01`; `parseInt()` → `parseFloat()` throughout cart/preview calculations. |
+| `app/helpers/functions.php` (updated) | New `formatQty()` — displays whole numbers plainly (`5`) but keeps up to 3 decimal places for fractional quantities (`0.5`), trimming trailing zeros. Used everywhere `number_format($quantity)` was silently rounding a real fractional quantity down to a whole number for display (receipts, purchase view, sales/profit-loss/top-selling reports, CSV exports). |
+
+### Single-session login enforcement
+**Chosen approach: automatic invalidation of the older session, not an interactive "someone
+else is logged in — continue anyway?" prompt.** The two options cost the same at steady
+state — either way, every authenticated request needs one cheap check to know whether this
+session has been superseded — so the "least likely to affect speed" option is the one that
+doesn't *also* add an extra round-trip at login time (a confirmation screen would). Automatic
+invalidation wins on that basis without giving up anything on ongoing request speed.
+
+**Mechanism:** a random token is generated on every successful login and stored in both the
+`users` table and the session. Every authenticated request compares the two with a single
+indexed primary-key lookup — the same cost class as `currentPlan()`/`currentUserPermissions()`,
+which already run once per request. A mismatch means a newer login has happened elsewhere for
+that account, so the older session is destroyed immediately with a clear message on next use.
+Multiple browser tabs from the *same* login share one session/token and are unaffected — this
+only catches a genuinely separate, newer login.
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_06_single_session_enforcement.sql` (new) | Adds `users.session_token` (nullable). Existing sessions are unaffected until their user's next fresh login — nobody is forced out purely by this migration running. |
+| `app/controllers/AuthController.php` (updated) | `processLogin()` generates a fresh token, stores it in the DB and `$_SESSION`. `processLogout()` clears the DB token. |
+| `app/helpers/functions.php` (updated) | New `enforceSingleSession()` — compares session vs. DB token; destroys the session and redirects to `/login` with an explanatory message on mismatch. |
+| `public/index.php` (updated) | Calls `enforceSingleSession()` right after the existing login-required gate, before any permission/plan checks. |
+
 ## 7. Roadmap
 
 | Phase | Scope | Risk / dependency |
 |---|---|---|
 | **1** ✅ | Plan tiers, feature gating, route/nav enforcement, user limits | Shipped |
 | **1b** ✅ | `accounts.branch_id`, `users.branch_id` scaffolding | Shipped |
-| **2** | `permissions` / `role_permissions` tables + Enterprise role editor | Additive only, no existing schema touched — safe anytime |
+| **2** ✅ | `permissions` / `role_permissions` tables + Enterprise role editor | Shipped |
 | **3** | Multi-branch build: `branch_stock` replacing `products.current_stock`, branch-aware POS/reporting, inter-branch transfers, customer-credit branch settlement (§5.5) | Needs a real Enterprise client to design against; biggest single phase |
+
+## 7b. Phase 2 testing checklist before rolling out to a real client
+
+- [ ] Run `2026_08_04_phase2_permissions.sql` against a **copy** of a client DB first.
+- [ ] Log in as admin, staff, and cashier on a Core-plan install; confirm nothing changed
+      except that cashier can no longer reach `/purchases` directly (the §5.10 fix).
+- [ ] On an Enterprise-plan install, confirm the "Roles" nav link appears for an
+      admin-level user and confirm `/roles` 403s on Core/Growth even for an admin.
+- [ ] Create a custom role with only `products.manage` + `stock.manage`; assign it to a
+      test user; confirm they can reach Products/Stock but nothing else, and that the
+      main nav shows the Inventory dropdown but not People/Finance.
+- [ ] Try to uncheck "Manage Users" and "Manage Roles & Permissions" on the built-in Admin
+      role and save — confirm both stay checked regardless (the lockout guard).
+- [ ] Try to delete a custom role that's still assigned to a user — confirm it's blocked
+      with a clear message instead of silently orphaning that user's `role_id`.
+- [ ] Confirm a user's role badge on `/users` and `/account` shows the actual custom role
+      name, not a generic fallback.
+
+## 7c. Testing checklist for this round (export permissions, decimal stock, single-session)
+
+- [ ] Run both new migrations against a **copy** of a client DB first.
+- [ ] As a cashier, confirm `/export/customers` (and the others in the permission map) now
+      redirect with an error instead of downloading a CSV.
+- [ ] Sell a kg-priced product with quantity `0.5` through POS; confirm it saves, deducts
+      stock correctly, and displays as `0.5` (not `0` or `1`) on the receipt and in reports.
+- [ ] Run a stock-in, stock-out, and stock adjustment with a decimal quantity; confirm the
+      resulting `current_stock` is correct to 3 decimal places.
+- [ ] Do a purchase with a decimal quantity, then edit that purchase — confirm the quantity
+      isn't rounded when the edit form loads.
+- [ ] Log in as the same user from two different browsers; confirm the first one gets
+      signed out (with the explanatory message) on its very next click, not immediately —
+      it only triggers on the next request, not via any live push.
+- [ ] Confirm opening two tabs in the *same* browser after one login does **not** log
+      either tab out — only a genuinely separate login should trigger this.
 
 ## 8. Open decisions for later (not blocking anything now)
 

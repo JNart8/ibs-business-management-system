@@ -74,7 +74,7 @@
                 Quantity to Remove <span class="text-red-500">*</span>
             </label>
             <input type="number" name="quantity"
-                min="1" required
+                min="0.01" step="0.01" required
                 value="<?= e(old('quantity', '1')) ?>"
                 x-model="quantity"
                 class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-lg font-bold
@@ -82,7 +82,7 @@
 
             <!-- Warning if quantity > stock -->
             <p class="text-xs text-red-500 mt-1"
-                x-show="selectedProduct && parseInt(quantity) > parseInt(selectedProduct?.current_stock)" x-cloak>
+                x-show="selectedProduct && parseFloat(quantity) > parseFloat(selectedProduct?.current_stock)" x-cloak>
                 ⚠️ Quantity exceeds available stock!
             </p>
         </div>
@@ -93,8 +93,8 @@
             <div class="flex justify-between text-sm">
                 <span class="text-gray-600">Stock After Removal:</span>
                 <span class="font-bold"
-                    :class="((selectedProduct?.current_stock || 0) - (parseInt(quantity) || 0)) < 0 ? 'text-red-600' : 'text-gray-800'"
-                    x-text="Math.max(0, (parseInt(selectedProduct?.current_stock) || 0) - (parseInt(quantity) || 0)) + ' ' + (selectedProduct?.unit || '')">
+                    :class="((selectedProduct?.current_stock || 0) - (parseFloat(quantity) || 0)) < 0 ? 'text-red-600' : 'text-gray-800'"
+                    x-text="Math.max(0, (parseFloat(selectedProduct?.current_stock) || 0) - (parseFloat(quantity) || 0)) + ' ' + (selectedProduct?.unit || '')">
                 </span>
             </div>
         </div>

@@ -84,7 +84,7 @@
                     Quantity <span class="text-red-500">*</span>
                 </label>
                 <input type="number" name="quantity"
-                    min="1" required
+                    min="0.01" step="0.01" required
                     value="<?= e(old('quantity', '1')) ?>"
                     x-model="quantity"
                     class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-lg font-bold
@@ -115,7 +115,7 @@
             <div class="flex justify-between text-sm">
                 <span class="text-gray-600">Stock After Update:</span>
                 <span class="font-bold text-blue-700"
-                    x-text="((parseInt(selectedProduct?.current_stock) || 0) + (parseInt(quantity) || 0))
+                    x-text="((parseFloat(selectedProduct?.current_stock) || 0) + (parseFloat(quantity) || 0))
                                + ' ' + (selectedProduct?.unit || '')">
                 </span>
             </div>

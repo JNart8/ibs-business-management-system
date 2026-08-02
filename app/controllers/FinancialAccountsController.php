@@ -213,13 +213,16 @@ function showTransactions($db, $id)
         redirect(BASE_URL . '/financial-accounts', 'error', 'Account not found.');
     }
 
+    $filters = ledgerFilters();
+    [$where, $params] = buildLedgerWhere($id, $filters);
+
     $transactions = $db->fetchAll("
         SELECT t.*, u.full_name as user_name
         FROM account_transactions t
         LEFT JOIN users u ON t.user_id = u.id
-        WHERE t.account_id = ?
+        $where
         ORDER BY t.created_at DESC
-    ", [$id]);
+    ", $params);
 
     $pageTitle = 'Account Ledger: ' . $account['name'];
     include APP_PATH . '/views/financial_accounts/transactions.php';
