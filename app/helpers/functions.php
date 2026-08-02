@@ -154,6 +154,108 @@ function currentUser()
 }
 
 /**
+ * All permission keys granted to the current user's role, via
+ * users.role_id → role_permissions. Cached per-request.
+ * Returns an empty array for a user with no role_id assigned
+ * (shouldn't happen post-migration, but fails closed, not open).
+ */
+function currentUserPermissions()
+{
+    static $permissions = null;
+    if ($permissions === null) {
+        $user = currentUser();
+        $roleId = $user['role_id'] ?? null;
+        if (!$roleId) {
+            $permissions = [];
+        } else {
+            $db   = Database::getInstance();
+            $rows = $db->fetchAll("SELECT permission_key FROM role_permissions WHERE role_id = ?", [$roleId]);
+            $permissions = array_column($rows, 'permission_key');
+        }
+    }
+    return $permissions;
+}
+
+/**
+ * Does the current user have at least one "back office" management
+ * permission? Used to show/hide whole nav sections (Dashboard,
+ * Inventory, People, Finance, Reports dropdowns) as a group, the
+ * same way the old admin/staff-only check did — but based on actual
+ * permissions, so a custom Enterprise role with even one of these
+ * granted will see the nav area (individual sub-items inside are
+ * still protected item-by-item at the router regardless of what
+ * the nav shows).
+ */
+function canManageAnything()
+{
+    $modulePermissions = [
+        'products.manage', 'categories.manage', 'stock.manage', 'suppliers.manage',
+        'purchases.manage', 'customers.manage', 'transactions.manage',
+        'financial_accounts.access', 'expenses.manage', 'distributor.manage', 'suspense.manage',
+    ];
+    foreach ($modulePermissions as $permission) {
+        if (can($permission)) return true;
+    }
+    return false;
+}
+
+/**
+ * Does the current user have this permission?
+ * Usage: if (can('products.manage')) { ... }
+ */
+function can($permission)
+{
+    return in_array($permission, currentUserPermissions(), true);
+}
+
+/**
+ * Slug of a role by id (admin/staff/cashier/custom-slug), cached
+ * per-request per role_id since it's looked up repeatedly (e.g.
+ * once per user row on the Users list).
+ */
+function roleSlug($roleId)
+{
+    static $cache = [];
+    if (!$roleId) return null;
+    if (!array_key_exists($roleId, $cache)) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT slug FROM roles WHERE id = ?", [$roleId]);
+        $cache[$roleId] = $row['slug'] ?? null;
+    }
+    return $cache[$roleId];
+}
+
+/**
+ * Display name of a role by id (e.g. for the Users list / badges).
+ */
+function roleName($roleId)
+{
+    static $cache = [];
+    if (!$roleId) return 'Unknown';
+    if (!array_key_exists($roleId, $cache)) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT name FROM roles WHERE id = ?", [$roleId]);
+        $cache[$roleId] = $row['name'] ?? 'Unknown';
+    }
+    return $cache[$roleId];
+}
+
+/**
+ * All roles a user can be assigned to. Core/Growth only ever see
+ * the 3 system roles (matches today's fixed dropdown); Enterprise
+ * (planAllows('advanced_permissions')) also sees any custom roles
+ * that have been created.
+ */
+function assignableRoles()
+{
+    $db = Database::getInstance();
+    if (planAllows('advanced_permissions')) {
+        return $db->fetchAll("SELECT id, name, slug, is_system FROM roles ORDER BY is_system DESC, name ASC");
+    }
+    return $db->fetchAll("SELECT id, name, slug, is_system FROM roles WHERE is_system = 1 ORDER BY id ASC");
+}
+
+/**
  * Load the plan tier definitions (app/config/plans.php).
  * Cached in a static var so the file is only read once per request.
  */
@@ -352,4 +454,136 @@ function recordAccountTransaction($db, $paymentMethod, $amount, $type, $referenc
     ]);
 
     return true;
+}
+
+/**
+ * Read + normalize the account-ledger filter inputs. Shared by the
+ * ledger page (FinancialAccountsController) and its CSV export
+ * (ExportController) — both load independently per request, so this
+ * lives in the global helpers file rather than being duplicated,
+ * guaranteeing the export always matches exactly what's on screen.
+ */
+function ledgerFilters()
+{
+    return [
+        'type'      => $_GET['type'] ?? '',
+        'date_from' => $_GET['date_from'] ?? '',
+        'date_to'   => $_GET['date_to'] ?? '',
+    ];
+}
+
+/**
+ * Build the WHERE clause + params for an account's ledger, given the
+ * filters from ledgerFilters().
+ */
+function buildLedgerWhere($accountId, $filters)
+{
+    $where  = "WHERE t.account_id = ?";
+    $params = [$accountId];
+
+    $validTypes = ['deposit', 'withdrawal', 'transfer_out', 'transfer_in', 'charge'];
+    if (!empty($filters['type']) && in_array($filters['type'], $validTypes, true)) {
+        $where .= " AND t.transaction_type = ?";
+        $params[] = $filters['type'];
+    }
+
+    if (!empty($filters['date_from']) && !empty($filters['date_to'])) {
+        $where .= " AND DATE(t.created_at) BETWEEN ? AND ?";
+        $params[] = $filters['date_from'];
+        $params[] = $filters['date_to'];
+    } elseif (!empty($filters['date_from'])) {
+        $where .= " AND DATE(t.created_at) >= ?";
+        $params[] = $filters['date_from'];
+    } elseif (!empty($filters['date_to'])) {
+        $where .= " AND DATE(t.created_at) <= ?";
+        $params[] = $filters['date_to'];
+    }
+
+    return [$where, $params];
+}
+
+/**
+ * Format a quantity for display. Shows whole numbers plainly (5, not
+ * 5.00) but keeps up to 3 decimal places when a product is sold in
+ * fractional amounts (0.5, 1.25, 0.125) — added alongside decimal
+ * stock/quantity support so displays don't silently round a real
+ * fractional quantity down to a whole number.
+ */
+function formatQty($value)
+{
+    $value = floatval($value ?? 0);
+    $rounded = round($value, 3);
+
+    if ($rounded == floor($rounded)) {
+        return number_format($rounded, 0);
+    }
+
+    // Trim trailing zeros (1.500 -> 1.5) while keeping real precision.
+    return rtrim(rtrim(number_format($rounded, 3), '0'), '.');
+}
+
+/**
+ * Single-session enforcement. Compares this session's stored login
+ * token against the one currently on file for the user in the
+ * database (set fresh on every successful login — see
+ * AuthController::processLogin()). If they don't match, a newer
+ * login has happened elsewhere for this account, so this older
+ * session is signed out immediately.
+ *
+ * Cost: one indexed primary-key lookup per authenticated request —
+ * the same cost class as currentPlan()/currentUserPermissions(),
+ * which already run once per request. Chosen over an interactive
+ * "someone else is logged in, continue anyway?" prompt because that
+ * would add an extra round-trip at every login (rare) for no
+ * reduction in this per-request cost (unavoidable either way to
+ * detect a takeover promptly) — i.e. it doesn't trade away any
+ * steady-state speed, so the simpler behavior wins.
+ *
+ * Sessions created before this feature existed have no token in
+ * either place yet, so both sides are NULL and are treated as a
+ * match — nobody is forced to log out purely because this shipped;
+ * enforcement begins the next time that user (or anyone impersonating
+ * them) actually logs in.
+ */
+function enforceSingleSession()
+{
+    $userId = $_SESSION['user_id'] ?? null;
+    if (!$userId) {
+        return;
+    }
+
+    $db = Database::getInstance();
+    $row = $db->fetchOne("SELECT session_token FROM users WHERE id = ?", [$userId]);
+    $dbToken = $row['session_token'] ?? null;
+    $sessionToken = $_SESSION['session_token'] ?? null;
+
+    if ($dbToken === $sessionToken) {
+        return; // still the current session for this user
+    }
+
+    // Someone (possibly this same person, from another device) has
+    // logged in since this session started. Sign this one out.
+    $_SESSION = [];
+
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(
+            session_name(),
+            '',
+            time() - 42000,
+            $params['path'],
+            $params['domain'],
+            $params['secure'],
+            $params['httponly']
+        );
+    }
+    session_destroy();
+
+    // Start a new session so the flash message survives to the login page.
+    session_start();
+    $_SESSION['flash_type'] = 'info';
+    $_SESSION['flash_message'] = 'You have been signed out because this account was signed in from another device.';
+
+    header('Location: ' . BASE_URL . '/login');
+    exit;
 }

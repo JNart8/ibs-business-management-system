@@ -38,30 +38,40 @@ if (!$isPublic && !isLoggedIn()) {
     exit;
 }
 
-// ── Role-based access control ─────────────────────────────────
-// Define which roles can access each route prefix.
-// Roles not listed for a route are denied with a 403.
-//
-//   admin   — full access to everything
-//   staff   — everything except /users
-//   cashier — /pos, /sales, /account, /dashboard only
-//
-$roleRestrictions = [
-    // Only admins can manage users
-    '/users'      => ['admin'],
-    '/settings'   => ['admin'],
+// ── Single-session enforcement ────────────────────────────────
+// A newer login for this account (elsewhere) invalidates this session.
+// See enforceSingleSession() in functions.php for the full rationale.
+if (!$isPublic && isLoggedIn()) {
+    enforceSingleSession();
+}
 
-    // Cashiers cannot manage inventory, stock, suppliers, etc.
-    '/products'             => ['admin', 'staff'],
-    '/categories'           => ['admin', 'staff'],
-    '/stock'                => ['admin', 'staff'],
-    '/suppliers'            => ['admin', 'staff'],
-    '/customers'            => ['admin', 'staff'],
-    '/transactions'         => ['admin', 'staff'],
-    '/financial-accounts'   => ['admin', 'staff'],
-    '/expenses'             => ['admin', 'staff'],
-    '/distributor'          => ['admin', 'staff'],
-    '/suspense'             => ['admin', 'staff'],
+// ── Permission-based access control ───────────────────────────
+// Define which permission each route prefix requires. Anything
+// not listed here is available to any logged-in user (matches
+// today's behavior for /pos, /sales, /dashboard, /reports, /account).
+// See app/config/plans.php for plan-tier gating (a separate,
+// orthogonal system — a route can require both a permission AND
+// a plan feature).
+//
+// NOTE: '/purchases' is included here for the first time — it was
+// previously reachable by any logged-in user via direct URL (the
+// dashboard only *hid* the button for cashiers, it didn't actually
+// block the route). See ARCHITECTURE.md §5.10.
+$permissionRestrictions = [
+    '/users'                => 'users.manage',
+    '/settings'             => 'settings.manage',
+    '/roles'                => 'roles.manage',
+    '/products'             => 'products.manage',
+    '/categories'           => 'categories.manage',
+    '/stock'                => 'stock.manage',
+    '/suppliers'            => 'suppliers.manage',
+    '/purchases'            => 'purchases.manage',
+    '/customers'            => 'customers.manage',
+    '/transactions'         => 'transactions.manage',
+    '/financial-accounts'   => 'financial_accounts.access',
+    '/expenses'             => 'expenses.manage',
+    '/distributor'          => 'distributor.manage',
+    '/suspense'             => 'suspense.manage',
 ];
 
 if (!$isPublic && isLoggedIn()) {
@@ -77,12 +87,12 @@ if (!$isPublic && isLoggedIn()) {
         && $method === 'GET'
         && in_array($path, $cashierPosLookupRoutes, true);
 
-    foreach ($roleRestrictions as $prefix => $allowedRoles) {
+    foreach ($permissionRestrictions as $prefix => $permission) {
         if ($isCashierPosLookup) {
             continue;
         }
 
-        if (strpos($path, $prefix) === 0 && !in_array($role, $allowedRoles)) {
+        if (strpos($path, $prefix) === 0 && !can($permission)) {
             http_response_code(403);
             echo '<!DOCTYPE html>
             <html>
@@ -132,6 +142,7 @@ $planFeatureMap = [
     '/financial-accounts/store' => 'manage_financial_accounts',
     '/expenses'             => 'expenses',
     '/distributor'          => 'distributor',
+    '/roles'                => 'advanced_permissions',
 ];
 
 if (!$isPublic && isLoggedIn()) {
@@ -193,6 +204,8 @@ if ($path === '/' || $path === '' || $path === '/dashboard') {
     require_once APP_PATH . '/controllers/DistributorController.php';
 } elseif (strpos($path, '/users') === 0) {
     require APP_PATH . '/controllers/UserController.php';
+} elseif (strpos($path, '/roles') === 0) {
+    require APP_PATH . '/controllers/RoleController.php';
 } elseif (strpos($path, '/settings') === 0) {
     require APP_PATH . '/controllers/SettingsController.php';
 } elseif (strpos($path, '/import') === 0) {

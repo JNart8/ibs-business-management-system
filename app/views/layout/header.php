@@ -155,7 +155,7 @@
                 <!-- Desktop Menu -->
                 <div class="hidden md:flex items-center space-x-1">
 
-                    <?php if (in_array(currentUser()['role'], ['admin', 'staff'])): ?>
+                    <?php if (canManageAnything()): ?>
                         <!-- Dashboard -->
                         <a href="<?= BASE_URL ?>/"
                             class="nav-link <?= isActive('/', $currentPath) ?>">
@@ -169,7 +169,7 @@
                         🛒 POS
                     </a>
 
-                    <?php if (in_array(currentUser()['role'], ['admin', 'staff'])): ?>
+                    <?php if (canManageAnything()): ?>
 
                         <!-- Inventory Dropdown -->
                         <div class="relative dropdown">
@@ -303,12 +303,20 @@
 
                     <?php endif; ?>
 
-                    <?php if ((currentUser()['role'] ?? '') === 'admin'): ?>
+                    <?php if (can('users.manage')): ?>
                         <!-- Users -->
                         <a href="<?= BASE_URL ?>/users"
                             class="nav-link <?= isActive('/users', $currentPath) ?>">
                             Users
                         </a>
+                    <?php endif; ?>
+                    <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
+                        <a href="<?= BASE_URL ?>/roles"
+                            class="nav-link <?= isActive('/roles', $currentPath) ?>">
+                            Roles
+                        </a>
+                    <?php endif; ?>
+                    <?php if (can('settings.manage')): ?>
                         <a href="<?= BASE_URL ?>/settings"
                             class="nav-link <?= isActive('/settings', $currentPath) ?>">
                             Settings
@@ -366,7 +374,7 @@
                         🛒 POS
                     </a>
 
-                    <?php if (in_array(currentUser()['role'] ?? '', ['admin', 'staff'])): ?>
+                    <?php if (canManageAnything()): ?>
 
                         <!-- Inventory Section (Mobile) -->
                         <div class="flex flex-col">
@@ -545,12 +553,21 @@
 
                     <?php endif; ?>
 
-                    <?php if ((currentUser()['role'] ?? '') === 'admin'): ?>
+                    <?php if (can('users.manage')): ?>
                         <a href="<?= BASE_URL ?>/users"
                             class="nav-link <?= isActive('/users', $currentPath) ?>"
                             @click="mobileOpen = false">
                             👤 Users
                         </a>
+                    <?php endif; ?>
+                    <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
+                        <a href="<?= BASE_URL ?>/roles"
+                            class="nav-link <?= isActive('/roles', $currentPath) ?>"
+                            @click="mobileOpen = false">
+                            🔑 Roles
+                        </a>
+                    <?php endif; ?>
+                    <?php if (can('settings.manage')): ?>
                         <a href="<?= BASE_URL ?>/settings"
                             class="nav-link <?= isActive('/settings', $currentPath) ?>"
                             @click="mobileOpen = false">

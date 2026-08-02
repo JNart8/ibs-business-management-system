@@ -40,21 +40,28 @@
         <!-- Role -->
         <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Role</label>
-            <select name="role"
+            <select name="role_id"
                 class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm
                            focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                <?php foreach (
-                    [
-                        'cashier' => '🛒 Cashier  — POS and sales only',
-                        'staff'   => '👤 Staff    — All features, no user management',
-                        'admin'   => '⚙️  Admin    — Full access including user management',
-                    ] as $val => $label
-                ): ?>
-                    <option value="<?= $val ?>" <?= old('role', $user['role'] ?? '') === $val ? 'selected' : '' ?>>
-                        <?= $label ?>
+                <?php
+                $roleDescriptions = [
+                    'cashier' => '🛒 Cashier — POS and sales only',
+                    'staff'   => '👤 Staff — All features, no user management',
+                    'admin'   => '⚙️ Admin — Full access including user management',
+                ];
+                foreach ($roles as $r):
+                    $label = $roleDescriptions[$r['slug']] ?? ('🔧 ' . $r['name'] . ' (custom role)');
+                ?>
+                    <option value="<?= $r['id'] ?>" <?= old('role_id', $user['role_id'] ?? '') == $r['id'] ? 'selected' : '' ?>>
+                        <?= e($label) ?>
                     </option>
                 <?php endforeach; ?>
             </select>
+            <?php if (planAllows('advanced_permissions')): ?>
+            <p class="text-xs text-gray-400 mt-1">
+                Need something in between? <a href="<?= BASE_URL ?>/roles" class="text-blue-600 hover:underline">Create a custom role</a>.
+            </p>
+            <?php endif; ?>
         </div>
 
         <!-- Active toggle -->

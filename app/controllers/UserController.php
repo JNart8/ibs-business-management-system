@@ -11,9 +11,9 @@ if (!defined('APP_START')) {
 
 $db = Database::getInstance();
 
-// ── Admin only ────────────────────────────────────────────────
-if ((currentUser()['role'] ?? '') !== 'admin') {
-    redirect(BASE_URL . '/', 'error', 'Access denied. Admins only.');
+// ── Requires users.manage permission ───────────────────────────
+if (!can('users.manage')) {
+    redirect(BASE_URL . '/', 'error', 'Access denied. You do not have permission to manage users.');
 }
 
 // ── Parse segments ────────────────────────────────────────────
@@ -68,7 +68,7 @@ switch ($action) {
 function listUsers($db)
 {
     $users = $db->fetchAll("
-        SELECT id, username, full_name, role, is_active,
+        SELECT id, username, full_name, role, role_id, is_active,
                login_attempts, locked_until, last_login, created_at
         FROM users
         ORDER BY is_active DESC, role ASC, full_name ASC
@@ -79,6 +79,7 @@ function listUsers($db)
 
 function showCreateUser($db)
 {
+    $roles = assignableRoles();
     $pageTitle = 'Add User';
     include APP_PATH . '/views/users/create.php';
 }
@@ -101,14 +102,22 @@ function storeUser($db)
         redirect(BASE_URL . '/users/create', 'error', implode(' ', $errors));
     }
 
+    $roleId = intval($_POST['role_id'] ?? 0);
+    // Legacy `role` enum only accepts admin/staff/cashier — for a custom Enterprise
+    // role that doesn't map to one of those, fall back to 'staff' for the handful of
+    // remaining cosmetic reads of this column. `role_id` is the real source of truth.
+    $slug = roleSlug($roleId);
+    $legacyRole = in_array($slug, ['admin', 'staff', 'cashier'], true) ? $slug : 'staff';
+
     $db->query("
-        INSERT INTO users (username, password_hash, full_name, role, is_active)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO users (username, password_hash, full_name, role, role_id, is_active)
+        VALUES (?, ?, ?, ?, ?, ?)
     ", [
         trim($_POST['username']),
         password_hash($_POST['password'], PASSWORD_DEFAULT),
         trim($_POST['full_name']),
-        $_POST['role'] ?? 'staff',
+        $legacyRole,
+        $roleId,
         isset($_POST['is_active']) ? 1 : 0,
     ]);
 
@@ -119,6 +128,7 @@ function showEditUser($db, $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
+    $roles = assignableRoles();
     $pageTitle = 'Edit User';
     include APP_PATH . '/views/users/edit.php';
 }
@@ -129,7 +139,7 @@ function updateUser($db, $id)
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     $fullName    = trim($_POST['full_name'] ?? '');
-    $role        = $_POST['role']           ?? 'staff';
+    $roleId      = intval($_POST['role_id'] ?? 0);
     $isActive    = isset($_POST['is_active']) ? 1 : 0;
     $newUsername = trim($_POST['username']  ?? '');
 
@@ -145,7 +155,10 @@ function updateUser($db, $id)
         redirect(BASE_URL . '/users/edit/' . $id, 'error', 'Username already taken.');
     }
 
-    if ($user['role'] === 'admin' && $role !== 'admin') {
+    $slug = roleSlug($roleId);
+    $legacyRole = in_array($slug, ['admin', 'staff', 'cashier'], true) ? $slug : 'staff';
+
+    if ($user['role'] === 'admin' && $legacyRole !== 'admin') {
         $adminCount = $db->fetchOne("SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND is_active = 1");
         if (intval($adminCount['c']) <= 1) {
             redirect(BASE_URL . '/users/edit/' . $id, 'error', 'Cannot demote the only admin.');
@@ -153,13 +166,13 @@ function updateUser($db, $id)
     }
 
     $db->query("
-        UPDATE users SET username = ?, full_name = ?, role = ?, is_active = ?
+        UPDATE users SET username = ?, full_name = ?, role = ?, role_id = ?, is_active = ?
         WHERE id = ?
-    ", [$newUsername, $fullName, $role, $isActive, $id]);
+    ", [$newUsername, $fullName, $legacyRole, $roleId, $isActive, $id]);
 
     if ($id == $_SESSION['user_id']) {
         $_SESSION['full_name'] = $fullName;
-        $_SESSION['role']      = $role;
+        $_SESSION['role']      = $legacyRole;
         unset($_SESSION['user_data']);
     }
 
@@ -290,7 +303,9 @@ function validateUserInput($data)
     if (($data['password'] ?? '') !== ($data['password_confirm'] ?? '')) {
         $errors[] = 'Passwords do not match.';
     }
-    if (!in_array($data['role'] ?? '', ['admin', 'staff', 'cashier'])) {
+
+    $validRoleIds = array_column(assignableRoles(), 'id');
+    if (!in_array(intval($data['role_id'] ?? 0), $validRoleIds, true)) {
         $errors[] = 'Invalid role selected.';
     }
 

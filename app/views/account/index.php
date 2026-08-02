@@ -21,10 +21,11 @@
                     'admin'   => 'bg-purple-100 text-purple-700',
                     'staff'   => 'bg-blue-100 text-blue-700',
                     'cashier' => 'bg-green-100 text-green-700',
-                ][$user['role']] ?? 'bg-gray-100 text-gray-600';
+                ][$user['role']] ?? 'bg-indigo-100 text-indigo-700';
+                $roleDisplayName = $user['role_id'] ? roleName($user['role_id']) : ucfirst($user['role']);
                 ?>
                 <span class="inline-block mt-1 px-2.5 py-0.5 rounded-full text-xs font-semibold <?= $roleBadge ?>">
-                    <?= ucfirst($user['role']) ?>
+                    <?= e($roleDisplayName) ?>
                 </span>
             </div>
         </div>

@@ -264,7 +264,7 @@ if ($totalAlerts > 0):
                 class="block px-3 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded font-medium text-sm text-center transition">
                 🛒 New Sale
             </a>
-            <?php if (in_array(currentUser()['role'] ?? '', ['admin', 'staff'])): ?>
+            <?php if (can('purchases.manage')): ?>
                 <a href="<?= BASE_URL ?>/purchases/create"
                     class="block px-3 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium text-sm text-center transition">
                     🛍️ New Purchase

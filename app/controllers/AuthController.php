@@ -129,11 +129,20 @@ function processLogin($db)
 
     session_regenerate_id(true);
 
-    $_SESSION['user_id']   = $user['id'];
-    $_SESSION['username']  = $user['username'];
-    $_SESSION['full_name'] = $user['full_name'];
-    $_SESSION['role']      = $user['role'];
-    $_SESSION['logged_in'] = true;
+    // A fresh random token per login. Storing it in both the DB and this
+    // session, and checking the two match on every request (see
+    // enforceSingleSession() in functions.php), means whichever session
+    // logged in most recently wins — any earlier session for this user
+    // gets signed out automatically on its next request.
+    $sessionToken = bin2hex(random_bytes(32));
+    $db->query("UPDATE users SET session_token = ? WHERE id = ?", [$sessionToken, $user['id']]);
+
+    $_SESSION['user_id']       = $user['id'];
+    $_SESSION['username']      = $user['username'];
+    $_SESSION['full_name']     = $user['full_name'];
+    $_SESSION['role']          = $user['role'];
+    $_SESSION['logged_in']     = true;
+    $_SESSION['session_token'] = $sessionToken;
 
     // Update last login (only if column exists — safe to remove if not)
     try {
@@ -166,6 +175,17 @@ function processLogin($db)
  */
 function processLogout()
 {
+    if (!empty($_SESSION['user_id'])) {
+        try {
+            Database::getInstance()->query(
+                "UPDATE users SET session_token = NULL WHERE id = ?",
+                [$_SESSION['user_id']]
+            );
+        } catch (Exception $e) {
+            // Non-fatal — the session is being destroyed either way.
+        }
+    }
+
     $_SESSION = [];
 
     if (ini_get('session.use_cookies')) {

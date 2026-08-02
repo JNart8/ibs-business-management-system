@@ -43,7 +43,8 @@
                         'admin'   => 'bg-purple-100 text-purple-700',
                         'staff'   => 'bg-blue-100 text-blue-700',
                         'cashier' => 'bg-green-100 text-green-700',
-                    ][$u['role']] ?? 'bg-gray-100 text-gray-600';
+                    ][$u['role']] ?? 'bg-indigo-100 text-indigo-700';
+                    $roleDisplayName = $u['role_id'] ? roleName($u['role_id']) : ucfirst($u['role']);
                 ?>
                     <tr class="hover:bg-gray-50 transition <?= !$isActive ? 'opacity-50' : '' ?>">
 
@@ -77,7 +78,7 @@
                         <!-- Role -->
                         <td class="px-5 py-4 text-center">
                             <span class="px-2.5 py-1 rounded-full text-xs font-semibold <?= $roleBadge ?>">
-                                <?= ucfirst($u['role']) ?>
+                                <?= e($roleDisplayName) ?>
                             </span>
                         </td>
 

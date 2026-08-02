@@ -34,6 +34,26 @@
                 </label>
             </div>
         </fieldset>
+
+        <fieldset class="mt-6 pt-6 border-t">
+            <legend class="font-semibold text-gray-800">POS default customer</legend>
+            <p class="text-sm text-gray-500 mt-1 mb-3">
+                Most shops sell mostly to walk-in customers, so POS pre-selects "Walk-in Customer"
+                on every new sale by default. Turn this off if most of your sales go to registered
+                (often credit) customers and you'd rather the cashier always pick one explicitly —
+                walk-in customers can't buy on credit or use deposit, so this is purely a workflow
+                preference, not a safety setting.
+            </p>
+            <label class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer">
+                <input type="checkbox" name="pos_default_walkin" value="1"
+                    <?= ($settings['pos_default_walkin'] ?? 1) ? 'checked' : '' ?>
+                    class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                <span>
+                    <span class="block font-medium">Pre-select Walk-in Customer at the start of each sale</span>
+                    <span class="text-sm text-gray-500">Uncheck to start each sale with no customer selected.</span>
+                </span>
+            </label>
+        </fieldset>
         <div class="mt-6 flex justify-end">
             <button class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2 rounded-lg">Save setting</button>
         </div>

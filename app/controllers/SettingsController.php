@@ -2,7 +2,7 @@
 
 if (!defined('APP_START')) die('Direct access not permitted');
 
-if ((currentUser()['role'] ?? '') !== 'admin') {
+if (!can('settings.manage')) {
     http_response_code(403);
     echo 'Access denied';
     return;
@@ -19,8 +19,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!in_array($discountType, ['percentage', 'flat'], true)) {
         redirect(BASE_URL . '/settings', 'error', 'Invalid discount type.');
     }
-    $db->query("UPDATE settings SET sale_discount_type = ? ORDER BY id ASC LIMIT 1", [$discountType]);
-    redirect(BASE_URL . '/settings', 'success', 'Sales discount setting updated.');
+    $posDefaultWalkin = isset($_POST['pos_default_walkin']) ? 1 : 0;
+
+    $db->query(
+        "UPDATE settings SET sale_discount_type = ?, pos_default_walkin = ? ORDER BY id ASC LIMIT 1",
+        [$discountType, $posDefaultWalkin]
+    );
+    redirect(BASE_URL . '/settings', 'success', 'Settings updated.');
 }
 
 $settings = $db->fetchOne("SELECT * FROM settings ORDER BY id ASC LIMIT 1") ?: [];
