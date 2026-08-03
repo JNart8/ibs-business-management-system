@@ -92,9 +92,11 @@ function showPOS($db)
 
     // Load walk-in customer as default, unless this install has opted out
     // via the "Default POS customer to Walk-in" setting.
-    $walkIn = ($settings['pos_default_walkin'] ?? 1)
-        ? $db->fetchOne("SELECT * FROM customers WHERE is_default = 1 LIMIT 1")
-        : null;
+    $walkIn = null;
+    if ($settings['pos_default_walkin'] ?? 1) {
+        ensureWalkInCustomerExists($db);
+        $walkIn = $db->fetchOne("SELECT * FROM customers WHERE is_default = 1 LIMIT 1");
+    }
 
     // Recent products for quick access (last 12 most sold)
     $quickProducts = $db->fetchAll("

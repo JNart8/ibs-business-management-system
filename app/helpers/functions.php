@@ -587,3 +587,30 @@ function enforceSingleSession()
     header('Location: ' . BASE_URL . '/login');
     exit;
 }
+
+/**
+ * Make sure a walk-in customer (customers.is_default = 1) actually
+ * exists. Client databases that predate the schema.sql seed row (or
+ * where it was deleted) would otherwise have "Default POS customer to
+ * Walk-in" silently do nothing — there'd be no is_default=1 row to
+ * load. Called from showPOS() (so the very first page load that needs
+ * it self-heals) and from the Settings save handler (so turning the
+ * setting on proactively fixes it too). Idempotent — safe to call on
+ * every POS load; it only ever inserts once.
+ */
+function ensureWalkInCustomerExists($db)
+{
+    $existing = $db->fetchOne("SELECT id FROM customers WHERE is_default = 1 LIMIT 1");
+    if ($existing) {
+        return;
+    }
+
+    $code = $db->fetchOne("SELECT id FROM customers WHERE customer_code = 'WALK-IN-001'")
+        ? 'WALK-IN-' . time()
+        : 'WALK-IN-001';
+
+    $db->query(
+        "INSERT INTO customers (customer_code, full_name, is_default, credit_limit, is_active) VALUES (?, ?, 1, 0.00, 1)",
+        [$code, 'Walk-in Customer']
+    );
+}

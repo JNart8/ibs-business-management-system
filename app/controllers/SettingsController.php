@@ -21,6 +21,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $posDefaultWalkin = isset($_POST['pos_default_walkin']) ? 1 : 0;
 
+    // If this is turned on, make sure a walk-in customer actually exists —
+    // see ensureWalkInCustomerExists() for why this can't be assumed.
+    if ($posDefaultWalkin) {
+        ensureWalkInCustomerExists($db);
+    }
+
     $db->query(
         "UPDATE settings SET sale_discount_type = ?, pos_default_walkin = ? ORDER BY id ASC LIMIT 1",
         [$discountType, $posDefaultWalkin]

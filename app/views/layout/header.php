@@ -137,7 +137,8 @@
         inventoryOpen: false, 
         peopleOpen: false,
         financeOpen: false,
-        reportsOpen: false 
+        reportsOpen: false,
+        adminOpen: false 
     }">
         <div class="container mx-auto px-4">
             <div class="flex items-center justify-between py-3">
@@ -303,24 +304,34 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage')): ?>
-                        <!-- Users -->
-                        <a href="<?= BASE_URL ?>/users"
-                            class="nav-link <?= isActive('/users', $currentPath) ?>">
-                            Users
-                        </a>
-                    <?php endif; ?>
-                    <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
-                        <a href="<?= BASE_URL ?>/roles"
-                            class="nav-link <?= isActive('/roles', $currentPath) ?>">
-                            Roles
-                        </a>
-                    <?php endif; ?>
-                    <?php if (can('settings.manage')): ?>
-                        <a href="<?= BASE_URL ?>/settings"
-                            class="nav-link <?= isActive('/settings', $currentPath) ?>">
-                            Settings
-                        </a>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage')): ?>
+                        <!-- Administration Dropdown -->
+                        <div class="relative dropdown">
+                            <button
+                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings'], $currentPath) ?>">
+                                Administration
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </button>
+                            <div class="dropdown-content">
+                                <?php if (can('users.manage')): ?>
+                                <a href="<?= BASE_URL ?>/users" class="dropdown-item">
+                                    👤 Users
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
+                                <a href="<?= BASE_URL ?>/roles" class="dropdown-item">
+                                    🔑 Roles
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('settings.manage')): ?>
+                                <a href="<?= BASE_URL ?>/settings" class="dropdown-item">
+                                    ⚙️ Settings
+                                </a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
                     <?php endif; ?>
                 </div>
 
@@ -553,26 +564,42 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage')): ?>
-                        <a href="<?= BASE_URL ?>/users"
-                            class="nav-link <?= isActive('/users', $currentPath) ?>"
-                            @click="mobileOpen = false">
-                            👤 Users
-                        </a>
-                    <?php endif; ?>
-                    <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
-                        <a href="<?= BASE_URL ?>/roles"
-                            class="nav-link <?= isActive('/roles', $currentPath) ?>"
-                            @click="mobileOpen = false">
-                            🔑 Roles
-                        </a>
-                    <?php endif; ?>
-                    <?php if (can('settings.manage')): ?>
-                        <a href="<?= BASE_URL ?>/settings"
-                            class="nav-link <?= isActive('/settings', $currentPath) ?>"
-                            @click="mobileOpen = false">
-                            Settings
-                        </a>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage')): ?>
+                        <!-- Administration Section (Mobile) -->
+                        <div class="flex flex-col">
+                            <button @click="adminOpen = !adminOpen"
+                                class="nav-link flex items-center justify-between w-full text-left">
+                                <span>🛠️ Administration</span>
+                                <svg class="w-4 h-4 transition-transform"
+                                    :class="{ 'rotate-180': adminOpen }"
+                                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </button>
+                            <div x-show="adminOpen" x-cloak class="pl-4 mt-1 space-y-1">
+                                <?php if (can('users.manage')): ?>
+                                <a href="<?= BASE_URL ?>/users"
+                                    class="nav-link block <?= isActive('/users', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    👤 Users
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
+                                <a href="<?= BASE_URL ?>/roles"
+                                    class="nav-link block <?= isActive('/roles', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    🔑 Roles
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('settings.manage')): ?>
+                                <a href="<?= BASE_URL ?>/settings"
+                                    class="nav-link block <?= isActive('/settings', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    ⚙️ Settings
+                                </a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
                     <?php endif; ?>
 
                     <?php if (isLoggedIn()): ?>
