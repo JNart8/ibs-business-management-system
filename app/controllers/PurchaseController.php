@@ -276,8 +276,8 @@ function completePurchase($db)
                     (purchase_number, supplier_id, subtotal, discount_percent,
                      discount_amount, vat_percent, vat_amount, total_amount,
                      payment_status, payment_method, amount_paid, amount_due,
-                     invoice_number, notes, user_id, purchase_date, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     invoice_number, notes, user_id, branch_id, purchase_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $purchaseNumber,
                 $supplierId,
@@ -294,6 +294,7 @@ function completePurchase($db)
                 $invoiceNumber ?: null,
                 $notes ?: null,
                 $userId,
+                activeBranchId(),
                 $purchaseDate,
                 $purchaseDate,
                 $purchaseDate
@@ -304,8 +305,8 @@ function completePurchase($db)
                     (purchase_number, supplier_id, subtotal, discount_percent,
                      discount_amount, vat_percent, vat_amount, total_amount,
                      payment_status, payment_method, amount_paid, amount_due,
-                     invoice_number, notes, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     invoice_number, notes, user_id, branch_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $purchaseNumber,
                 $supplierId,
@@ -321,7 +322,8 @@ function completePurchase($db)
                 $amountDue,
                 $invoiceNumber ?: null,
                 $notes ?: null,
-                $userId
+                $userId,
+                activeBranchId()
             ]);
         }
 

@@ -363,9 +363,9 @@ function completeSale($db)
         INSERT INTO sales
             (sale_number, customer_id, subtotal, discount_type, discount_percent,
              discount_amount, total_amount, payment_status,
-             payment_method, amount_paid, amount_due, notes, user_id, 
+             payment_method, amount_paid, amount_due, notes, user_id, branch_id,
              sale_date, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ", [
                 $saleNumber,
                 $customerId,
@@ -380,6 +380,7 @@ function completeSale($db)
                 $amountDue,
                 $notes ?: null,
                 $userId,
+                activeBranchId(),
                 $saleDate,
                 $saleDate,
                 $saleDate
@@ -390,8 +391,8 @@ function completeSale($db)
         INSERT INTO sales
             (sale_number, customer_id, subtotal, discount_type, discount_percent,
              discount_amount, total_amount, payment_status,
-             payment_method, amount_paid, amount_due, notes, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             payment_method, amount_paid, amount_due, notes, user_id, branch_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ", [
                 $saleNumber,
                 $customerId,
@@ -405,7 +406,8 @@ function completeSale($db)
                 $amountPaid,
                 $amountDue,
                 $notes ?: null,
-                $userId
+                $userId,
+                activeBranchId()
             ]);
         }
 
