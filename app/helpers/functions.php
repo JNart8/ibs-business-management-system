@@ -614,3 +614,67 @@ function ensureWalkInCustomerExists($db)
         [$code, 'Walk-in Customer']
     );
 }
+
+/**
+ * Is multi-branch active for this install? Independent of plan tier —
+ * every Enterprise client gets it automatically, but it can also be
+ * sold as a paid add-on to a Growth client via settings.addon_multi_branch.
+ * Cached per-request like currentPlan().
+ */
+function hasMultiBranch()
+{
+    static $result = null;
+    if ($result === null) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT plan, addon_multi_branch FROM settings ORDER BY id ASC LIMIT 1");
+        $result = (($row['plan'] ?? 'core') === 'enterprise') || !empty($row['addon_multi_branch']);
+    }
+    return $result;
+}
+
+/**
+ * All branches a user is assigned to (id, name, is_primary), ordered
+ * primary-first. Cached per user id per request.
+ */
+function userBranches($userId)
+{
+    static $cache = [];
+    if (!isset($cache[$userId])) {
+        $db = Database::getInstance();
+        $cache[$userId] = $db->fetchAll("
+            SELECT b.id, b.name, ub.is_primary
+            FROM user_branches ub
+            JOIN branches b ON b.id = ub.branch_id
+            WHERE ub.user_id = ? AND b.is_active = 1
+            ORDER BY ub.is_primary DESC, b.name ASC
+        ", [$userId]);
+    }
+    return $cache[$userId];
+}
+
+/**
+ * The branch a sale/purchase/stock movement should be recorded
+ * against right now — the current user's "active" branch. No picker
+ * is shown in POS; this is resolved once (defaults to the user's
+ * primary branch, changeable via the branch switcher when a user has
+ * more than one). Falls back to Main Branch (1) defensively if
+ * somehow unset.
+ */
+function activeBranchId()
+{
+    return currentUser()['branch_id'] ?? 1;
+}
+
+/**
+ * Display name for the current user's active branch.
+ */
+function activeBranchName()
+{
+    static $name = null;
+    if ($name === null) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT name FROM branches WHERE id = ?", [activeBranchId()]);
+        $name = $row['name'] ?? 'Main Branch';
+    }
+    return $name;
+}

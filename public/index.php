@@ -72,6 +72,7 @@ $permissionRestrictions = [
     '/expenses'             => 'expenses.manage',
     '/distributor'          => 'distributor.manage',
     '/suspense'             => 'suspense.manage',
+    '/branches'             => 'branches.manage',
 ];
 
 if (!$isPublic && isLoggedIn()) {
@@ -177,6 +178,39 @@ if (!$isPublic && isLoggedIn()) {
             exit;
         }
     }
+
+    // ── Multi-branch add-on gate ─────────────────────────────
+    // Not a plain plan-tier feature (see hasMultiBranch()), so it's
+    // checked separately from the $planFeatureMap loop above.
+    if (strpos($path, '/branches') === 0 && !hasMultiBranch()) {
+        http_response_code(403);
+        echo '<!DOCTYPE html>
+        <html>
+        <head>
+            <title>Upgrade Required</title>
+            <style>
+                body { font-family: Arial; text-align: center; padding: 80px; background: #f8fafc; }
+                .box { display:inline-block; background:#fff; border-radius:12px;
+                       padding:50px 60px; box-shadow:0 4px 20px rgba(0,0,0,.08); }
+                h1 { color: #d97706; font-size: 2rem; margin-bottom: 8px; }
+                p  { color: #6b7280; margin-bottom: 24px; }
+                a  { background:#3b82f6; color:#fff; padding:10px 24px;
+                     border-radius:8px; text-decoration:none; font-weight:600; }
+                a:hover { background:#2563eb; }
+            </style>
+        </head>
+        <body>
+            <div class="box">
+                <div style="font-size:3rem">🔒</div>
+                <h1>Upgrade Required</h1>
+                <p>Multi-branch isn\'t enabled for this account. Contact us to add it.</p>
+                <a href="' . BASE_URL . '/">← Go to Dashboard</a>
+            </div>
+        </body>
+        </html>';
+        ob_end_flush();
+        exit;
+    }
 }
 
 // ── Route to controller ───────────────────────────────────────
@@ -206,6 +240,8 @@ if ($path === '/' || $path === '' || $path === '/dashboard') {
     require APP_PATH . '/controllers/UserController.php';
 } elseif (strpos($path, '/roles') === 0) {
     require APP_PATH . '/controllers/RoleController.php';
+} elseif (strpos($path, '/branches') === 0) {
+    require APP_PATH . '/controllers/BranchController.php';
 } elseif (strpos($path, '/settings') === 0) {
     require APP_PATH . '/controllers/SettingsController.php';
 } elseif (strpos($path, '/import') === 0) {

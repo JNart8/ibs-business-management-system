@@ -304,11 +304,11 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage')): ?>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch())): ?>
                         <!-- Administration Dropdown -->
                         <div class="relative dropdown">
                             <button
-                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings'], $currentPath) ?>">
+                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings', '/branches'], $currentPath) ?>">
                                 Administration
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -318,6 +318,11 @@
                                 <?php if (can('users.manage')): ?>
                                 <a href="<?= BASE_URL ?>/users" class="dropdown-item">
                                     👤 Users
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('branches.manage') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/branches" class="dropdown-item">
+                                    🏢 Branches
                                 </a>
                                 <?php endif; ?>
                                 <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
@@ -338,6 +343,26 @@
                 <!-- Right Side: User + Mobile Button -->
                 <div class="flex items-center space-x-3">
                     <?php if (isLoggedIn()): ?>
+                        <?php if (hasMultiBranch()): $myBranches = userBranches($_SESSION['user_id']); ?>
+                            <?php if (count($myBranches) > 1): ?>
+                            <form action="<?= BASE_URL ?>/account/switch-branch" method="POST"
+                                class="hidden md:block" onchange="this.submit()">
+                                <?= csrfField() ?>
+                                <select name="branch_id"
+                                    class="text-sm bg-blue-700 hover:bg-blue-800 text-white border-0 rounded-full px-3 py-1 focus:ring-2 focus:ring-white">
+                                    <?php foreach ($myBranches as $mb): ?>
+                                        <option value="<?= $mb['id'] ?>" <?= activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
+                                            🏢 <?= e($mb['name']) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </form>
+                            <?php elseif (count($myBranches) === 1): ?>
+                            <span class="hidden md:block text-sm text-blue-100 px-2" title="Your assigned branch">
+                                🏢 <?= e($myBranches[0]['name']) ?>
+                            </span>
+                            <?php endif; ?>
+                        <?php endif; ?>
                         <a href="<?= BASE_URL ?>/account"
                             class="hidden md:block text-sm bg-blue-700 hover:bg-blue-800 px-3 py-1 rounded-full transition">
                             <svg class="w-4 h-4 text-white inline-block align-text-bottom mr-1" fill="currentColor" viewBox="0 0 20 20">
@@ -564,7 +589,7 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage')): ?>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch())): ?>
                         <!-- Administration Section (Mobile) -->
                         <div class="flex flex-col">
                             <button @click="adminOpen = !adminOpen"
@@ -582,6 +607,13 @@
                                     class="nav-link block <?= isActive('/users', $currentPath) ?>"
                                     @click="mobileOpen = false">
                                     👤 Users
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('branches.manage') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/branches"
+                                    class="nav-link block <?= isActive('/branches', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    🏢 Branches
                                 </a>
                                 <?php endif; ?>
                                 <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>

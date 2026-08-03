@@ -64,6 +64,40 @@
             <?php endif; ?>
         </div>
 
+        <?php if (hasMultiBranch()): ?>
+        <?php $assignedIds = array_column($assignedBranches, 'id'); ?>
+        <?php $currentPrimary = null; foreach ($assignedBranches as $ab) { if ($ab['is_primary']) $currentPrimary = $ab['id']; } ?>
+        <!-- Branch assignment -->
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+                Branches <span class="text-red-500">*</span>
+            </label>
+            <div class="space-y-2 border border-gray-200 rounded-lg p-3">
+                <?php foreach ($branches as $b): ?>
+                    <label class="flex items-center justify-between gap-2 text-sm text-gray-700">
+                        <span class="flex items-center gap-2">
+                            <input type="checkbox" name="branch_ids[]" value="<?= $b['id'] ?>"
+                                <?= in_array($b['id'], $assignedIds, true) ? 'checked' : '' ?>
+                                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                            <?= e($b['name']) ?>
+                        </span>
+                        <span class="flex items-center gap-1 text-xs text-gray-500">
+                            <input type="radio" name="primary_branch_id" value="<?= $b['id'] ?>"
+                                <?= ($currentPrimary === $b['id']) ? 'checked' : '' ?>
+                                class="border-gray-300 text-blue-600 focus:ring-blue-500">
+                            primary
+                        </span>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">
+                Their "primary" branch is where POS/sales are recorded by default — they can
+                switch to another assigned branch from their account menu if they work at more
+                than one.
+            </p>
+        </div>
+        <?php endif; ?>
+
         <!-- Active toggle -->
         <div class="flex items-center gap-3">
             <input type="checkbox" name="is_active" id="is_active" value="1"

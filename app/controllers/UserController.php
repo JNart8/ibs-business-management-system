@@ -80,6 +80,9 @@ function listUsers($db)
 function showCreateUser($db)
 {
     $roles = assignableRoles();
+    $branches = hasMultiBranch()
+        ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+        : [];
     $pageTitle = 'Add User';
     include APP_PATH . '/views/users/create.php';
 }
@@ -121,6 +124,19 @@ function storeUser($db)
         isset($_POST['is_active']) ? 1 : 0,
     ]);
 
+    $newUserId = $db->lastInsertId();
+
+    if (hasMultiBranch()) {
+        saveUserBranches($db, $newUserId, $_POST['branch_ids'] ?? [], $_POST['primary_branch_id'] ?? null);
+    } else {
+        // Multi-branch isn't active for this install — everyone implicitly
+        // works at Main Branch. Keep the new user consistent with that.
+        $mainBranch = $db->fetchOne("SELECT id FROM branches ORDER BY id ASC LIMIT 1");
+        if ($mainBranch) {
+            saveUserBranches($db, $newUserId, [$mainBranch['id']], $mainBranch['id']);
+        }
+    }
+
     redirect(BASE_URL . '/users', 'success', 'User created successfully.');
 }
 
@@ -129,6 +145,10 @@ function showEditUser($db, $id)
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
     $roles = assignableRoles();
+    $branches = hasMultiBranch()
+        ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+        : [];
+    $assignedBranches = hasMultiBranch() ? userBranches($id) : [];
     $pageTitle = 'Edit User';
     include APP_PATH . '/views/users/edit.php';
 }
@@ -170,6 +190,10 @@ function updateUser($db, $id)
         WHERE id = ?
     ", [$newUsername, $fullName, $legacyRole, $roleId, $isActive, $id]);
 
+    if (hasMultiBranch()) {
+        saveUserBranches($db, $id, $_POST['branch_ids'] ?? [], $_POST['primary_branch_id'] ?? null);
+    }
+
     if ($id == $_SESSION['user_id']) {
         $_SESSION['full_name'] = $fullName;
         $_SESSION['role']      = $legacyRole;
@@ -177,6 +201,42 @@ function updateUser($db, $id)
     }
 
     redirect(BASE_URL . '/users', 'success', 'User updated successfully.');
+}
+
+/**
+ * Replace a user's branch assignments with the given list, and set
+ * their `branch_id` (the "currently active" branch POS/sales read
+ * from, no picker shown) to the chosen primary — falling back to the
+ * first assigned branch if no primary was submitted, and to Main
+ * Branch if no branches were assigned at all (shouldn't normally
+ * happen, since the UI always requires picking at least one).
+ */
+function saveUserBranches($db, $userId, $branchIds, $primaryBranchId)
+{
+    $validBranchIds = array_column($db->fetchAll("SELECT id FROM branches WHERE is_active = 1"), 'id');
+    $branchIds = array_values(array_intersect(array_map('intval', $branchIds), $validBranchIds));
+
+    if (empty($branchIds)) {
+        $fallback = $db->fetchOne("SELECT id FROM branches ORDER BY id ASC LIMIT 1");
+        $branchIds = $fallback ? [$fallback['id']] : [];
+    }
+
+    $primaryBranchId = intval($primaryBranchId ?? 0);
+    if (!in_array($primaryBranchId, $branchIds, true)) {
+        $primaryBranchId = $branchIds[0] ?? null;
+    }
+
+    $db->query("DELETE FROM user_branches WHERE user_id = ?", [$userId]);
+    foreach ($branchIds as $branchId) {
+        $db->query(
+            "INSERT INTO user_branches (user_id, branch_id, is_primary) VALUES (?, ?, ?)",
+            [$userId, $branchId, $branchId === $primaryBranchId ? 1 : 0]
+        );
+    }
+
+    if ($primaryBranchId) {
+        $db->query("UPDATE users SET branch_id = ? WHERE id = ?", [$primaryBranchId, $userId]);
+    }
 }
 
 function showPasswordForm($db, $id)

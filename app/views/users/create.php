@@ -70,6 +70,39 @@
             </p>
         </div>
 
+        <?php if (hasMultiBranch()): ?>
+        <!-- Branch assignment -->
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+                Branches <span class="text-red-500">*</span>
+            </label>
+            <div class="space-y-2 border border-gray-200 rounded-lg p-3">
+                <?php $firstBranchId = $branches[0]['id'] ?? null; ?>
+                <?php foreach ($branches as $b): ?>
+                    <label class="flex items-center justify-between gap-2 text-sm text-gray-700">
+                        <span class="flex items-center gap-2">
+                            <input type="checkbox" name="branch_ids[]" value="<?= $b['id'] ?>"
+                                <?= in_array($b['id'], (array) old('branch_ids', []), false) || count($branches) === 1 ? 'checked' : '' ?>
+                                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                            <?= e($b['name']) ?>
+                        </span>
+                        <span class="flex items-center gap-1 text-xs text-gray-500">
+                            <input type="radio" name="primary_branch_id" value="<?= $b['id'] ?>"
+                                <?= (old('primary_branch_id', '') !== '' ? old('primary_branch_id', '') == $b['id'] : $b['id'] === $firstBranchId) ? 'checked' : '' ?>
+                                class="border-gray-300 text-blue-600 focus:ring-blue-500">
+                            primary
+                        </span>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">
+                Check every branch this user should be able to work at. Their "primary" branch
+                is where POS/sales are recorded by default — they can switch to another assigned
+                branch from their account menu if they work at more than one.
+            </p>
+        </div>
+        <?php endif; ?>
+
         <!-- Password -->
         <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">
