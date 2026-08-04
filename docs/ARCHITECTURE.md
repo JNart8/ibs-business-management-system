@@ -495,47 +495,95 @@ matching the existing Reports pattern.
 |---|---|
 | `app/views/layout/header.php` (updated) | Users/Roles/Settings replaced with one "Administration" dropdown (desktop) / collapsible section (mobile, new `adminOpen` Alpine state). Visibility unchanged — each item still only shows if its own permission/plan check passes; the whole group hides if none do. |
 
-## 6h. Phase 3a in progress: multi-branch foundation
+## 6h. Phase 3a: multi-branch foundation
 
 **Decisions confirmed before building:**
 - A user can be assigned to **multiple** branches (new `user_branches` pivot table), but POS
   shows **no picker** — each user has one "active" branch (`users.branch_id`) that's used
   automatically, changeable via a small switcher (header, desktop only for now) if they're
-  assigned to more than one. Admins aren't restricted to their assigned branches for viewing,
-  only for which branch their own POS sales post to.
+  assigned to more than one.
 - Multi-branch is **not** purely an Enterprise feature — every Enterprise client gets it
   automatically, but it can also be sold to a Growth client as a paid add-on
   (`settings.addon_multi_branch`). See `hasMultiBranch()`.
+- **Branch-level vs. company-wide admins**, added mid-build: visibility scope is independent
+  of role. `users.branch_scope` (`'assigned'` or `'all'`) determines whether a user only
+  sees/manages data for their assigned branch(es), or everything regardless of assignment.
+  An Admin can be scoped to one branch ("branch admin" — full control of their location,
+  can't see others); a company-wide user (typically the owner or a head-office admin) sees
+  everything. Existing admins are migrated to `'all'` so nobody's visibility shrinks when
+  this ships.
+- **Sales history is branch-scoped end to end**, not just the list page — every single-sale
+  lookup (view, edit, receipt, payment, void) is scoped too, so a branch-restricted user
+  can't reach another branch's sale by guessing a URL. Fails closed: a user assigned to zero
+  branches sees nothing, not everything.
 
-**Built so far:**
+**Built:**
 
 | File | Change |
 |---|---|
 | `database/migrations/2026_08_08_phase3a_multi_branch_foundation.sql` (new) | `settings.addon_multi_branch`; `branches.manage` permission (admin by default); `user_branches` pivot table, backfilled so every existing active user is assigned to (and has active-branch set to) Main Branch. |
-| `app/helpers/functions.php` (updated) | `hasMultiBranch()`, `userBranches($userId)`, `activeBranchId()`, `activeBranchName()`. |
+| `database/migrations/2026_08_09_phase3a_branch_scope.sql` (new) | `users.branch_scope`, backfilled to `'all'` for existing admins (no visibility regression) and `'assigned'` for everyone else (no practical effect until a 2nd branch exists). |
+| `app/helpers/functions.php` (updated) | `hasMultiBranch()`, `userBranches()`, `activeBranchId()`, `activeBranchName()`, `branchName()`, `isCompanyWide()`, `visibleBranchIds()`, `branchScopeSql()`. |
 | `app/controllers/BranchController.php` (new) | Branch CRUD — create, edit (name/address/phone/active), no delete (matches accounts/roles — history would orphan). Guards against deactivating the last active branch. |
 | `app/views/branches/index.php`, `create.php`, `edit.php` (new) | The branch management screens. |
 | `public/index.php` (updated) | `/branches` added to the permission map and dispatch table; a dedicated `hasMultiBranch()` gate added alongside (not a plain plan-tier feature, so it doesn't fit the existing `$planFeatureMap` loop). |
 | `app/views/layout/header.php` (updated) | "Branches" added to the Administration dropdown/section; a branch switcher (desktop) next to the account menu, shown only for a user assigned to more than one branch. |
-| `app/controllers/UserController.php`, `app/views/users/create.php`, `edit.php` (updated) | Branch assignment checkboxes + "primary" radio, shown only when `hasMultiBranch()`. New `saveUserBranches()` keeps `user_branches` and the active `users.branch_id` in sync. |
+| `app/controllers/UserController.php`, `app/views/users/create.php`, `edit.php`, `index.php` (updated) | Branch assignment checkboxes + "primary" radio + branch-scope toggle (Branch-level / Company-wide), shown only when `hasMultiBranch()`. New `saveUserBranches()` keeps `user_branches` and the active `users.branch_id` in sync. Users list shows a Branch column. |
 | `app/controllers/AccountController.php` (updated) | New `switch-branch` action — validates the requested branch is one the user is actually assigned to before changing their active branch. |
-| `app/controllers/SaleController.php`, `PurchaseController.php` (updated) | Sales and purchases now record `branch_id = activeBranchId()` instead of relying on the column's default of `1`. |
+| `app/controllers/SaleController.php` (updated) | Every sale write records `branch_id = activeBranchId()`. Sales history (`listSales`, the daily summary card, and every single-sale lookup — view/edit/update/receipt/pay/void) now applies `branchScopeSql()`. Void's stock-return movement is attributed to the *sale's own* branch, not the voiding user's current active branch, since it's reversing history that happened at a specific location. |
+| `app/controllers/PurchaseController.php`, `DistributorController.php`, `ImportController.php`, `ProductController.php`, `StockController.php` (updated) | Every `purchases`, `stock_movements`, and (via `ExpensesController.php`) `expenses` insert now records the actual `activeBranchId()` instead of relying on the column's default of `1`. |
 
-**Still to do for 3a** (not yet built):
-- `stock_movements` and `expenses` inserts still rely on the column default rather than
-  `activeBranchId()` — same pattern as sales/purchases above, just not wired yet.
+**Still to do for 3a:**
 - No report yet filters by branch (an admin viewing Reports today still sees everything
   combined across branches — correct for a single-branch install, but not yet
-  branch-aware for a multi-branch one).
+  branch-aware for a multi-branch one). Purchases history and Expenses history haven't had
+  the same view/edit-level scoping sales history just got, either — same pattern, just not
+  applied there yet.
 - Mobile branch switcher not built yet (desktop only for now).
 - Haven't yet tested the full loop end-to-end (create a 2nd branch, assign a user to both,
-  switch between them, confirm a sale lands on the right branch).
+  switch between them, confirm a sale lands on the right branch, confirm a branch-scoped
+  user can't see the other branch's history).
 
 **Deferred to later sub-phases**, per the original phased plan:
 - **3b** — replace `products.current_stock` with a `branch_stock` table (the schema-breaking
   part; every stock read/write needs to change, not just a column).
 - **3c** — inter-branch stock transfers.
 - **3d** — the customer-credit cross-branch settlement design from §5.5.
+
+## 6i. Raised, not yet started: audit trail
+
+You mentioned considering an audit trail. My suggested shape, for when you're ready to scope
+it properly rather than bolt it on quickly: a generic `audit_log` table (`user_id`, `action`,
+`entity_type`, `entity_id`, `branch_id`, `details` JSON, `created_at`) plus a lightweight
+`logAudit()` helper called from key mutating actions — sale voids, permission/role changes,
+branch switches, user edits, account edits, and anything else that changes money or access
+rather than routine data entry. Worth deciding up front what "worth logging" means for this
+app specifically, since logging everything makes the log useless for finding anything, and
+logging too little defeats the purpose. Flagging as a distinct next step rather than
+starting it now, since it touches most controllers in the app and deserves its own scoping
+pass the way this multi-branch phase got.
+
+## 7d. Phase 3a testing checklist
+
+- [ ] Run both new migrations against a **copy** of a client DB first.
+- [ ] Turn on `addon_multi_branch` (or set `plan = 'enterprise'`) and confirm "Branches" and
+      the switcher stay hidden until you do.
+- [ ] Create a second branch. Assign an existing staff user to both branches with Branch 2
+      as primary; confirm their next login (or `unset($_SESSION['user_data'])` moment) shows
+      Branch 2 as active, and the switcher appears with both options.
+- [ ] As that user, complete a sale; confirm it's recorded against Branch 2 (`sales.branch_id`).
+- [ ] Switch to Branch 1 via the header switcher; complete another sale; confirm it lands on
+      Branch 1.
+- [ ] Set a second user to branch-scoped + assigned only to Branch 1. Confirm they see only
+      Branch 1's sales in `/sales`, the daily summary card only reflects Branch 1, and
+      opening a Branch 2 sale's URL directly (view/edit/receipt/pay/void) returns "not found"
+      rather than the sale.
+- [ ] Set that same user's scope to "Company-wide" and confirm they now see both branches'
+      sales without changing their branch assignment.
+- [ ] Void a sale that was recorded at a non-active branch (e.g. an admin voiding a Branch 2
+      sale while their own active branch is Branch 1); confirm the stock-return movement is
+      attributed to Branch 2, not Branch 1.
+- [ ] Try to deactivate the only active branch — confirm it's blocked with a clear message.
 
 ## 8. Open decisions for later (not blocking anything now)
 
