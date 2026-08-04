@@ -352,8 +352,8 @@ function completeDistributorDelivery($db)
             // Movement IN from Purchase
             $db->query("
                 INSERT INTO stock_movements 
-                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
+                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?)
             ", [
                 $p['id'],
                 $qty,
@@ -361,14 +361,15 @@ function completeDistributorDelivery($db)
                 $stockBefore,
                 $stockBefore + $qty,
                 "Direct Delivery - Supplier purchase",
-                $userId
+                $userId,
+                activeBranchId()
             ]);
 
             // Movement OUT to Sale
             $db->query("
                 INSERT INTO stock_movements 
-                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)
+                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?, ?)
             ", [
                 $p['id'],
                 $qty,
@@ -376,7 +377,8 @@ function completeDistributorDelivery($db)
                 $stockBefore + $qty,
                 $stockBefore, // Back to starting stock level
                 "Direct Delivery - Customer sale",
-                $userId
+                $userId,
+                activeBranchId()
             ]);
 
             // Since it's direct delivery, we do not modify current_stock in products table (net zero).

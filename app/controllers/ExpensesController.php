@@ -141,9 +141,9 @@ function storeExpense($db)
 
         // 1. Insert into expenses table
         $db->query("
-            INSERT INTO expenses (expense_date, category, description, amount, account_id, charges, payment_method, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ", [$expenseDate, $finalCategory, $description, $amount, $accountId, $charges, $paymentMethod, $notes]);
+            INSERT INTO expenses (expense_date, category, description, amount, account_id, charges, payment_method, notes, branch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ", [$expenseDate, $finalCategory, $description, $amount, $accountId, $charges, $paymentMethod, $notes, activeBranchId()]);
 
         $expenseId = $db->lastInsertId();
 

@@ -380,9 +380,9 @@ function completePurchase($db)
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, user_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?)
-            ", [$p['id'], $newQty, $purchaseId, $currentStock, $newStock, $userId]);
+                     reference_id, previous_stock, new_stock, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
+            ", [$p['id'], $newQty, $purchaseId, $currentStock, $newStock, $userId, activeBranchId()]);
 
             // Log cost history
             $changePercent = $currentAvgCost > 0
@@ -1105,9 +1105,9 @@ function updatePurchase($db, $id)
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, user_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?)
-            ", [$p['id'], $vi['qty'], $id, $currentStockBefore, $currentStockAfter, $userId]);
+                     reference_id, previous_stock, new_stock, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
+            ", [$p['id'], $vi['qty'], $id, $currentStockBefore, $currentStockAfter, $userId, activeBranchId()]);
 
             // Log cost history
             $oldAvgCost = isset($oldItemsMap[$p['id']]) ? floatval($oldItemsMap[$p['id']]['unit_cost']) : floatval($p['average_cost']);

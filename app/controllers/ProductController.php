@@ -209,9 +209,9 @@ function createProduct($db)
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?)
-            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null]);
+                     previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?, ?)
+            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null, activeBranchId()]);
         }
 
         redirect(BASE_URL . '/products', 'success', 'Product created successfully');

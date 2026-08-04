@@ -449,14 +449,14 @@ function completeSale($db)
                 $db->query("
         INSERT INTO stock_movements
             (product_id, movement_type, quantity, reference_type,
-             reference_id, previous_stock, new_stock, user_id, created_at)
-        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, $saleDate]);
+             reference_id, previous_stock, new_stock, user_id, branch_id, created_at)
+        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, activeBranchId(), $saleDate]);
             } else {
                 $db->query("
         INSERT INTO stock_movements
             (product_id, movement_type, quantity, reference_type,
-             reference_id, previous_stock, new_stock, user_id)
-        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId]);
+             reference_id, previous_stock, new_stock, user_id, branch_id)
+        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, activeBranchId()]);
             }
         }
 
@@ -726,6 +726,12 @@ function listSales($db)
     $params = [];
     $where  = "WHERE 1=1";
 
+    // Branch visibility — company-wide users (or single-branch installs)
+    // see everything; branch-scoped users only see their own branch(es).
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    $where .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
     // Search filter
     if (!empty($search)) {
         $where   .= " AND (s.sale_number LIKE ? OR c.full_name LIKE ? OR c.phone LIKE ?)";
@@ -782,7 +788,9 @@ function listSales($db)
         LIMIT ? OFFSET ?
     ", array_merge($params, [$limit, $offset]));
 
-    // Daily summary (always today, not affected by filters)
+    // Daily summary (always today, not affected by filters, but still
+    // branch-scoped — a branch admin shouldn't see company-wide totals)
+    [$dailyScopeSql, $dailyScopeParams] = branchScopeSql('');
     $todayStats = $db->fetchOne("
         SELECT
             COALESCE(SUM(total_amount), 0) AS total_sales,
@@ -796,7 +804,8 @@ function listSales($db)
         FROM sales
         WHERE DATE(sale_date) = CURDATE()
           AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')
-    ");
+          $dailyScopeSql
+    ", $dailyScopeParams);
 
     $pageTitle = 'Sales History';
     include APP_PATH . '/views/sales/index.php';
@@ -807,6 +816,7 @@ function listSales($db)
  */
 function viewSale($db, $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.full_name AS customer_name, c.phone AS customer_phone,
                c.customer_code, u.full_name AS cashier_name
@@ -814,7 +824,8 @@ function viewSale($db, $id)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u     ON s.user_id     = u.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -856,6 +867,7 @@ function showEditForm($db, $id)
     }
 
     // Get sale details
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT 
             s.*,
@@ -868,7 +880,8 @@ function showEditForm($db, $id)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -917,6 +930,7 @@ function updateSale($db, $id)
     }
 
     // Get current sale
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT 
             s.*,
@@ -924,7 +938,8 @@ function updateSale($db, $id)
         FROM sales s
         LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -1170,6 +1185,7 @@ function updateSale($db, $id)
  */
 function printReceipt($db, $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.full_name AS customer_name, c.phone AS customer_phone,
                c.customer_code, u.full_name AS cashier_name
@@ -1177,7 +1193,8 @@ function printReceipt($db, $id)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u     ON s.user_id     = u.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -1196,11 +1213,13 @@ function printReceipt($db, $id)
  */
 function showPaymentForm($db, $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.full_name AS customer_name, c.current_balance, c.is_default
         FROM sales s LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = ? AND s.payment_status != 'paid'
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found or already paid');
@@ -1220,12 +1239,14 @@ function processPayment($db, $id)
         return;
     }
 
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.current_balance, c.is_default 
         FROM sales s 
         LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale || $sale['payment_status'] === 'paid') {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found or already paid');
@@ -1390,7 +1411,8 @@ function processPayment($db, $id)
  */
 function voidSale($db, $id)
 {
-    $sale = $db->fetchOne("SELECT * FROM sales WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $sale = $db->fetchOne("SELECT * FROM sales WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
         return;
@@ -1412,9 +1434,9 @@ function voidSale($db, $id)
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'in', ?, 'return', ?, ?, ?, 'Sale voided', ?)
-            ", [$item['product_id'], $item['quantity'], $id, $prevStock, $newStock, $userId]);
+                     reference_id, previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'in', ?, 'return', ?, ?, ?, 'Sale voided', ?, ?)
+            ", [$item['product_id'], $item['quantity'], $id, $prevStock, $newStock, $userId, $sale['branch_id'] ?? activeBranchId()]);
         }
 
         // Reverse customer balance & transactions

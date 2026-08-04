@@ -247,15 +247,16 @@ function processStockIn($db)
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 previous_stock, new_stock, notes, user_id)
-            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?)
+                 previous_stock, new_stock, notes, user_id, branch_id)
+            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
         ", [
             $productId,
             $quantity,
             $prevStock,
             $newStock,
             trim(($reference ? "Ref: $reference. " : '') . $notes),
-            $userId
+            $userId,
+            activeBranchId()
         ]);
 
         $db->commit();
@@ -336,15 +337,16 @@ function processStockOut($db)
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 previous_stock, new_stock, notes, user_id)
-            VALUES (?, 'out', ?, 'adjustment', ?, ?, ?, ?)
+                 previous_stock, new_stock, notes, user_id, branch_id)
+            VALUES (?, 'out', ?, 'adjustment', ?, ?, ?, ?, ?)
         ", [
             $productId,
             $quantity,
             $prevStock,
             $newStock,
             trim("Reason: $reason" . ($notes ? ". $notes" : '')),
-            $userId
+            $userId,
+            activeBranchId()
         ]);
 
         $db->commit();
@@ -426,8 +428,8 @@ function processAdjustment($db, $id)
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 previous_stock, new_stock, notes, user_id)
-            VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?)
+                 previous_stock, new_stock, notes, user_id, branch_id)
+            VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?)
         ", [
             $id,
             $movementType,
@@ -435,7 +437,8 @@ function processAdjustment($db, $id)
             $prevStock,
             $newStock,
             "Manual adjustment: $notes",
-            $userId
+            $userId,
+            activeBranchId()
         ]);
 
         $db->commit();

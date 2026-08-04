@@ -872,9 +872,9 @@ function importPurchaseGroup($db, $group)
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 reference_id, previous_stock, new_stock, user_id, created_at)
-            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
-        ", [$p['id'], $qty, $purchaseId, $currentStock, $newStock, $userId, $purchaseDate]);
+                 reference_id, previous_stock, new_stock, user_id, branch_id, created_at)
+            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?)
+        ", [$p['id'], $qty, $purchaseId, $currentStock, $newStock, $userId, activeBranchId(), $purchaseDate]);
 
         // Log cost history
         $changePercent = $currentAvgCost > 0
