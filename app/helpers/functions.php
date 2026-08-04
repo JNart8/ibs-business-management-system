@@ -670,11 +670,75 @@ function activeBranchId()
  */
 function activeBranchName()
 {
-    static $name = null;
-    if ($name === null) {
-        $db  = Database::getInstance();
-        $row = $db->fetchOne("SELECT name FROM branches WHERE id = ?", [activeBranchId()]);
-        $name = $row['name'] ?? 'Main Branch';
+    return branchName(activeBranchId());
+}
+
+/**
+ * Is the current user "company-wide" (sees/manages every branch) or
+ * restricted to just the branches they're assigned to? Independent of
+ * role — an Admin can be scoped to one branch ("branch admin"), and a
+ * non-admin could in principle be made company-wide, though in
+ * practice this is mainly used to distinguish branch-level admins
+ * from company-wide ones. Defaults to 'assigned' (the more
+ * conservative option) for anyone not explicitly set otherwise.
+ */
+function isCompanyWide()
+{
+    return (currentUser()['branch_scope'] ?? 'assigned') === 'all';
+}
+
+/**
+ * Which branch IDs the current user should see data for.
+ * Returns null to mean "no restriction" (multi-branch isn't active
+ * for this install, or this user is company-wide) — callers should
+ * treat null as "don't filter at all", not as "empty list".
+ */
+function visibleBranchIds()
+{
+    if (!hasMultiBranch() || isCompanyWide()) {
+        return null;
     }
-    return $name;
+    return array_column(userBranches(currentUser()['id']), 'id');
+}
+
+/**
+ * A ready-to-splice SQL fragment + params enforcing branch visibility
+ * on a query, built from visibleBranchIds(). Returns ['', []] when
+ * there's no restriction to apply. If a user is somehow assigned to
+ * zero branches, this deliberately shows nothing rather than
+ * everything (fails closed, not open).
+ *
+ * Usage:
+ *   [$scopeSql, $scopeParams] = branchScopeSql('s');
+ *   $where   .= $scopeSql;
+ *   $params   = array_merge($params, $scopeParams);
+ */
+function branchScopeSql($alias = '', $column = 'branch_id')
+{
+    $branchIds = visibleBranchIds();
+    if ($branchIds === null) {
+        return ['', []];
+    }
+    if (empty($branchIds)) {
+        return [' AND 1=0', []];
+    }
+    $prefix = $alias ? "$alias." : '';
+    $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
+    return [" AND {$prefix}{$column} IN ($placeholders)", $branchIds];
+}
+
+/**
+ * Display name of any branch by id (e.g. for the Users list),
+ * cached per-request per branch id.
+ */
+function branchName($branchId)
+{
+    static $cache = [];
+    if (!$branchId) return '—';
+    if (!array_key_exists($branchId, $cache)) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT name FROM branches WHERE id = ?", [$branchId]);
+        $cache[$branchId] = $row['name'] ?? '—';
+    }
+    return $cache[$branchId];
 }

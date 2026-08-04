@@ -68,7 +68,7 @@ switch ($action) {
 function listUsers($db)
 {
     $users = $db->fetchAll("
-        SELECT id, username, full_name, role, role_id, is_active,
+        SELECT id, username, full_name, role, role_id, branch_scope, branch_id, is_active,
                login_attempts, locked_until, last_login, created_at
         FROM users
         ORDER BY is_active DESC, role ASC, full_name ASC
@@ -112,15 +112,18 @@ function storeUser($db)
     $slug = roleSlug($roleId);
     $legacyRole = in_array($slug, ['admin', 'staff', 'cashier'], true) ? $slug : 'staff';
 
+    $branchScope = (hasMultiBranch() && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+
     $db->query("
-        INSERT INTO users (username, password_hash, full_name, role, role_id, is_active)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO users (username, password_hash, full_name, role, role_id, branch_scope, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     ", [
         trim($_POST['username']),
         password_hash($_POST['password'], PASSWORD_DEFAULT),
         trim($_POST['full_name']),
         $legacyRole,
         $roleId,
+        $branchScope,
         isset($_POST['is_active']) ? 1 : 0,
     ]);
 
@@ -185,10 +188,12 @@ function updateUser($db, $id)
         }
     }
 
+    $branchScope = (hasMultiBranch() && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+
     $db->query("
-        UPDATE users SET username = ?, full_name = ?, role = ?, role_id = ?, is_active = ?
+        UPDATE users SET username = ?, full_name = ?, role = ?, role_id = ?, branch_scope = ?, is_active = ?
         WHERE id = ?
-    ", [$newUsername, $fullName, $legacyRole, $roleId, $isActive, $id]);
+    ", [$newUsername, $fullName, $legacyRole, $roleId, $branchScope, $isActive, $id]);
 
     if (hasMultiBranch()) {
         saveUserBranches($db, $id, $_POST['branch_ids'] ?? [], $_POST['primary_branch_id'] ?? null);

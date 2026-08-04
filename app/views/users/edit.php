@@ -96,6 +96,31 @@
                 than one.
             </p>
         </div>
+
+        <!-- Branch visibility scope -->
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Visibility</label>
+            <div class="space-y-2">
+                <label class="flex items-start gap-2 text-sm text-gray-700 border rounded-lg p-3 cursor-pointer">
+                    <input type="radio" name="branch_scope" value="assigned"
+                        <?= ($user['branch_scope'] ?? 'assigned') !== 'all' ? 'checked' : '' ?>
+                        class="mt-0.5 border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <span>
+                        <span class="block font-medium">Branch-level (default)</span>
+                        <span class="text-xs text-gray-500">Only sees/manages data for the branches checked above.</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2 text-sm text-gray-700 border rounded-lg p-3 cursor-pointer">
+                    <input type="radio" name="branch_scope" value="all"
+                        <?= ($user['branch_scope'] ?? '') === 'all' ? 'checked' : '' ?>
+                        class="mt-0.5 border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <span>
+                        <span class="block font-medium">Company-wide</span>
+                        <span class="text-xs text-gray-500">Sees/manages every branch, regardless of the assignment above — e.g. an owner or head-office admin.</span>
+                    </span>
+                </label>
+            </div>
+        </div>
         <?php endif; ?>
 
         <!-- Active toggle -->
