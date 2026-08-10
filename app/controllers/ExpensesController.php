@@ -44,16 +44,27 @@ function listExpenses($db)
     $category = $_GET['category']  ?? '';
     $accountId = $_GET['account_id'] ?? '';
 
-    $where = ["expense_date BETWEEN ? AND ?"];
+    $where = ["e.expense_date BETWEEN ? AND ?"];
     $params = [$dateFrom, $dateTo];
 
+    // Branch visibility — use the 'e.' alias since accounts also has a
+    // branch_id column and this query joins both tables. branchScopeSql()
+    // returns a " AND ..." fragment meant to be appended directly to a
+    // WHERE clause; strip that leading " AND " here since this function
+    // builds its WHERE from an array joined with " AND " instead.
+    [$scopeSql, $scopeParams] = branchScopeSql('e');
+    if ($scopeSql !== '') {
+        $where[] = substr($scopeSql, strlen(' AND '));
+        $params = array_merge($params, $scopeParams);
+    }
+
     if (!empty($category)) {
-        $where[] = "category = ?";
+        $where[] = "e.category = ?";
         $params[] = $category;
     }
 
     if (!empty($accountId)) {
-        $where[] = "account_id = ?";
+        $where[] = "e.account_id = ?";
         $params[] = safeInt($accountId);
     }
 
@@ -73,7 +84,7 @@ function listExpenses($db)
     // Calculate totals
     $totals = $db->fetchOne("
         SELECT SUM(amount) as total_amount, SUM(charges) as total_charges
-        FROM expenses
+        FROM expenses e
         WHERE {$whereClause}
     ", $params);
 
@@ -176,7 +187,8 @@ function storeExpense($db)
 
 function deleteExpense($db, $id)
 {
-    $expense = $db->fetchOne("SELECT * FROM expenses WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $expense = $db->fetchOne("SELECT * FROM expenses WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$expense) {
         redirect(BASE_URL . '/expenses', 'error', 'Expense not found.');
     }

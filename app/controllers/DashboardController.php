@@ -84,12 +84,19 @@ try {
     ");
     $financialHealth['payables'] = floatval($payables['total'] ?? 0);
 
-    // Total Stock Value (at average cost)
+    // Total Stock Value (at average cost) — summed across the branches
+    // this viewer can see (all of them for a company-wide user, just
+    // their own for a branch-scoped one), via branch_stock rather than
+    // products.current_stock directly, so this respects branch visibility
+    // the same way every other report in the app does.
+    [$dashScopeSql, $dashScopeParams] = branchScopeSql('bs');
     $stockValue = $db->fetchOne("
-        SELECT COALESCE(SUM(current_stock * average_cost), 0) as total
-        FROM products
-        WHERE is_active = 1
-    ");
+        SELECT COALESCE(SUM(bs.quantity * p.average_cost), 0) as total
+        FROM branch_stock bs
+        JOIN products p ON p.id = bs.product_id
+        WHERE p.is_active = 1
+        $dashScopeSql
+    ", $dashScopeParams);
     $financialHealth['stock_value'] = floatval($stockValue['total'] ?? 0);
 
     // Customer Deposits Held
@@ -115,18 +122,35 @@ $alerts = [
 ];
 
 try {
-    // Out of stock items
+    [$alertScopeSql, $alertScopeParams] = branchScopeSql('bs');
+
+    // Out of stock items — a product counts as out of stock if the total
+    // across this viewer's visible branches is zero.
     $result = $db->fetchOne("
-        SELECT COUNT(*) as count FROM products 
-        WHERE current_stock = 0 AND is_active = 1
-    ");
+        SELECT COUNT(*) as count FROM (
+            SELECT p.id
+            FROM products p
+            JOIN branch_stock bs ON bs.product_id = p.id
+            WHERE p.is_active = 1
+            $alertScopeSql
+            GROUP BY p.id
+            HAVING SUM(bs.quantity) = 0
+        ) t
+    ", $alertScopeParams);
     $alerts['out_of_stock'] = intval($result['count'] ?? 0);
 
     // Low stock items
     $result = $db->fetchOne("
-        SELECT COUNT(*) as count FROM products 
-        WHERE current_stock > 0 AND current_stock <= reorder_level AND is_active = 1
-    ");
+        SELECT COUNT(*) as count FROM (
+            SELECT p.id
+            FROM products p
+            JOIN branch_stock bs ON bs.product_id = p.id
+            WHERE p.is_active = 1
+            $alertScopeSql
+            GROUP BY p.id
+            HAVING SUM(bs.quantity) > 0 AND SUM(bs.quantity) <= MAX(p.reorder_level)
+        ) t
+    ", $alertScopeParams);
     $alerts['low_stock'] = intval($result['count'] ?? 0);
 
     // Overdue receivables (90+ days)
@@ -279,22 +303,26 @@ $recentPurchases = $db->fetchAll("
 // LOW STOCK PRODUCTS (TOP 10 CRITICAL)
 // ══════════════════════════════════════════════════════════════════════════════
 
+[$topLowScopeSql, $topLowScopeParams] = branchScopeSql('bs');
 $lowStockProducts = $db->fetchAll("
     SELECT 
-        id, 
-        name, 
-        sku, 
-        current_stock, 
-        reorder_level,
-        unit
-    FROM products 
-    WHERE current_stock <= reorder_level 
-      AND is_active = 1
+        p.id, 
+        p.name, 
+        p.sku, 
+        COALESCE(SUM(bs.quantity), 0) as current_stock, 
+        p.reorder_level,
+        p.unit
+    FROM products p
+    JOIN branch_stock bs ON bs.product_id = p.id
+    WHERE p.is_active = 1
+    $topLowScopeSql
+    GROUP BY p.id, p.name, p.sku, p.reorder_level, p.unit
+    HAVING current_stock <= p.reorder_level
     ORDER BY 
         CASE WHEN current_stock = 0 THEN 0 ELSE 1 END,
         current_stock ASC
     LIMIT 10
-");
+", $topLowScopeParams);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // THIS MONTH SUMMARY

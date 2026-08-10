@@ -187,7 +187,7 @@ function createProduct($db)
             INSERT INTO products
                 (sku, barcode, name, description, category_id, supplier_id,
                  cost_price, average_cost, selling_price, current_stock, reorder_level, unit)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
         ", [
             $sku,
             $barcode ?: null,
@@ -198,7 +198,6 @@ function createProduct($db)
             $cost_price,
             $cost_price,
             $selling_price,
-            $current_stock,
             $reorder_level,
             $unit
         ]);
@@ -206,12 +205,17 @@ function createProduct($db)
         $productId = $db->lastInsertId();
 
         if ($current_stock > 0) {
+            $branchId = activeBranchId();
+            // Seeds this branch's stock and keeps products.current_stock
+            // (the maintained total) in sync automatically.
+            setBranchStock($db, $productId, $branchId, $current_stock);
+
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
                      previous_stock, new_stock, notes, user_id, branch_id)
                 VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?, ?)
-            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null, activeBranchId()]);
+            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null, $branchId]);
         }
 
         redirect(BASE_URL . '/products', 'success', 'Product created successfully');
@@ -451,13 +455,19 @@ function searchProducts($db)
     // Default (POS) only returns products that actually have stock to sell
     $includeEmpty = isset($_GET['all']) && $_GET['all'] == '1';
 
-    $params = [];
-    $where  = $includeEmpty
-        ? "WHERE is_active = 1"
-        : "WHERE is_active = 1 AND current_stock > 0";
+    // current_stock here means "at my active branch", not the company-wide
+    // total — a cashier at Branch 2 must only see/sell what's actually on
+    // Branch 2's shelf. The alias keeps the JSON key name unchanged, so
+    // every existing consumer of this endpoint (POS, stock-in/out,
+    // purchases, distributor) needs no changes on the JS side.
+    $branchId = activeBranchId();
+    $params   = [$branchId];
+    $where    = $includeEmpty
+        ? "WHERE p.is_active = 1"
+        : "WHERE p.is_active = 1 AND COALESCE(bs.quantity, 0) > 0";
 
     if (!empty($query)) {
-        $where   .= " AND (sku LIKE ? OR barcode = ? OR name LIKE ?)";
+        $where   .= " AND (p.sku LIKE ? OR p.barcode = ? OR p.name LIKE ?)";
         $t        = "%{$query}%";
         $params[] = $t;
         $params[] = $query;
@@ -465,15 +475,17 @@ function searchProducts($db)
     }
 
     if ($catId > 0) {
-        $where   .= " AND category_id = ?";
+        $where   .= " AND p.category_id = ?";
         $params[] = $catId;
     }
 
     $products = $db->fetchAll("
-        SELECT id, sku, barcode, name, selling_price, current_stock, unit, cost_price
-        FROM products
+        SELECT p.id, p.sku, p.barcode, p.name, p.selling_price, p.unit, p.cost_price,
+               COALESCE(bs.quantity, 0) AS current_stock
+        FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where
-        ORDER BY name ASC
+        ORDER BY p.name ASC
         LIMIT 20
     ", $params);
 

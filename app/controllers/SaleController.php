@@ -100,12 +100,14 @@ function showPOS($db)
 
     // Recent products for quick access (last 12 most sold)
     $quickProducts = $db->fetchAll("
-    SELECT p.id, p.name, p.sku, p.selling_price, p.current_stock, p.unit
+    SELECT p.id, p.name, p.sku, p.selling_price, p.unit,
+           COALESCE(bs.quantity, 0) AS current_stock
     FROM products p
-    WHERE p.is_active = 1 AND p.current_stock > 0
+    LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+    WHERE p.is_active = 1 AND COALESCE(bs.quantity, 0) > 0
     ORDER BY p.id DESC
     LIMIT 12
-    ");
+    ", [activeBranchId()]);
 
 
     // Most-sold products (top 12 by sales volume)
@@ -260,10 +262,11 @@ function completeSale($db)
             echo json_encode(['success' => false, 'message' => "Product ID $productId not found"]);
             return;
         }
-        if ($product['current_stock'] < $qty) {
+        $branchStockAvailable = getBranchStock($productId);
+        if ($branchStockAvailable < $qty) {
             echo json_encode([
                 'success' => false,
-                'message' => "Not enough stock for {$product['name']}. Available: {$product['current_stock']} {$product['unit']}"
+                'message' => "Not enough stock for {$product['name']} at " . activeBranchName() . ". Available: {$branchStockAvailable} {$product['unit']}"
             ]);
             return;
         }
@@ -435,14 +438,13 @@ function completeSale($db)
                 $vi['lineTotal']
             ]);
 
-            $prevStock = floatval($p['current_stock']);
+            $branchIdForSale = activeBranchId();
+            $prevStock = getBranchStock($p['id'], $branchIdForSale);
             $newStock  = $prevStock - $vi['qty'];
 
-            // Update stock
-            $db->query(
-                "UPDATE products SET current_stock = ? WHERE id = ?",
-                [$newStock, $p['id']]
-            );
+            // Update this branch's stock (also keeps products.current_stock,
+            // the company-wide total, in sync automatically)
+            adjustBranchStock($db, $p['id'], $branchIdForSale, -$vi['qty']);
 
             // Log movement
             if (!empty($saleDate)) {
@@ -450,13 +452,13 @@ function completeSale($db)
         INSERT INTO stock_movements
             (product_id, movement_type, quantity, reference_type,
              reference_id, previous_stock, new_stock, user_id, branch_id, created_at)
-        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, activeBranchId(), $saleDate]);
+        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, $branchIdForSale, $saleDate]);
             } else {
                 $db->query("
         INSERT INTO stock_movements
             (product_id, movement_type, quantity, reference_type,
              reference_id, previous_stock, new_stock, user_id, branch_id)
-        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, activeBranchId()]);
+        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, $branchIdForSale]);
             }
         }
 
@@ -1425,18 +1427,18 @@ function voidSale($db, $id)
         $db->beginTransaction();
 
         // Reverse stock for each item
+        $voidBranchId = $sale['branch_id'] ?? activeBranchId();
         foreach ($items as $item) {
-            $product   = $db->fetchOne("SELECT current_stock FROM products WHERE id = ?", [$item['product_id']]);
-            $prevStock = floatval($product['current_stock']);
+            $prevStock = getBranchStock($item['product_id'], $voidBranchId);
             $newStock  = $prevStock + $item['quantity'];
 
-            $db->query("UPDATE products SET current_stock = ? WHERE id = ?", [$newStock, $item['product_id']]);
+            adjustBranchStock($db, $item['product_id'], $voidBranchId, $item['quantity']);
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
                      reference_id, previous_stock, new_stock, notes, user_id, branch_id)
                 VALUES (?, 'in', ?, 'return', ?, ?, ?, 'Sale voided', ?, ?)
-            ", [$item['product_id'], $item['quantity'], $id, $prevStock, $newStock, $userId, $sale['branch_id'] ?? activeBranchId()]);
+            ", [$item['product_id'], $item['quantity'], $id, $prevStock, $newStock, $userId, $voidBranchId]);
         }
 
         // Reverse customer balance & transactions
@@ -1520,6 +1522,10 @@ function voidSale($db, $id)
         );
 
         $db->commit();
+        logAudit('sale.void', 'sale', $id, [
+            'sale_number' => $sale['sale_number'],
+            'total_amount' => $sale['total_amount'],
+        ]);
         redirect(BASE_URL . '/sales', 'success', 'Sale #' . $sale['sale_number'] . ' has been voided');
     } catch (Exception $e) {
         $db->rollback();

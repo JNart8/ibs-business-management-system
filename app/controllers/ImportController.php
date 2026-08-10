@@ -432,12 +432,17 @@ function importProduct($db, $row, $mode, $userId)
     $supplierId = $supplier['id'];
 
     $existing = $db->fetchOne("SELECT id FROM products WHERE sku = ?", [trim($row['sku'])]);
+    $importedStock = isset($row['current_stock']) ? floatval($row['current_stock']) : 0;
 
     if ($existing) {
         if ($mode === 'skip') {
             return ['success' => true, 'action' => 'skipped'];
         }
-        // Update
+        // Update — current_stock is deliberately NOT set directly here; it's
+        // maintained automatically by setBranchStock() below, which keeps
+        // products.current_stock in sync as the sum across all branches.
+        // A CSV import continues to mean "set stock to exactly this value",
+        // now applied at the importer's active branch specifically.
         $db->query("
             UPDATE products 
             SET name = ?, category_id = ?, supplier_id = ?, selling_price = ?, cost_price = ?,
@@ -445,7 +450,7 @@ function importProduct($db, $row, $mode, $userId)
                     WHEN COALESCE(average_cost, 0) = 0 THEN ?
                     ELSE average_cost
                 END,
-                current_stock = ?, reorder_level = ?, unit = ?, barcode = ?, updated_at = NOW()
+                reorder_level = ?, unit = ?, barcode = ?, updated_at = NOW()
             WHERE id = ?
         ", [
             trim($row['name']),
@@ -454,21 +459,24 @@ function importProduct($db, $row, $mode, $userId)
             floatval($row['selling_price']),
             isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
             isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-            isset($row['current_stock']) ? floatval($row['current_stock']) : 0,
             isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
             normalizeUnit($row['unit'] ?? 'pcs'),
             $row['barcode'] ?? null,
             $existing['id']
         ]);
+        if (isset($row['current_stock'])) {
+            setBranchStock($db, $existing['id'], activeBranchId(), $importedStock);
+        }
         return ['success' => true, 'action' => 'updated'];
     }
 
-    // Create
+    // Create — same reasoning: current_stock is set via setBranchStock()
+    // after the insert, not as a direct column value.
     $db->query("
         INSERT INTO products 
             (sku, name, category_id, supplier_id, selling_price, cost_price,
-             average_cost, current_stock, reorder_level, unit, barcode, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             average_cost, reorder_level, unit, barcode, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     ", [
         trim($row['sku']),
         trim($row['name']),
@@ -477,11 +485,14 @@ function importProduct($db, $row, $mode, $userId)
         floatval($row['selling_price']),
         isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
         isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-        isset($row['current_stock']) ? floatval($row['current_stock']) : 0,
         isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
         normalizeUnit($row['unit'] ?? 'pcs'),
         $row['barcode'] ?? null
     ]);
+    $newProductId = $db->lastInsertId();
+    if ($importedStock > 0) {
+        setBranchStock($db, $newProductId, activeBranchId(), $importedStock);
+    }
     return ['success' => true, 'action' => 'created'];
 }
 
@@ -845,7 +856,9 @@ function importPurchaseGroup($db, $group)
             $lineTotal
         ]);
 
-        // Calculate new weighted average cost
+        // Calculate new weighted average cost — company-wide, using the
+        // maintained total (p.current_stock) as its weight, matching how
+        // PurchaseController's own purchase-creation flow works.
         $currentStock   = floatval($p['current_stock']);
         $currentAvgCost = floatval($p['average_cost']);
 
@@ -855,18 +868,22 @@ function importPurchaseGroup($db, $group)
             $newAverageCost = $unitCost;
         }
 
-        $newStock = $currentStock + $qty;
-
-        // Update product
+        // Update product's cost fields (company-wide; not branch-specific)
         $db->query("
             UPDATE products
-            SET current_stock = ?,
-                cost_price = ?,
+            SET cost_price = ?,
                 average_cost = ?,
                 last_purchase_cost = ?,
                 last_purchase_date = ?
             WHERE id = ?
-        ", [$newStock, $unitCost, $newAverageCost, $unitCost, $purchaseDate, $p['id']]);
+        ", [$unitCost, $newAverageCost, $unitCost, $purchaseDate, $p['id']]);
+
+        // Update this branch's actual stock quantity (also keeps
+        // products.current_stock, used above, in sync)
+        $branchIdForImport = activeBranchId();
+        $branchPrevStock = getBranchStock($p['id'], $branchIdForImport);
+        $branchNewStock  = $branchPrevStock + $qty;
+        adjustBranchStock($db, $p['id'], $branchIdForImport, $qty);
 
         // Log stock movement
         $db->query("
@@ -874,7 +891,7 @@ function importPurchaseGroup($db, $group)
                 (product_id, movement_type, quantity, reference_type,
                  reference_id, previous_stock, new_stock, user_id, branch_id, created_at)
             VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?)
-        ", [$p['id'], $qty, $purchaseId, $currentStock, $newStock, $userId, activeBranchId(), $purchaseDate]);
+        ", [$p['id'], $qty, $purchaseId, $branchPrevStock, $branchNewStock, $userId, $branchIdForImport, $purchaseDate]);
 
         // Log cost history
         $changePercent = $currentAvgCost > 0
@@ -895,7 +912,7 @@ function importPurchaseGroup($db, $group)
             $qty,
             $changePercent,
             $currentStock,
-            $newStock,
+            $currentStock + $qty,
             $purchaseDate
         ]);
     }

@@ -81,82 +81,94 @@ function stockDashboard($db)
     $limit      = ITEMS_PER_PAGE;
     $offset     = ($page - 1) * $limit;
 
-    $params = [];
+    $branchId = activeBranchId();
+    $whereParams = [];
     $where  = "WHERE p.is_active = 1";
 
     if (!empty($search)) {
         $where   .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)";
         $term     = "%$search%";
-        $params[] = $term;
-        $params[] = $term;
-        $params[] = $term;
+        $whereParams[] = $term;
+        $whereParams[] = $term;
+        $whereParams[] = $term;
     }
 
     if ($category > 0) {
         $where   .= " AND p.category_id = ?";
-        $params[] = $category;
+        $whereParams[] = $category;
     }
 
     switch ($filter) {
         case 'low':
-            $where .= " AND p.current_stock <= p.reorder_level AND p.current_stock > 0";
+            $where .= " AND COALESCE(bs.quantity, 0) <= p.reorder_level AND COALESCE(bs.quantity, 0) > 0";
             break;
         case 'out':
-            $where .= " AND p.current_stock = 0";
+            $where .= " AND COALESCE(bs.quantity, 0) = 0";
             break;
         case 'ok':
-            $where .= " AND p.current_stock > p.reorder_level";
+            $where .= " AND COALESCE(bs.quantity, 0) > p.reorder_level";
             break;
     }
 
-    // Total count
-    $total      = $db->fetchOne("SELECT COUNT(*) as cnt FROM products p $where", $params);
+    // Total count — one ? for the branch_stock JOIN, then $whereParams
+    $total = $db->fetchOne(
+        "SELECT COUNT(*) as cnt FROM products p LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ? $where",
+        array_merge([$branchId], $whereParams)
+    );
     $totalCount = intval($total['cnt'] ?? 0);
     $totalPages = max(1, ceil($totalCount / $limit));
 
-    // Products with stock info
+    // Products with stock info — current_stock here is THIS branch's
+    // quantity (bs.quantity), not the company-wide total, since this page
+    // drives stock-in/out/adjust actions that operate on the active branch.
+    // Param order must match the ? order in the string exactly: the
+    // correlated subquery's sm.branch_id comes first (it's in the SELECT
+    // list, which appears before FROM in the query text), then the
+    // branch_stock JOIN, then $whereParams, then LIMIT/OFFSET.
     $products = $db->fetchAll("
         SELECT
             p.id,
             p.sku,
             p.name,
             p.barcode,
-            p.current_stock,
+            COALESCE(bs.quantity, 0)            AS current_stock,
             p.reorder_level,
             p.cost_price,
             p.selling_price,
             p.unit,
             c.name                              AS category_name,
-            (p.current_stock * p.cost_price)    AS stock_value,
+            (COALESCE(bs.quantity, 0) * p.cost_price) AS stock_value,
             CASE
-                WHEN p.current_stock = 0               THEN 'out'
-                WHEN p.current_stock <= p.reorder_level THEN 'low'
+                WHEN COALESCE(bs.quantity, 0) = 0               THEN 'out'
+                WHEN COALESCE(bs.quantity, 0) <= p.reorder_level THEN 'low'
                 ELSE 'ok'
             END                                 AS stock_status,
             (SELECT sm.created_at
              FROM stock_movements sm
-             WHERE sm.product_id = p.id
+             WHERE sm.product_id = p.id AND sm.branch_id = ?
              ORDER BY sm.created_at DESC LIMIT 1) AS last_movement
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where
-        ORDER BY p.current_stock ASC, p.name ASC
+        ORDER BY COALESCE(bs.quantity, 0) ASC, p.name ASC
         LIMIT ? OFFSET ?
-    ", array_merge($params, [$limit, $offset]));
+    ", array_merge([$branchId, $branchId], $whereParams, [$limit, $offset]));
 
-    // Summary stats
+    // Summary stats — also this branch's numbers, not company-wide
     $stats = $db->fetchOne("
         SELECT
-            COUNT(*)                                                        AS total_products,
-            COALESCE(SUM(current_stock * cost_price), 0)                    AS total_value,
-            SUM(CASE WHEN current_stock = 0 THEN 1 ELSE 0 END)             AS out_of_stock,
-            SUM(CASE WHEN current_stock <= reorder_level
-                      AND current_stock > 0 THEN 1 ELSE 0 END)             AS low_stock,
-            SUM(CASE WHEN current_stock > reorder_level THEN 1 ELSE 0 END) AS healthy_stock,
-            COALESCE(SUM(current_stock), 0)                                 AS total_units
-        FROM products
-        WHERE is_active = 1
-    ");
+            COUNT(*)                                                                          AS total_products,
+            COALESCE(SUM(COALESCE(bs.quantity, 0) * p.cost_price), 0)                          AS total_value,
+            SUM(CASE WHEN COALESCE(bs.quantity, 0) = 0 THEN 1 ELSE 0 END)                      AS out_of_stock,
+            SUM(CASE WHEN COALESCE(bs.quantity, 0) <= p.reorder_level
+                      AND COALESCE(bs.quantity, 0) > 0 THEN 1 ELSE 0 END)                      AS low_stock,
+            SUM(CASE WHEN COALESCE(bs.quantity, 0) > p.reorder_level THEN 1 ELSE 0 END)        AS healthy_stock,
+            COALESCE(SUM(COALESCE(bs.quantity, 0)), 0)                                         AS total_units
+        FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+        WHERE p.is_active = 1
+    ", [$branchId]);
 
     // Categories for filter dropdown
     $categories = $db->fetchAll(
@@ -164,6 +176,7 @@ function stockDashboard($db)
     );
 
     $pageTitle = 'Stock Management';
+    $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
     include APP_PATH . '/views/stock/index.php';
 }
 
@@ -187,6 +200,12 @@ function showStockInForm($db)
             "SELECT id, sku, name, current_stock, unit, cost_price FROM products WHERE id = ? AND is_active = 1",
             [(int)$_GET['product']]
         );
+    }
+
+    // The view's JS preview ("stock after this transaction") needs this
+    // branch's quantity, not the company-wide total the query above returns.
+    if ($preProduct) {
+        $preProduct['current_stock'] = getBranchStock($preProduct['id']);
     }
 
     $categories = $db->fetchAll(
@@ -231,17 +250,21 @@ function processStockIn($db)
         return;
     }
 
-    $prevStock = floatval($product['current_stock']);
+    $branchId  = activeBranchId();
+    $prevStock = getBranchStock($productId, $branchId);
     $newStock  = $prevStock + $quantity;
 
     try {
         $db->beginTransaction();
 
-        // Update product stock
-        $db->query(
-            "UPDATE products SET current_stock = ?, cost_price = ? WHERE id = ?",
-            [$newStock, $costPrice > 0 ? $costPrice : $product['cost_price'], $productId]
-        );
+        // Update this branch's stock (also keeps products.current_stock,
+        // the company-wide total, in sync automatically)
+        adjustBranchStock($db, $productId, $branchId, $quantity);
+
+        // Cost price is a product-level (not branch-level) field
+        if ($costPrice > 0) {
+            $db->query("UPDATE products SET cost_price = ? WHERE id = ?", [$costPrice, $productId]);
+        }
 
         // Log movement
         $db->query("
@@ -256,14 +279,14 @@ function processStockIn($db)
             $newStock,
             trim(($reference ? "Ref: $reference. " : '') . $notes),
             $userId,
-            activeBranchId()
+            $branchId
         ]);
 
         $db->commit();
         redirect(
             BASE_URL . '/stock',
             'success',
-            "{$product['name']}: stock updated from $prevStock to $newStock {$product['unit']}"
+            "{$product['name']}: stock updated from $prevStock to $newStock {$product['unit']} at " . branchName($branchId)
         );
     } catch (Exception $e) {
         $db->rollback();
@@ -283,6 +306,9 @@ function showStockOutForm($db)
             "SELECT id, sku, name, current_stock, unit FROM products WHERE id = ? AND is_active = 1",
             [(int)$_GET['product']]
         );
+        if ($preProduct) {
+            $preProduct['current_stock'] = getBranchStock($preProduct['id']);
+        }
     }
 
     $pageTitle = 'Stock Out (Manual)';
@@ -310,11 +336,13 @@ function processStockOut($db)
     if ($quantity  <= 0) $errors[] = 'Quantity must be greater than zero';
     if (empty($reason))  $errors[] = 'Please provide a reason';
 
+    $branchId = activeBranchId();
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ? AND is_active = 1", [$productId]);
+    $branchStockAvailable = $product ? getBranchStock($productId, $branchId) : 0;
     if (!$product) {
         $errors[] = 'Product not found';
-    } elseif ($quantity > floatval($product['current_stock'])) {
-        $errors[] = "Not enough stock. Available: {$product['current_stock']} {$product['unit']}";
+    } elseif ($quantity > $branchStockAvailable) {
+        $errors[] = "Not enough stock at " . branchName($branchId) . ". Available: {$branchStockAvailable} {$product['unit']}";
     }
 
     if (!empty($errors)) {
@@ -323,16 +351,13 @@ function processStockOut($db)
         return;
     }
 
-    $prevStock = floatval($product['current_stock']);
+    $prevStock = $branchStockAvailable;
     $newStock  = $prevStock - $quantity;
 
     try {
         $db->beginTransaction();
 
-        $db->query(
-            "UPDATE products SET current_stock = ? WHERE id = ?",
-            [$newStock, $productId]
-        );
+        adjustBranchStock($db, $productId, $branchId, -$quantity);
 
         $db->query("
             INSERT INTO stock_movements
@@ -346,14 +371,14 @@ function processStockOut($db)
             $newStock,
             trim("Reason: $reason" . ($notes ? ". $notes" : '')),
             $userId,
-            activeBranchId()
+            $branchId
         ]);
 
         $db->commit();
         redirect(
             BASE_URL . '/stock',
             'success',
-            "{$product['name']}: stock reduced from $prevStock to $newStock {$product['unit']}"
+            "{$product['name']}: stock reduced from $prevStock to $newStock {$product['unit']} at " . branchName($branchId)
         );
     } catch (Exception $e) {
         $db->rollback();
@@ -372,6 +397,7 @@ function showAdjustForm($db, $id)
         redirect(BASE_URL . '/stock', 'error', 'Product not found');
         return;
     }
+    $product['current_stock'] = getBranchStock($id);
 
     $pageTitle = 'Adjust Stock';
     include APP_PATH . '/views/stock/adjust.php';
@@ -396,6 +422,7 @@ function processAdjustment($db, $id)
     $newStock = floatval($_POST['new_stock'] ?? 0);
     $notes    = trim($_POST['notes']       ?? '');
     $userId   = $_SESSION['user_id']       ?? null;
+    $branchId = activeBranchId();
 
     if ($newStock < 0) {
         redirect(BASE_URL . '/stock/adjust/' . $id, 'error', 'Stock cannot be negative');
@@ -407,7 +434,7 @@ function processAdjustment($db, $id)
         return;
     }
 
-    $prevStock = floatval($product['current_stock']);
+    $prevStock = getBranchStock($id, $branchId);
     $diff      = round($newStock - $prevStock, 3);
 
     if (abs($diff) < 0.001) {
@@ -420,10 +447,7 @@ function processAdjustment($db, $id)
     try {
         $db->beginTransaction();
 
-        $db->query(
-            "UPDATE products SET current_stock = ? WHERE id = ?",
-            [$newStock, $id]
-        );
+        setBranchStock($db, $id, $branchId, $newStock);
 
         $db->query("
             INSERT INTO stock_movements
@@ -438,7 +462,7 @@ function processAdjustment($db, $id)
             $newStock,
             "Manual adjustment: $notes",
             $userId,
-            activeBranchId()
+            $branchId
         ]);
 
         $db->commit();
@@ -446,7 +470,7 @@ function processAdjustment($db, $id)
         redirect(
             BASE_URL . '/stock',
             'success',
-            "{$product['name']}: stock $direction → now $newStock {$product['unit']}"
+            "{$product['name']}: stock $direction → now $newStock {$product['unit']} at " . branchName($branchId)
         );
     } catch (Exception $e) {
         $db->rollback();
@@ -520,30 +544,33 @@ function listMovements($db)
  */
 function lowStockAlerts($db)
 {
+    $branchId = activeBranchId();
     $alerts = $db->fetchAll("
         SELECT
             p.id,
             p.sku,
             p.name,
-            p.current_stock,
+            COALESCE(bs.quantity, 0)                        AS current_stock,
             p.reorder_level,
             p.unit,
             p.cost_price,
             p.selling_price,
-            c.name                              AS category_name,
-            (p.reorder_level - p.current_stock) AS shortage,
-            CASE WHEN p.current_stock = 0 THEN 'out' ELSE 'low' END AS alert_type
+            c.name                                           AS category_name,
+            (p.reorder_level - COALESCE(bs.quantity, 0))     AS shortage,
+            CASE WHEN COALESCE(bs.quantity, 0) = 0 THEN 'out' ELSE 'low' END AS alert_type
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         WHERE p.is_active = 1
-          AND p.current_stock <= p.reorder_level
-        ORDER BY p.current_stock ASC, shortage DESC
-    ");
+          AND COALESCE(bs.quantity, 0) <= p.reorder_level
+        ORDER BY COALESCE(bs.quantity, 0) ASC, shortage DESC
+    ", [$branchId]);
 
     $outOfStock = array_filter($alerts, fn($a) => $a['alert_type'] === 'out');
     $lowStock   = array_filter($alerts, fn($a) => $a['alert_type'] === 'low');
 
     $pageTitle = 'Low Stock Alerts';
+    $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
     include APP_PATH . '/views/stock/alerts.php';
 }
 

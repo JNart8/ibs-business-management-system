@@ -120,11 +120,13 @@ function showCreateDistributorDelivery($db)
 
     // Quick products
     $quickProducts = $db->fetchAll("
-        SELECT id, name, sku, cost_price, average_cost, selling_price, current_stock, unit
-        FROM products
-        WHERE is_active = 1
-        ORDER BY name ASC
-    ");
+        SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, p.selling_price,
+               COALESCE(bs.quantity, 0) AS current_stock, p.unit
+        FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+        WHERE p.is_active = 1
+        ORDER BY p.name ASC
+    ", [activeBranchId()]);
 
     // Financial accounts
     $financialAccounts = $db->fetchAll("
@@ -346,8 +348,13 @@ function completeDistributorDelivery($db)
                 $vi['sale_total']
             ]);
 
-            // Stock movements
-            $stockBefore = floatval($p['current_stock']);
+            // Stock movements — net-zero by design (goods arrive and leave
+            // immediately), so no actual branch_stock change is needed, just
+            // an accurate before/after pair for the audit trail. Using this
+            // branch's actual stock (not the company-wide total) so the
+            // ledger reads correctly for whoever looks at this branch later.
+            $branchIdForDistrib = activeBranchId();
+            $stockBefore = getBranchStock($p['id'], $branchIdForDistrib);
             
             // Movement IN from Purchase
             $db->query("
@@ -362,7 +369,7 @@ function completeDistributorDelivery($db)
                 $stockBefore + $qty,
                 "Direct Delivery - Supplier purchase",
                 $userId,
-                activeBranchId()
+                $branchIdForDistrib
             ]);
 
             // Movement OUT to Sale
@@ -378,11 +385,13 @@ function completeDistributorDelivery($db)
                 $stockBefore, // Back to starting stock level
                 "Direct Delivery - Customer sale",
                 $userId,
-                activeBranchId()
+                $branchIdForDistrib
             ]);
 
-            // Since it's direct delivery, we do not modify current_stock in products table (net zero).
-            // But we do update cost_price and last_purchase_cost / last_purchase_date
+            // Since it's direct delivery, we do not modify branch_stock/
+            // products.current_stock (net zero — confirmed above via the
+            // matching in/out movement pair). But we do update cost_price
+            // and last_purchase_cost / last_purchase_date.
             $db->query("
                 UPDATE products 
                 SET cost_price = ?, last_purchase_cost = ?, last_purchase_date = NOW()
