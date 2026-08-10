@@ -304,11 +304,11 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch())): ?>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch()) || can('audit.view')): ?>
                         <!-- Administration Dropdown -->
                         <div class="relative dropdown">
                             <button
-                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings', '/branches'], $currentPath) ?>">
+                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings', '/branches', '/audit'], $currentPath) ?>">
                                 Administration
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -328,6 +328,11 @@
                                 <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
                                 <a href="<?= BASE_URL ?>/roles" class="dropdown-item">
                                     🔑 Roles
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('audit.view')): ?>
+                                <a href="<?= BASE_URL ?>/audit" class="dropdown-item">
+                                    📋 Audit Log
                                 </a>
                                 <?php endif; ?>
                                 <?php if (can('settings.manage')): ?>
@@ -589,7 +594,7 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch())): ?>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch()) || can('audit.view')): ?>
                         <!-- Administration Section (Mobile) -->
                         <div class="flex flex-col">
                             <button @click="adminOpen = !adminOpen"
@@ -623,6 +628,13 @@
                                     🔑 Roles
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('audit.view')): ?>
+                                <a href="<?= BASE_URL ?>/audit"
+                                    class="nav-link block <?= isActive('/audit', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    📋 Audit Log
+                                </a>
+                                <?php endif; ?>
                                 <?php if (can('settings.manage')): ?>
                                 <a href="<?= BASE_URL ?>/settings"
                                     class="nav-link block <?= isActive('/settings', $currentPath) ?>"
@@ -635,6 +647,28 @@
                     <?php endif; ?>
 
                     <?php if (isLoggedIn()): ?>
+                        <?php if (hasMultiBranch()): $myBranchesMobile = userBranches($_SESSION['user_id']); ?>
+                            <?php if (count($myBranchesMobile) > 1): ?>
+                            <div class="pt-2 border-t border-blue-500">
+                                <p class="text-xs text-blue-200 px-1 mb-1">Active branch</p>
+                                <form action="<?= BASE_URL ?>/account/switch-branch" method="POST" onchange="this.submit()">
+                                    <?= csrfField() ?>
+                                    <select name="branch_id"
+                                        class="w-full text-sm bg-blue-700 text-white border border-blue-400 rounded-lg px-3 py-2">
+                                        <?php foreach ($myBranchesMobile as $mb): ?>
+                                            <option value="<?= $mb['id'] ?>" <?= activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
+                                                🏢 <?= e($mb['name']) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </form>
+                            </div>
+                            <?php elseif (count($myBranchesMobile) === 1): ?>
+                            <div class="pt-2 border-t border-blue-500">
+                                <p class="text-xs text-blue-200 px-1">🏢 <?= e($myBranchesMobile[0]['name']) ?></p>
+                            </div>
+                            <?php endif; ?>
+                        <?php endif; ?>
                         <div class="pt-2 border-t border-blue-500">
                             <a href="<?= BASE_URL ?>/account"
                                 class="nav-link <?= isActive('/account', $currentPath) ?>"

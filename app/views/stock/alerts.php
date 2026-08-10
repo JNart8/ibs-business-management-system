@@ -5,6 +5,9 @@
         <h1 class="text-3xl font-bold text-gray-800">⚠️ <?= e($pageTitle) ?></h1>
         <p class="text-gray-500 text-sm mt-1">
             <?= count($alerts) ?> product(s) need attention
+            <?php if ($viewingBranchName ?? null): ?>
+                at <strong><?= e($viewingBranchName) ?></strong>
+            <?php endif; ?>
         </p>
     </div>
     <a href="<?= BASE_URL ?>/stock" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition">

@@ -4,7 +4,12 @@
 <div class="flex items-center justify-between mb-6">
     <div>
         <h1 class="text-2xl font-bold text-gray-800">📈 Profit Margin Analysis</h1>
-        <p class="text-sm text-gray-500">Product profitability breakdown</p>
+        <p class="text-sm text-gray-500">
+            Product profitability breakdown
+            <?php if ($viewingScopeLabel ?? null): ?>
+                — showing <strong><?= e($viewingScopeLabel) ?></strong>
+            <?php endif; ?>
+        </p>
     </div>
     <div class="flex gap-2">
         <button onclick="window.print()"

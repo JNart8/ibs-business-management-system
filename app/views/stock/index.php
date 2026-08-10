@@ -4,7 +4,12 @@
 <div class="flex flex-wrap justify-between items-center mb-6 gap-3">
     <div>
         <h1 class="text-3xl font-bold text-gray-800">Stock Management</h1>
-        <p class="text-gray-500 mt-1 text-sm">Monitor and manage your inventory levels</p>
+        <p class="text-gray-500 mt-1 text-sm">
+            Monitor and manage your inventory levels
+            <?php if ($viewingBranchName ?? null): ?>
+                — showing <strong><?= e($viewingBranchName) ?></strong>
+            <?php endif; ?>
+        </p>
     </div>
     <div class="flex gap-2 flex-wrap">
         <a href="<?= BASE_URL ?>/export/stocks<?= !empty($_GET) ? '?' . http_build_query($_GET) : '' ?>"
