@@ -742,3 +742,116 @@ function branchName($branchId)
     }
     return $cache[$branchId];
 }
+
+/**
+ * Record an audit trail entry. Scope is deliberately narrow — this is
+ * for money and access-changing actions (voids, permission/role
+ * changes, user/branch/account edits, settings), not routine data
+ * entry (a normal sale or purchase is not logged here; who can see
+ * it and reconstruct it from the sales/purchases tables themselves).
+ *
+ * Never throws — a logging failure should never block the actual
+ * action it's describing. If the audit_log insert fails for any
+ * reason (e.g. this migration hasn't been run yet on an older
+ * install), the calling code continues normally.
+ *
+ * @param string $action      e.g. 'sale.void', 'user.update', 'role.permissions_changed'
+ * @param string|null $entityType  e.g. 'sale', 'user', 'role', 'account', 'branch', 'settings'
+ * @param int|null $entityId
+ * @param array $details      Arbitrary JSON-able context — what changed, old/new values, etc.
+ */
+function logAudit($action, $entityType = null, $entityId = null, $details = [])
+{
+    try {
+        $db = Database::getInstance();
+        $db->query("
+            INSERT INTO audit_log (user_id, username, action, entity_type, entity_id, branch_id, details, ip_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ", [
+            $_SESSION['user_id'] ?? null,
+            $_SESSION['username'] ?? null,
+            $action,
+            $entityType,
+            $entityId,
+            currentUser() ? activeBranchId() : null,
+            !empty($details) ? json_encode($details) : null,
+            $_SERVER['REMOTE_ADDR'] ?? null,
+        ]);
+    } catch (Exception $e) {
+        // Deliberately swallow — see doc comment above.
+    }
+}
+
+/**
+ * How much of a product is at a given branch (defaults to the
+ * current user's active branch). This is the real, per-branch
+ * source of truth — products.current_stock is a maintained total
+ * across all branches, not a substitute for this.
+ */
+function getBranchStock($productId, $branchId = null)
+{
+    $branchId = $branchId ?? activeBranchId();
+    $db = Database::getInstance();
+    $row = $db->fetchOne(
+        "SELECT quantity FROM branch_stock WHERE product_id = ? AND branch_id = ?",
+        [$productId, $branchId]
+    );
+    return $row ? floatval($row['quantity']) : 0.0;
+}
+
+/**
+ * Add (positive delta) or remove (negative delta) stock for a product
+ * at a specific branch, then keep products.current_stock in sync as
+ * the total across all branches. This is THE function every
+ * stock-changing action should call — never write to branch_stock or
+ * products.current_stock directly, or the two will drift apart.
+ *
+ * Upserts the branch_stock row (a product may not have had any
+ * recorded stock at this branch yet).
+ */
+function adjustBranchStock($db, $productId, $branchId, $delta)
+{
+    $db->query("
+        INSERT INTO branch_stock (product_id, branch_id, quantity)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)
+    ", [$productId, $branchId, $delta]);
+
+    recalcProductTotalStock($db, $productId);
+
+    return getBranchStock($productId, $branchId);
+}
+
+/**
+ * Set a product's stock at a specific branch to an absolute value
+ * (used by manual stock adjustment, not by sales/purchases, which
+ * should use adjustBranchStock() with a relative delta instead).
+ * Also keeps products.current_stock in sync.
+ */
+function setBranchStock($db, $productId, $branchId, $newQuantity)
+{
+    $db->query("
+        INSERT INTO branch_stock (product_id, branch_id, quantity)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE quantity = VALUES(quantity)
+    ", [$productId, $branchId, $newQuantity]);
+
+    recalcProductTotalStock($db, $productId);
+}
+
+/**
+ * Recompute products.current_stock as the sum of branch_stock across
+ * every branch for one product. Called automatically by
+ * adjustBranchStock()/setBranchStock() — exposed standalone too, for
+ * a one-off repair if the cache is ever suspected to have drifted.
+ */
+function recalcProductTotalStock($db, $productId)
+{
+    $total = $db->fetchOne(
+        "SELECT COALESCE(SUM(quantity), 0) AS total FROM branch_stock WHERE product_id = ?",
+        [$productId]
+    );
+    $totalValue = floatval($total['total'] ?? 0);
+    $db->query("UPDATE products SET current_stock = ? WHERE id = ?", [$totalValue, $productId]);
+    return $totalValue;
+}
