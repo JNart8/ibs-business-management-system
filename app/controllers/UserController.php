@@ -140,6 +140,11 @@ function storeUser($db)
         }
     }
 
+    logAudit('user.create', 'user', $newUserId, [
+        'username' => trim($_POST['username']),
+        'role'     => roleName($roleId),
+    ]);
+
     redirect(BASE_URL . '/users', 'success', 'User created successfully.');
 }
 
@@ -198,6 +203,14 @@ function updateUser($db, $id)
     if (hasMultiBranch()) {
         saveUserBranches($db, $id, $_POST['branch_ids'] ?? [], $_POST['primary_branch_id'] ?? null);
     }
+
+    logAudit('user.update', 'user', $id, [
+        'username'      => $newUsername,
+        'role_before'   => roleName($user['role_id']),
+        'role_after'    => roleName($roleId),
+        'active_before' => (bool) $user['is_active'],
+        'active_after'  => (bool) $isActive,
+    ]);
 
     if ($id == $_SESSION['user_id']) {
         $_SESSION['full_name'] = $fullName;
@@ -300,6 +313,7 @@ function deleteUser($db, $id)
     }
 
     $db->query("UPDATE users SET is_active = 0 WHERE id = ?", [$id]);
+    logAudit('user.deactivate', 'user', $id, ['username' => $user['username']]);
     redirect(BASE_URL . '/users', 'success', 'User deactivated successfully.');
 }
 
@@ -320,6 +334,7 @@ function activateUser($db, $id)
 
     // Activate the user
     $db->query("UPDATE users SET is_active = 1 WHERE id = ?", [$id]);
+    logAudit('user.activate', 'user', $id, ['username' => $user['username']]);
 
     redirect(
         BASE_URL . '/users',

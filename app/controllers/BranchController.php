@@ -80,6 +80,9 @@ function storeBranch($db)
         "INSERT INTO branches (name, address, phone, is_active) VALUES (?, ?, ?, 1)",
         [$name, trim($_POST['address'] ?? '') ?: null, trim($_POST['phone'] ?? '') ?: null]
     );
+    $newBranchId = $db->lastInsertId();
+
+    logAudit('branch.create', 'branch', $newBranchId, ['name' => $name]);
 
     redirect(BASE_URL . '/branches', 'success', 'Branch "' . e($name) . '" created.');
 }
@@ -121,6 +124,12 @@ function updateBranch($db, $id)
         "UPDATE branches SET name = ?, address = ?, phone = ?, is_active = ? WHERE id = ?",
         [$name, trim($_POST['address'] ?? '') ?: null, trim($_POST['phone'] ?? '') ?: null, $isActive, $id]
     );
+
+    logAudit('branch.update', 'branch', $id, [
+        'name'          => $name,
+        'active_before' => (bool) $branch['is_active'],
+        'active_after'  => (bool) $isActive,
+    ]);
 
     redirect(BASE_URL . '/branches', 'success', 'Branch "' . e($name) . '" updated.');
 }

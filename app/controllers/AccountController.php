@@ -112,9 +112,17 @@ function switchBranch($db)
         redirect(BASE_URL . '/', 'error', 'You are not assigned to that branch.');
     }
 
+    $previousBranchName = activeBranchName();
+
     $db->query("UPDATE users SET branch_id = ? WHERE id = ?", [$branchId, $_SESSION['user_id']]);
     unset($_SESSION['user_data']);
 
     $branchName = $db->fetchOne("SELECT name FROM branches WHERE id = ?", [$branchId]);
+
+    logAudit('user.switch_branch', 'user', $_SESSION['user_id'], [
+        'from' => $previousBranchName,
+        'to'   => $branchName['name'] ?? 'branch',
+    ]);
+
     redirect(BASE_URL . '/', 'success', 'Switched to ' . e($branchName['name'] ?? 'branch') . '.');
 }

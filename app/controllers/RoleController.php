@@ -104,6 +104,8 @@ function storeRole($db)
     $permissionKeys = $_POST['permissions'] ?? [];
     saveRolePermissions($db, $roleId, $permissionKeys);
 
+    logAudit('role.create', 'role', $roleId, ['name' => $name, 'permissions' => $permissionKeys]);
+
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($name) . '" created.');
 }
 
@@ -151,7 +153,14 @@ function updateRole($db, $id)
         $permissionKeys = array_unique(array_merge($permissionKeys, ['users.manage', 'roles.manage']));
     }
 
+    $beforeKeys = array_column($db->fetchAll("SELECT permission_key FROM role_permissions WHERE role_id = ?", [$id]), 'permission_key');
     saveRolePermissions($db, $id, $permissionKeys);
+
+    logAudit('role.permissions_changed', 'role', $id, [
+        'name'   => $role['name'],
+        'added'  => array_values(array_diff($permissionKeys, $beforeKeys)),
+        'removed' => array_values(array_diff($beforeKeys, $permissionKeys)),
+    ]);
 
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($role['name']) . '" updated.');
 }
@@ -175,6 +184,7 @@ function deleteRole($db, $id)
     }
 
     $db->query("DELETE FROM roles WHERE id = ?", [$id]);
+    logAudit('role.delete', 'role', $id, ['name' => $role['name']]);
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($role['name']) . '" deleted.');
 }
 

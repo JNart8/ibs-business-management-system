@@ -31,6 +31,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         "UPDATE settings SET sale_discount_type = ?, pos_default_walkin = ? ORDER BY id ASC LIMIT 1",
         [$discountType, $posDefaultWalkin]
     );
+
+    logAudit('settings.update', 'settings', null, [
+        'sale_discount_type' => $discountType,
+        'pos_default_walkin' => (bool) $posDefaultWalkin,
+    ]);
+
     redirect(BASE_URL . '/settings', 'success', 'Settings updated.');
 }
 

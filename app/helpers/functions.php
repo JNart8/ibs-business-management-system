@@ -563,6 +563,10 @@ function enforceSingleSession()
 
     // Someone (possibly this same person, from another device) has
     // logged in since this session started. Sign this one out.
+    logAudit('user.session_kicked', 'user', $userId, [
+        'reason' => 'Signed in from another device/session',
+    ]);
+
     $_SESSION = [];
 
     if (ini_get('session.use_cookies')) {

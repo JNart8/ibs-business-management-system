@@ -104,6 +104,7 @@ function storeAccount($db)
         }
 
         $db->commit();
+        logAudit('account.create', 'account', $accountId, ['name' => $name, 'type' => $type, 'initial_balance' => $initialBalance]);
         redirect(BASE_URL . '/financial-accounts', 'success', 'Account created successfully.');
     } catch (Exception $e) {
         $db->rollback();
@@ -276,6 +277,12 @@ function updateAccount($db, $id)
         SET name = ?, provider = ?, account_number = ?, is_active = ?
         WHERE id = ?
     ", [$name, $provider ?: null, $accountNumber ?: null, $isActive, $id]);
+
+    logAudit('account.update', 'account', $id, [
+        'name'          => $name,
+        'active_before' => (bool) $account['is_active'],
+        'active_after'  => (bool) $isActive,
+    ]);
 
     redirect(BASE_URL . '/financial-accounts', 'success', 'Account updated successfully.');
 }
