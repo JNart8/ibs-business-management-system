@@ -387,7 +387,10 @@ only catches a genuinely separate, newer login.
 | **1** ✅ | Plan tiers, feature gating, route/nav enforcement, user limits | Shipped |
 | **1b** ✅ | `accounts.branch_id`, `users.branch_id` scaffolding | Shipped |
 | **2** ✅ | `permissions` / `role_permissions` tables + Enterprise role editor | Shipped |
-| **3** | Multi-branch build: `branch_stock` replacing `products.current_stock`, branch-aware POS/reporting, inter-branch transfers, customer-credit branch settlement (§5.5) | Needs a real Enterprise client to design against; biggest single phase |
+| **3a** ✅ | Branches, user-branch assignment, branch-level vs. company-wide scoping, branch-scoped Sales/Purchases/Expenses history and reports | Shipped |
+| **3b** ✅ | `branch_stock` replacing `products.current_stock` as the source of truth for every stock read/write | Shipped |
+| **3c** | Inter-branch stock transfers | Not started |
+| **3d** | Customer-credit cross-branch settlement (§5.5) | Not started |
 
 ## 7b. Phase 2 testing checklist before rolling out to a real client
 
@@ -550,18 +553,127 @@ matching the existing Reports pattern.
 - **3c** — inter-branch stock transfers.
 - **3d** — the customer-credit cross-branch settlement design from §5.5.
 
-## 6i. Raised, not yet started: audit trail
+## 6j. Phase 3a continued: Purchases, Expenses, and mobile switcher
 
-You mentioned considering an audit trail. My suggested shape, for when you're ready to scope
-it properly rather than bolt it on quickly: a generic `audit_log` table (`user_id`, `action`,
-`entity_type`, `entity_id`, `branch_id`, `details` JSON, `created_at`) plus a lightweight
-`logAudit()` helper called from key mutating actions — sale voids, permission/role changes,
-branch switches, user edits, account edits, and anything else that changes money or access
-rather than routine data entry. Worth deciding up front what "worth logging" means for this
-app specifically, since logging everything makes the log useless for finding anything, and
-logging too little defeats the purpose. Flagging as a distinct next step rather than
-starting it now, since it touches most controllers in the app and deserves its own scoping
-pass the way this multi-branch phase got.
+Extended the same branch-scoping pattern from §6h to the two other places it was missing:
+
+| File | Change |
+|---|---|
+| `app/controllers/PurchaseController.php` (updated) | `listPurchases` (list, count, today's stats) and all 7 single-purchase lookups (view, edit, update, receipt, pay form, process payment, void) now apply `branchScopeSql()`, matching sales history exactly. |
+| `app/controllers/ExpensesController.php` (updated) | `listExpenses` and `deleteExpense` now branch-scoped. Note: had to use the **aliased** form (`branchScopeSql('e')`) here specifically, because `expenses` and `accounts` **both** have a `branch_id` column and this query joins them — an unaliased `branch_id IN (...)` would have been ambiguous SQL. |
+| `app/views/layout/header.php` (updated) | Mobile branch switcher added, matching the desktop one — a dropdown for 2+ assigned branches, a plain label for exactly 1, nothing shown otherwise. |
+
+## 6k. Before starting Reports: a conceptual wrinkle worth flagging
+
+Reports (`ReportsController.php`) is a large, separate body of work — 12 report functions,
+~1,450 lines — so I paused before diving in rather than rushing it. One thing worth deciding
+first: **receivables and payables reports don't branch-scope the same way sales/purchases
+do.**
+
+A customer's outstanding balance is a company-wide number by design (§5.3 — customers are
+shared across branches on purpose, so a credit limit can't be gamed by splitting purchases
+across locations). That means "receivables owed to us" isn't really a per-branch fact the
+way "sales made at Branch 2 today" is — a customer could owe money from purchases at three
+different branches, and the balance is one number, not three. Branch-scoping that report
+by *which branch's sales contributed* is possible (sum only the sales rows visible to this
+user), but it would show a different, smaller number than the customer's actual
+`current_balance` — which could be confusing rather than helpful for a branch admin trying
+to reconcile.
+
+**My suggestion when we get to it:** sales-report-style numbers (sales, top-selling, stock
+valuation, profit/loss, profit margin, dead stock, low stock) branch-scope cleanly the same
+way sales/purchases just did. Receivables/payables should probably stay company-wide
+regardless of viewer (or clearly labeled "company-wide" if shown to a branch-scoped user),
+since showing a partial balance as if it were the whole picture could cause a real
+bookkeeping mistake. Flagging now so this gets decided deliberately rather than by whichever
+way I happen to implement it first.
+
+**Decision made:** branch-scope with a partial-view label — see §6l for how this was built.
+
+## 6l. Receivables & payables: scoped and shown as partial, per your decision
+
+You chose to branch-scope these rather than leave them company-wide. Implementation:
+
+- **Screen and export both recompute `amount_owed` from branch-scoped invoices** (`SUM` of
+  unpaid `sales`/`purchases` rows visible to the viewer) instead of reading
+  `customers.current_balance` / `suppliers.current_balance` directly — those columns stay
+  company-wide by design (§5.3) and were never touched. This is the same principle as the
+  account-ledger export from earlier: the export recomputes the same way the screen does, so
+  the two can never show different numbers for the same view.
+- **A clear "partial view" banner/note** appears whenever the viewer is branch-scoped (not
+  company-wide) — on screen (`receivables.php`, `payables.php`) and in the CSV footer
+  (`exportReceivables`, `exportPayables`), explaining that a customer's/supplier's true
+  balance can include activity from other branches.
+- **`payablesReport()`/`exportPayables()` needed a real restructure**, not just a WHERE
+  clause addition — the original query read `ABS(suppliers.current_balance)` directly, which
+  has no branch dimension to filter by at all. Rewritten to sum `purchases.amount_due`
+  per-supplier instead (mirroring how `receivablesReport()` already worked), with the
+  `HAVING amount_owed > 0.01` filter replacing the old `WHERE current_balance < 0` — because
+  a supplier could have zero owed at *this* branch even with a nonzero company-wide balance
+  from purchases elsewhere, or vice versa.
+
+## 6m. Other reports: scoped where it's meaningful, left alone where it isn't
+
+Extended branch-scoping to every other **transaction-based** report (both the screen and its
+matching CSV export): `salesReport`/`exportSalesReport`, `topSellingReport`/`exportTopSelling`,
+`profitLossReport`/`exportProfitLoss`. These all derive their numbers from `sales`/`purchases`/
+`expenses` rows, which already carry `branch_id`, so scoping them is a direct application of
+the same `branchScopeSql()` pattern — no special "partial" caveat needed, since (unlike
+receivables/payables) there's no company-wide balance field being partially represented; a
+branch admin's sales report is simply, accurately, their branch's sales.
+
+**Deliberately left unscoped:** `stockValuationReport`, `lowStockReport`, `deadStockReport`,
+`profitMarginReport`. All four are fundamentally **product/stock-centric** — built from
+`products.current_stock`, which is still a single global number (Phase 3b, the `branch_stock`
+table, hasn't shipped yet). There's no branch dimension to filter these by yet without
+building 3b first. Scoping just the "last 30 days sold" correlated subqueries in
+`profitMarginReport` while leaving `stock_value`/`potential_profit` company-wide would create
+a report where the two halves don't relate to the same scope — worse than leaving it alone.
+These four become branch-scopable as a natural side effect once 3b ships.
+
+## 6i/6n. Audit trail — built
+
+**Scope decision, made up front per the earlier flag:** logging is deliberately limited to
+actions that change **money or access**, not routine data entry. A normal sale or purchase
+isn't logged here — that history already lives in, and is fully reconstructable from, the
+`sales`/`purchases` tables themselves. Logging everything would make the log useless for
+finding anything that actually matters; logging too little defeats the purpose. What's
+logged:
+
+| Action | Where |
+|---|---|
+| `sale.void` | `SaleController::voidSale()` |
+| `purchase.void` | `PurchaseController::voidPurchase()` — **worth knowing**: voiding a purchase deletes the row and its related records outright (pre-existing behavior, not something this phase changed) rather than marking it voided the way a sale is. The audit entry is the only remaining record that purchase ever existed. |
+| `user.create`, `user.update` (role/status before-after), `user.deactivate`, `user.activate` | `UserController.php` |
+| `role.create`, `role.permissions_changed` (**added/removed diff** — the single most security-relevant entry in the app), `role.delete` | `RoleController.php` |
+| `branch.create`, `branch.update` (active status before/after) | `BranchController.php` |
+| `account.create`, `account.update` (active status before/after) | `FinancialAccountsController.php` |
+| `settings.update` | `SettingsController.php` |
+| `user.switch_branch` | `AccountController::switchBranch()` |
+| `user.session_kicked` | `enforceSingleSession()` in `functions.php` — logged just before the older session is wiped, since the log write needs to happen while `$_SESSION` still has the user's identity in it |
+
+**Deliberately not logged separately:** account transfers (`FinancialAccountsController::executeTransfer()`).
+The `account_transfers` table already records amount, charges, notes, user, and timestamp for
+every transfer — it already *is* an audit-quality record for that specific action, so a
+duplicate `audit_log` entry would just be the same fact twice in two places.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_10_audit_trail.sql` (new) | `audit_log` table; `audit.view` permission (admin by default). |
+| `app/helpers/functions.php` (updated) | `logAudit($action, $entityType, $entityId, $details)` — never throws, so a logging failure can never block the real action it's describing. |
+| `app/controllers/AuditController.php` (new) | Read-only viewer. Filterable (user, action, entity type, date range), paginated. Branch-scoped via the same `branchScopeSql()` used everywhere else — and since system-wide entries (role/permission changes, settings) get `branch_id = NULL`, they're automatically excluded for branch-scoped viewers by ordinary SQL `NULL NOT IN (...)` semantics, with no extra logic needed for that distinction. |
+| `app/views/audit/index.php` (new) | The viewer screen. |
+| `public/index.php` (updated) | `/audit` added to the permission map and dispatch table. |
+| `app/views/layout/header.php` (updated) | "Audit Log" added to the Administration dropdown/section (desktop + mobile), gated by `can('audit.view')`. |
+| 8 controllers (`SaleController`, `PurchaseController`, `UserController`, `RoleController`, `BranchController`, `FinancialAccountsController`, `SettingsController`, `AccountController`) + `functions.php` | `logAudit()` calls added at each mutation point listed above. |
+
+**Not built / open for later:** no retention policy or archiving (the table will grow
+indefinitely — worth revisiting once there's real usage data to know how fast); no export
+(CSV) for the audit log itself, unlike every other report; no email/alert on specific
+high-risk entries (e.g. a role losing `users.manage`). None of these were asked for — noting
+them so they're a deliberate choice to defer, not an oversight.
 
 ## 7d. Phase 3a testing checklist
 
@@ -584,6 +696,222 @@ pass the way this multi-branch phase got.
       sale while their own active branch is Branch 1); confirm the stock-return movement is
       attributed to Branch 2, not Branch 1.
 - [ ] Try to deactivate the only active branch — confirm it's blocked with a clear message.
+- [ ] As a branch-scoped user, open Receivables/Payables and confirm the partial-view banner
+      appears and the totals match what's actually visible (not the customer's/supplier's
+      full balance). Confirm the CSV export shows the same numbers and the same note.
+- [ ] As a company-wide user, confirm those same reports show full totals with no banner.
+- [ ] Compare Sales Report, Top Selling, and Profit & Loss on screen vs. their CSV exports
+      for a branch-scoped user — confirm the numbers match exactly in both places.
+- [ ] Confirm Stock Valuation, Low Stock, Dead Stock, and Profit Margin reports still show
+      the same (unscoped) figures regardless of viewer — this is expected until Phase 3b.
+
+## 7e. Audit trail testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first.
+- [ ] Void a sale and a purchase; confirm both appear in `/audit` with the right details, and
+      confirm the voided purchase's audit entry is genuinely the only remaining trace of it
+      (since the row itself gets deleted).
+- [ ] Edit a role's permissions (add one, remove one); confirm the entry shows exactly which
+      permission was added and which was removed, not just "role was changed."
+- [ ] Deactivate and reactivate a user; confirm both show up with correct before/after status.
+- [ ] As a branch-scoped user, confirm `/audit` shows only entries tied to their branch, and
+      that company-wide entries (role/permission changes, settings) are invisible to them.
+- [ ] As a company-wide user, confirm they see everything, including other branches' entries.
+- [ ] Log in from a second browser to trigger a forced kickout; confirm `user.session_kicked`
+      appears in the log.
+- [ ] Confirm a deliberately broken audit_log insert (e.g. temporarily rename the table) does
+      **not** prevent the underlying action (a sale void, a user update) from completing —
+      `logAudit()` should fail silently.
+- [ ] Run `cron/archive_audit_log.php` manually once via CLI (`php cron/archive_audit_log.php`)
+      against a copy of a client DB with some old test entries (backdate a few rows' `created_at`
+      past 365 days first) — confirm they move to `audit_log_archive` and disappear from `/audit`
+      by default.
+- [ ] Run the script a second time immediately after — confirm it reports "nothing to do" and
+      doesn't error or double-archive anything.
+- [ ] Check "Include archived" on `/audit` and confirm the backdated entries reappear.
+- [ ] Export the audit log both with and without "Include archived" checked; confirm the CSV
+      row counts match what's shown on screen in each case.
+- [ ] Set up the actual cPanel cron job once you're ready for this to run unattended, and
+      confirm it appears as expected in cPanel's cron job list.
+
+## 6o. Audit log: archiving, 1-year retention, CSV export
+
+**Archiving, not deleting.** A same-structure `audit_log_archive` table holds entries once
+they age out, so nothing is actually lost — just moved out of the table the app queries by
+default, keeping day-to-day filtering fast as the log grows indefinitely.
+
+**Retention mechanism:** `cron/archive_audit_log.php`, a standalone script (bootstraps only
+the DB connection, not the full app/session framework, since it runs outside a web request)
+that moves anything older than 365 days from `audit_log` into `audit_log_archive`, then
+deletes it from the live table. Idempotent — safe to run daily or however often, since
+`INSERT IGNORE` means a re-run can't double-archive a row.
+
+**This needs to actually be scheduled to do anything** — the script won't run itself. Set it
+up once via cPanel → Cron Jobs, as a **command**, not a URL:
+```
+php /home/YOURUSER/path/to/ibs-sales-app-v2/cron/archive_audit_log.php
+```
+This does *not* need SSH/Terminal access — cPanel's Cron Jobs feature runs the command
+directly; that's a separate permission from Terminal access. Daily is a reasonable schedule.
+If your specific host's cron only supports "visit a URL" rather than running a command
+directly, this script would need a small adaptation (a shared-secret query-parameter check)
+— flag it if that turns out to be the case for whichever host you end up on.
+
+**The archive is still reachable, not cold storage.** An "Include archived (1+ year old)"
+checkbox on `/audit` (and carried through to the export) UNIONs both tables when checked —
+the common case stays fast (live table only), but nothing requires a direct database query
+to look back further than a year.
+
+**CSV export:** `exportAuditLog()` in `ExportController.php`, filtered identically to the
+on-screen viewer (including the archive toggle), gated by the same `audit.view` permission
+as the viewer itself. **One thing worth deciding:** like every other export in this app, it's
+still blocked by the blanket `/export` → `imports_exports` (Growth+) plan gate — meaning a
+Core-plan admin can see the Export button (since they have `audit.view`) but get an
+"upgrade required" page when they click it. I kept this consistent with how every other
+export already works rather than carving out a one-off exception, but audit-log export is
+arguably more of a compliance feature than a "power user" one — let me know if Core should
+be exempted from that gate specifically.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_11_audit_log_archive.sql` (new) | `audit_log_archive` table — same shape as `audit_log` plus `archived_at`; `id` is a plain (not auto-increment) primary key, since archived rows keep their original ID rather than getting a new one. |
+| `cron/archive_audit_log.php` (new) | The retention script described above. |
+| `app/controllers/AuditController.php` (updated) | `include_archived` toggle (UNIONs both tables when set); builds the export URL passed to the view. |
+| `app/views/audit/index.php` (updated) | Include-archived checkbox; Export CSV button. |
+| `app/controllers/ExportController.php` (updated) | New `audit-log` export type + `exportAuditLog()`, mirroring the viewer's exact filter logic. |
+
+## 6p. Phase 3b: branch_stock — the schema-breaking part
+
+This was the part flagged from the start as the biggest single piece of work in the whole
+engagement: `products.current_stock` had been a single global number referenced roughly 190
+times across 11 controllers and 15 views. Rewriting all 190 wasn't necessary — the design
+decision that made this tractable was confirmed with you before writing any code (see the
+scoping conversation): **`branch_stock` becomes the real per-branch source of truth,
+`products.current_stock` stays in the schema as an auto-maintained total across all
+branches**, kept in sync by application code (not a DB trigger — this app has never used
+triggers or stored procedures, and staying consistent with that all-PHP pattern was judged
+safer than introducing a new one, especially given variable trigger support across
+shared-hosting MySQL configurations).
+
+### Two-tier helper design
+
+Four functions in `functions.php` are now the *only* correct way to touch stock:
+- `getBranchStock($productId, $branchId = null)` — read a specific branch's quantity
+- `adjustBranchStock($db, $productId, $branchId, $delta)` — relative change (sales, purchases)
+- `setBranchStock($db, $productId, $branchId, $newQuantity)` — absolute set (manual adjustment, CSV import)
+- `recalcProductTotalStock($db, $productId)` — called automatically by the two above; never needs calling directly except for a one-off repair
+
+Nothing in the app should ever `UPDATE products SET current_stock = ...` or write to
+`branch_stock` directly again — every write path listed below now goes through these.
+
+### Which numbers stay company-wide, and why
+
+Not every stock-adjacent figure became branch-specific — some genuinely shouldn't:
+- **Weighted-average cost, cost price, selling price, margin** — cost accounting is a
+  company-wide concept; a product's cost basis doesn't differ by which shelf it's on. These
+  stayed on `products`, untouched, computed exactly as before.
+- **Reorder level** — per your decision earlier, stays global on the product rather than
+  per-branch.
+- **Catalog/reference pages** (Products list/detail, Categories, Suppliers) — these show a
+  company-wide stock total by design, the same way the product catalog itself is shared
+  across branches (§5.2). This is a different kind of page from the *operational* ones below.
+
+### Which pages became branch-specific, and at what scope
+
+Two different scoping rules were applied depending on what a page is for:
+
+- **Operational pages** (drive real stock actions) use the viewer's **active branch only**:
+  POS (product search, cart validation, sale completion), Stock Management dashboard,
+  stock-in/out/adjustment forms, Low Stock Alerts. This matches how these pages already
+  worked — write actions post to the active branch, so the numbers shown must be that same
+  branch's numbers, or someone could act on a quantity that isn't actually there.
+- **Read-only overview pages** use the viewer's **visible branches** (all of them for
+  company-wide, just their own for branch-scoped) — same rule as receivables/payables from
+  3a: Dashboard summary tiles, and all four reports below.
+
+### The four reports deferred from Phase 3a — now built
+
+`stockValuationReport`, `lowStockReport`, `deadStockReport`, `profitMarginReport` (and their
+matching CSV exports) were explicitly left undone in 3a because `branch_stock` didn't exist
+yet. All four are now branch-scoped, following the same principle used throughout: **the
+export always recomputes the same way the screen does**, never reusing a cached/passed-in
+number, so the two can never show different figures for the same filters.
+
+One real subtlety surfaced while doing this: filters like "low stock only" or "critical
+severity" had been simple `WHERE current_stock <= reorder_level` conditions — fine when
+stock was one column. Once stock became `SUM(branch_stock.quantity)` across potentially
+several visible branches, that condition **had to move from `WHERE` to `HAVING`**, or it
+would evaluate against individual per-branch rows *before* they're summed, giving wrong
+results for any viewer with more than one visible branch. This was fixed consistently
+across all four reports and their exports.
+
+### Bugs found and fixed along the way (not scope creep — found while touching this code)
+
+- **A real overselling risk**: POS's stock validation checked
+  `products.current_stock` (the company-wide total) instead of the branch's actual
+  quantity — a cashier at a branch with zero stock of something could still sell it, as long
+  as *another* branch had enough. Fixed in both sale creation and the equivalent
+  purchase-quantity-reduction validation.
+- **A pre-existing param-binding bug** in the stock valuation report's "Top 10 Most
+  Valuable Items" query — it referenced `$where` (which can contain `?` placeholders from
+  category/supplier filters) but never passed the matching `$params` array. Would have
+  thrown a param-count mismatch the moment someone filtered by category or supplier. Unrelated
+  to branch work, just found while rewriting the surrounding query.
+- **Two undefined-variable bugs**, same pattern, in `PurchaseController` and
+  `ImportController`'s cost-history logging — both were leftover references to a variable
+  name from before the "split company-wide cost from branch-specific quantity" refactor.
+  `php -l` can't catch these (valid syntax, just references an undefined variable at
+  runtime), so after finding the first one I went back and manually re-verified every other
+  place the same refactor pattern was applied (`updatePurchase`, `voidPurchase`) rather than
+  assuming they were fine — both of those checked out clean.
+
+### Built
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_12_phase3b_branch_stock.sql` (new) | `branch_stock` table; seeds every product's current total to Main Branch, zero elsewhere. **Read the warning in the migration file before running on a client already using a 2nd branch** — stock was never tracked per-branch before this, so that client needs a manual stock count per location after running it; there's no historical data to reconstruct it from. |
+| `app/helpers/functions.php` (updated) | The four helper functions above. |
+| `app/controllers/ProductController.php` (updated) | `searchProducts()` (the shared endpoint used by POS/stock forms/purchases/distributor) now branch-aware — one fix, cascades everywhere. Opening-stock creation now seeds `branch_stock` instead of setting the column directly. |
+| `app/controllers/SaleController.php` (updated) | Stock validation, sale completion, and void all branch-aware; void restores to the *sale's own* branch, not the voider's current one. Quick-products grid fixed too. |
+| `app/controllers/PurchaseController.php` (updated) | Purchase creation, update (quantity diffing), and void all branch-aware, with cost calculations correctly kept company-wide throughout. Item-listing/product-picker queries on the view/edit/create pages fixed too. |
+| `app/controllers/StockController.php` (updated) | Stock-in, stock-out, and adjustment all rewired to the branch_stock helpers; the Stock Management dashboard and Low Stock Alerts page both rebuilt to show the active branch's real numbers, with a "showing: [branch]" label. |
+| `app/controllers/DashboardController.php` (updated) | Stock value tile, out-of-stock/low-stock counts, and the top-10 low-stock list all now sum across visible branches. |
+| `app/controllers/ReportsController.php`, `app/controllers/ExportController.php` (updated) | All four deferred reports + their exports, as described above. |
+| `app/controllers/DistributorController.php` (updated) | Product picker branch-aware; stock-movement ledger entries now log the branch's actual before/after stock (the delivery itself stays net-zero by design — no actual quantity change). |
+| `app/controllers/ImportController.php` (updated) | Both CSV import types (product catalog, purchases) now go through the branch_stock helpers instead of writing to `products.current_stock` directly. |
+| 6 view files (`stock/index.php`, `stock/alerts.php`, `reports/stock_valuation.php`, `reports/low_stock.php`, `reports/dead_stock.php`, `reports/profit_margin.php`) | "Showing: [branch/scope]" labels added for clarity. |
+
+## 7f. Phase 3b testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first — and if that client already
+      has a 2nd branch in active use, walk through the manual stock recount warning with them
+      before running it.
+- [ ] At a single-branch install, confirm nothing looks different anywhere — this is the most
+      important check, since the vast majority of installs are single-branch and should see
+      zero behavior change.
+- [ ] Create a 2nd branch, add some stock to it via stock-in, and confirm POS at that branch
+      only shows/sells what's actually there — try to oversell past the branch's actual
+      quantity and confirm it's blocked, even if the *other* branch has plenty.
+- [ ] Complete a sale, then void it; confirm stock returns to the branch the sale actually
+      happened at (test this specifically as an admin whose *active* branch differs from the
+      sale's branch, to catch the exact bug this was designed to prevent).
+- [ ] Do the same void test for a purchase.
+- [ ] Run a purchase that adds stock to a product with existing stock elsewhere; confirm the
+      weighted-average cost updates correctly (company-wide) while only the purchasing
+      branch's quantity changes.
+- [ ] Check Stock Management, Low Stock Alerts, and all four reports (stock valuation, low
+      stock, dead stock, profit margin) as both a branch-scoped and a company-wide viewer;
+      confirm the numbers differ appropriately and that each report's CSV export matches its
+      on-screen numbers exactly.
+- [ ] Specifically test the "low stock only" / "critical severity" filter checkboxes on a
+      multi-branch-visible (company-wide) viewer — this is the filter that had to move from
+      WHERE to HAVING; confirm it's still returning the right set of products.
+- [ ] Import a product CSV with a `current_stock` column at a branch other than Main Branch;
+      confirm the stock lands on the importing branch, not Main Branch.
+- [ ] Import a purchase CSV; confirm both the stock quantity (branch-specific) and the
+      weighted-average cost (company-wide) update correctly.
 
 ## 8. Open decisions for later (not blocking anything now)
 
