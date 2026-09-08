@@ -455,12 +455,24 @@ function searchProducts($db)
     // Default (POS) only returns products that actually have stock to sell
     $includeEmpty = isset($_GET['all']) && $_GET['all'] == '1';
 
-    // current_stock here means "at my active branch", not the company-wide
+    // current_stock here means "at the target branch", not the company-wide
     // total — a cashier at Branch 2 must only see/sell what's actually on
     // Branch 2's shelf. The alias keeps the JSON key name unchanged, so
     // every existing consumer of this endpoint (POS, stock-in/out,
     // purchases, distributor) needs no changes on the JS side.
-    $branchId = activeBranchId();
+    //
+    // Normally this is just the requester's active branch, but transfers
+    // need to see stock at an arbitrary *source* branch that isn't
+    // necessarily their active one — ?branch_id= allows that override,
+    // restricted to branches the requester can actually access (company-wide,
+    // or one they're assigned to), so this can't be used to snoop another
+    // branch's stock levels.
+    $requestedBranchId = isset($_GET['branch_id']) ? (int) $_GET['branch_id'] : null;
+    if ($requestedBranchId && (isCompanyWide() || in_array($requestedBranchId, array_column(userBranches($_SESSION['user_id']), 'id'), true))) {
+        $branchId = $requestedBranchId;
+    } else {
+        $branchId = activeBranchId();
+    }
     $params   = [$branchId];
     $where    = $includeEmpty
         ? "WHERE p.is_active = 1"
