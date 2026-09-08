@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     logAudit('settings.update', 'settings', null, [
         'sale_discount_type' => $discountType,
         'pos_default_walkin' => (bool) $posDefaultWalkin,
-    ]);
+    ], true);
 
     redirect(BASE_URL . '/settings', 'success', 'Settings updated.');
 }

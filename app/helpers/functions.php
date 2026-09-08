@@ -763,8 +763,17 @@ function branchName($branchId)
  * @param string|null $entityType  e.g. 'sale', 'user', 'role', 'account', 'branch', 'settings'
  * @param int|null $entityId
  * @param array $details      Arbitrary JSON-able context — what changed, old/new values, etc.
+ * @param bool $companyWide   True for actions that aren't really about any one
+ *                            branch (role/permission changes, settings) — stores
+ *                            branch_id as NULL instead of the actor's current
+ *                            branch, so branchScopeSql() excludes it for every
+ *                            branch-scoped viewer, not just ones outside the
+ *                            actor's branch at the time. Without this, a branch
+ *                            admin could see company-wide administrative history
+ *                            just because they happened to be active at their
+ *                            own branch when someone made the change.
  */
-function logAudit($action, $entityType = null, $entityId = null, $details = [])
+function logAudit($action, $entityType = null, $entityId = null, $details = [], $companyWide = false)
 {
     try {
         $db = Database::getInstance();
@@ -777,7 +786,7 @@ function logAudit($action, $entityType = null, $entityId = null, $details = [])
             $action,
             $entityType,
             $entityId,
-            currentUser() ? activeBranchId() : null,
+            ($companyWide || !currentUser()) ? null : activeBranchId(),
             !empty($details) ? json_encode($details) : null,
             $_SERVER['REMOTE_ADDR'] ?? null,
         ]);

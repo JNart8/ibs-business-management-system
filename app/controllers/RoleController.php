@@ -104,7 +104,7 @@ function storeRole($db)
     $permissionKeys = $_POST['permissions'] ?? [];
     saveRolePermissions($db, $roleId, $permissionKeys);
 
-    logAudit('role.create', 'role', $roleId, ['name' => $name, 'permissions' => $permissionKeys]);
+    logAudit('role.create', 'role', $roleId, ['name' => $name, 'permissions' => $permissionKeys], true);
 
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($name) . '" created.');
 }
@@ -160,7 +160,7 @@ function updateRole($db, $id)
         'name'   => $role['name'],
         'added'  => array_values(array_diff($permissionKeys, $beforeKeys)),
         'removed' => array_values(array_diff($beforeKeys, $permissionKeys)),
-    ]);
+    ], true);
 
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($role['name']) . '" updated.');
 }
@@ -184,7 +184,7 @@ function deleteRole($db, $id)
     }
 
     $db->query("DELETE FROM roles WHERE id = ?", [$id]);
-    logAudit('role.delete', 'role', $id, ['name' => $role['name']]);
+    logAudit('role.delete', 'role', $id, ['name' => $role['name']], true);
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($role['name']) . '" deleted.');
 }
 

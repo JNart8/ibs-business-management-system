@@ -199,6 +199,7 @@
                             </div>
                         </div>
 
+                        <?php if (can('customers.manage') || can('suppliers.manage')): ?>
                         <!-- People Dropdown -->
                         <div class="relative dropdown">
                             <button
@@ -209,16 +210,24 @@
                                 </svg>
                             </button>
                             <div class="dropdown-content">
+                                <?php if (can('customers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/customers" class="dropdown-item">
                                     👥 Customers
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('suppliers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suppliers" class="dropdown-item">
                                     🚚 Suppliers
                                 </a>
+                                <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
-                        <!-- Finance Dropdown -->
+                        <!-- Finance Dropdown — /sales has no permission gate of its own
+                             (open to any logged-in user), so this always shows at least
+                             that; every other item is hidden unless can() actually allows
+                             the route it links to, so there's never a dead-end link here. -->
                         <div class="relative dropdown">
                             <button
                                 class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/sales', '/purchases', '/transactions', '/financial-accounts', '/expenses', '/distributor', '/suspense'], $currentPath) ?>">
@@ -231,26 +240,32 @@
                                 <a href="<?= BASE_URL ?>/sales" class="dropdown-item">
                                     💰 Sales
                                 </a>
+                                <?php if (can('purchases.manage')): ?>
                                 <a href="<?= BASE_URL ?>/purchases" class="dropdown-item">
                                     🛍️ Purchases
                                 </a>
-                                <?php if (planAllows('distributor')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('distributor') && can('distributor.manage')): ?>
                                 <a href="<?= BASE_URL ?>/distributor" class="dropdown-item">
                                     🚚 Direct Deliveries
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('transactions.manage')): ?>
                                 <a href="<?= BASE_URL ?>/transactions" class="dropdown-item">
                                     💳 Customer Transactions
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('financial_accounts.access')): ?>
                                 <a href="<?= BASE_URL ?>/financial-accounts" class="dropdown-item">
                                     💳 Financial Accounts
                                 </a>
-                                <?php if (planAllows('expenses')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('expenses') && can('expenses.manage')): ?>
                                 <a href="<?= BASE_URL ?>/expenses" class="dropdown-item">
                                     💸 Expenses
                                 </a>
                                 <?php endif; ?>
-                                <?php if (planAllows('suspense')): ?>
+                                <?php if (planAllows('suspense') && can('suspense.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suspense" class="dropdown-item">
                                     🕵️ Suspense Account
                                 </a>
@@ -464,6 +479,7 @@
                             </div>
                         </div>
 
+                        <?php if (can('customers.manage') || can('suppliers.manage')): ?>
                         <!-- People Section (Mobile) -->
                         <div class="flex flex-col">
                             <button @click="peopleOpen = !peopleOpen"
@@ -476,20 +492,27 @@
                                 </svg>
                             </button>
                             <div x-show="peopleOpen" x-cloak class="pl-4 mt-1 space-y-1">
+                                <?php if (can('customers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/customers"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     👥 Customers
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('suppliers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suppliers"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     🚚 Suppliers
                                 </a>
+                                <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
-                        <!-- Finance Section (Mobile) -->
+                        <!-- Finance Section (Mobile) — /sales has no permission gate
+                             of its own, so this always shows at least that; every
+                             other item is hidden unless can() allows it. -->
                         <div class="flex flex-col">
                             <button @click="financeOpen = !financeOpen"
                                 class="nav-link flex items-center justify-between w-full text-left">
@@ -506,36 +529,42 @@
                                     @click="mobileOpen = false">
                                     💰 Sales
                                 </a>
+                                <?php if (can('purchases.manage')): ?>
                                 <a href="<?= BASE_URL ?>/purchases"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     🛍️ Purchases
                                 </a>
-                                <?php if (planAllows('distributor')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('distributor') && can('distributor.manage')): ?>
                                 <a href="<?= BASE_URL ?>/distributor"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     🚚 Direct Deliveries
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('transactions.manage')): ?>
                                 <a href="<?= BASE_URL ?>/transactions"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💳 Customer Transactions
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('financial_accounts.access')): ?>
                                 <a href="<?= BASE_URL ?>/financial-accounts"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💳 Financial Accounts
                                 </a>
-                                <?php if (planAllows('expenses')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('expenses') && can('expenses.manage')): ?>
                                 <a href="<?= BASE_URL ?>/expenses"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💸 Expenses
                                 </a>
                                 <?php endif; ?>
-                                <?php if (planAllows('suspense')): ?>
+                                <?php if (planAllows('suspense') && can('suspense.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suspense"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
