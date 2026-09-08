@@ -127,6 +127,15 @@ function executeTransfer($db)
     $charges       = safeFloat($_POST['charges'] ?? 0.00);
     $notes         = trim($_POST['notes'] ?? '');
 
+    $chargedTo = $_POST['charged_to'] ?? 'business';
+    if (!in_array($chargedTo, ['customer', 'business'], true)) {
+        $chargedTo = 'business';
+    }
+    $settlementType = $_POST['settlement_type'] ?? 'routine';
+    if (!in_array($settlementType, ['routine', 'customer_credit_balancing'], true)) {
+        $settlementType = 'routine';
+    }
+
     if ($fromAccountId === $toAccountId) {
         redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Source and destination accounts must be different.');
     }
@@ -168,9 +177,9 @@ function executeTransfer($db)
 
         // 3. Record transfer log
         $db->query("
-            INSERT INTO account_transfers (from_account_id, to_account_id, amount, charges, notes, user_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ", [$fromAccountId, $toAccountId, $amount, $charges, $notes, $_SESSION['user_id']]);
+            INSERT INTO account_transfers (from_account_id, to_account_id, amount, charges, charged_to, settlement_type, notes, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ", [$fromAccountId, $toAccountId, $amount, $charges, $chargedTo, $settlementType, $notes, $_SESSION['user_id']]);
         
         $transferId = $db->lastInsertId();
 

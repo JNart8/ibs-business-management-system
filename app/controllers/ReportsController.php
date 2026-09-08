@@ -43,6 +43,9 @@ switch ($action) {
     case 'payables':
         payablesReport($db);
         break;
+    case 'customer-credit':
+        customerCreditSettlementReport($db);
+        break;
     case 'products':
         productsReport($db);
         break;
@@ -780,6 +783,90 @@ function payablesReport($db)
     $pageTitle = 'Outstanding Payables';
     $isPartialView = hasMultiBranch() && !isCompanyWide();
     include APP_PATH . '/views/reports/payables.php';
+}
+
+// ============================================================
+// CUSTOMER CREDIT SETTLEMENT REPORT (Phase 3d)
+// ============================================================
+//
+// Customers deposit money at one branch and can spend it at another
+// (customer balances are shared company-wide by design — see
+// ARCHITECTURE.md §5.3). This report doesn't trace which specific
+// deposit funded which specific sale (deliberately — see §5.5); it
+// shows the net position per branch for a period, so the business
+// can see which branch effectively "lent" credit to another and
+// settle periodically via a normal account transfer.
+
+function customerCreditSettlementReport($db)
+{
+    // Get filter parameters
+    $period   = $_GET['period']    ?? 'this_month';
+    $dateFrom = $_GET['date_from'] ?? '';
+    $dateTo   = $_GET['date_to']   ?? '';
+
+    $dates    = calculateDateRange($period, $dateFrom, $dateTo);
+    $dateFrom = $dates['from'];
+    $dateTo   = $dates['to'];
+
+    // ── Deposits issued, by the branch they were made at ───────
+    [$issuedScopeSql, $issuedScopeParams] = branchScopeSql('ct');
+    $issuedRows = $db->fetchAll("
+        SELECT ct.branch_id, SUM(ct.amount) AS issued
+        FROM customer_transactions ct
+        WHERE ct.transaction_type = 'deposit'
+            AND ct.branch_id IS NOT NULL
+            AND DATE(ct.created_at) BETWEEN ? AND ?
+            $issuedScopeSql
+        GROUP BY ct.branch_id
+    ", array_merge([$dateFrom, $dateTo], $issuedScopeParams));
+
+    // ── Credit redeemed, by the branch the sale happened at ────
+    // payment_method = 'deposit' means the sale drew from the
+    // customer's existing balance — SaleController caps amount_paid
+    // at current_balance on that path, so amount_paid here is exactly
+    // how much pooled credit this branch let the customer redeem.
+    [$redeemedScopeSql, $redeemedScopeParams] = branchScopeSql('s');
+    $redeemedRows = $db->fetchAll("
+        SELECT s.branch_id, SUM(s.amount_paid) AS redeemed
+        FROM sales s
+        WHERE s.payment_method = 'deposit'
+            AND DATE(s.sale_date) BETWEEN ? AND ?
+            $redeemedScopeSql
+        GROUP BY s.branch_id
+    ", array_merge([$dateFrom, $dateTo], $redeemedScopeParams));
+
+    // ── Merge into one row per branch ───────────────────────────
+    $branches = [];
+    foreach ($issuedRows as $row) {
+        $branches[$row['branch_id']]['issued'] = (float) $row['issued'];
+    }
+    foreach ($redeemedRows as $row) {
+        $branches[$row['branch_id']]['redeemed'] = (float) $row['redeemed'];
+    }
+
+    $rows = [];
+    foreach ($branches as $branchId => $amounts) {
+        $issued   = $amounts['issued']   ?? 0.0;
+        $redeemed = $amounts['redeemed'] ?? 0.0;
+        $rows[] = [
+            'branch_id'   => $branchId,
+            'branch_name' => branchName($branchId),
+            'issued'      => $issued,
+            'redeemed'    => $redeemed,
+            'net'         => $issued - $redeemed,
+        ];
+    }
+
+    usort($rows, fn($a, $b) => strcmp($a['branch_name'], $b['branch_name']));
+
+    $summary = [
+        'total_issued'   => array_sum(array_column($rows, 'issued')),
+        'total_redeemed' => array_sum(array_column($rows, 'redeemed')),
+    ];
+
+    $pageTitle = 'Customer Credit Settlement';
+    $isPartialView = hasMultiBranch() && !isCompanyWide();
+    include APP_PATH . '/views/reports/customer_credit_settlement.php';
 }
 
 

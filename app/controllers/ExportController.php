@@ -29,6 +29,7 @@ if (!in_array($type, [
     'stock-valuation',
     'receivables',
     'payables',
+    'customer-credit-settlement',
     'sales-report',
     'profit-loss',
     'top-selling',
@@ -125,6 +126,9 @@ function exportData($db, $type)
             break;
         case 'payables':
             exportPayables($db, $output);
+            break;
+        case 'customer-credit-settlement':
+            exportCustomerCreditSettlement($db, $output);
             break;
         case 'sales-report':
             exportSalesReport($db, $output);
@@ -1216,6 +1220,98 @@ function exportPayables($db, $output)
     fputcsv($output, []);
     fputcsv($output, ['Report Generated:', date('Y-m-d H:i:s')]);
     fputcsv($output, ['Total Suppliers:', count($suppliers)]);
+    fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
+}
+
+/**
+ * Export Customer Credit Settlement Report (Phase 3d) — recomputes
+ * the exact same two queries as customerCreditSettlementReport() in
+ * ReportsController.php, so the export can never drift from the screen.
+ */
+function exportCustomerCreditSettlement($db, $output)
+{
+    $period   = $_GET['period']    ?? 'this_month';
+    $dateFrom = $_GET['date_from'] ?? '';
+    $dateTo   = $_GET['date_to']   ?? '';
+
+    $dates    = calculateDateRangeForExport($period, $dateFrom, $dateTo);
+    $dateFrom = $dates['from'];
+    $dateTo   = $dates['to'];
+
+    [$issuedScopeSql, $issuedScopeParams] = branchScopeSql('ct');
+    $issuedRows = $db->fetchAll("
+        SELECT ct.branch_id, SUM(ct.amount) AS issued
+        FROM customer_transactions ct
+        WHERE ct.transaction_type = 'deposit'
+            AND ct.branch_id IS NOT NULL
+            AND DATE(ct.created_at) BETWEEN ? AND ?
+            $issuedScopeSql
+        GROUP BY ct.branch_id
+    ", array_merge([$dateFrom, $dateTo], $issuedScopeParams));
+
+    [$redeemedScopeSql, $redeemedScopeParams] = branchScopeSql('s');
+    $redeemedRows = $db->fetchAll("
+        SELECT s.branch_id, SUM(s.amount_paid) AS redeemed
+        FROM sales s
+        WHERE s.payment_method = 'deposit'
+            AND DATE(s.sale_date) BETWEEN ? AND ?
+            $redeemedScopeSql
+        GROUP BY s.branch_id
+    ", array_merge([$dateFrom, $dateTo], $redeemedScopeParams));
+
+    $branches = [];
+    foreach ($issuedRows as $row) {
+        $branches[$row['branch_id']]['issued'] = (float) $row['issued'];
+    }
+    foreach ($redeemedRows as $row) {
+        $branches[$row['branch_id']]['redeemed'] = (float) $row['redeemed'];
+    }
+
+    $rows = [];
+    foreach ($branches as $branchId => $amounts) {
+        $issued   = $amounts['issued']   ?? 0.0;
+        $redeemed = $amounts['redeemed'] ?? 0.0;
+        $rows[] = [
+            'branch_name' => branchName($branchId),
+            'issued'      => $issued,
+            'redeemed'    => $redeemed,
+            'net'         => $issued - $redeemed,
+        ];
+    }
+    usort($rows, fn($a, $b) => strcmp($a['branch_name'], $b['branch_name']));
+
+    fputcsv($output, [
+        'Branch',
+        'Deposits Issued (' . CURRENCY_HOLDER . ')',
+        'Credit Redeemed (' . CURRENCY_HOLDER . ')',
+        'Net Position (' . CURRENCY_HOLDER . ')',
+    ]);
+
+    foreach ($rows as $row) {
+        fputcsv($output, [
+            $row['branch_name'],
+            number_format($row['issued'], 2, '.', ''),
+            number_format($row['redeemed'], 2, '.', ''),
+            number_format($row['net'], 2, '.', ''),
+        ]);
+    }
+
+    fputcsv($output, [
+        'TOTAL',
+        number_format(array_sum(array_column($rows, 'issued')), 2, '.', ''),
+        number_format(array_sum(array_column($rows, 'redeemed')), 2, '.', ''),
+        number_format(array_sum(array_column($rows, 'net')), 2, '.', ''),
+    ]);
+
+    if (hasMultiBranch() && !isCompanyWide()) {
+        fputcsv($output, []);
+        fputcsv($output, ['Note: partial view — showing ' . activeBranchName() . ' only.']);
+        fputcsv($output, ['This report is inherently about cross-branch imbalance; a branch-scoped export can only show this branch\'s side of it.']);
+    }
+
+    fputcsv($output, []);
+    fputcsv($output, ['Report Period:', $dateFrom . ' to ' . $dateTo]);
+    fputcsv($output, ['Report Generated:', date('Y-m-d H:i:s')]);
     fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
 }
 

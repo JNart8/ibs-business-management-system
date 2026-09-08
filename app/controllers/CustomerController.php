@@ -528,11 +528,12 @@ function processDeposit($db, $id)
         if ($depositDateSql) {
             $db->query("
                 INSERT INTO customer_transactions
-                    (customer_id, transaction_type, amount, balance_before,
+                    (customer_id, branch_id, transaction_type, amount, balance_before,
                      balance_after, payment_method, notes, user_id, created_at)
-                VALUES (?, 'deposit', ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $id,
+                activeBranchId(),
                 $amount,
                 $balanceBefore,
                 $balanceAfterDeposit,
@@ -544,11 +545,12 @@ function processDeposit($db, $id)
         } else {
             $db->query("
                 INSERT INTO customer_transactions
-                    (customer_id, transaction_type, amount, balance_before,
+                    (customer_id, branch_id, transaction_type, amount, balance_before,
                      balance_after, payment_method, notes, user_id)
-                VALUES (?, 'deposit', ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?, ?)
             ", [
                 $id,
+                activeBranchId(),
                 $amount,
                 $balanceBefore,
                 $balanceAfterDeposit,
