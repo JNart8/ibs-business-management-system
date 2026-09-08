@@ -73,6 +73,8 @@ $permissionRestrictions = [
     '/distributor'          => 'distributor.manage',
     '/suspense'             => 'suspense.manage',
     '/branches'             => 'branches.manage',
+    '/audit'                => 'audit.view',
+    '/transfers'            => 'stock.transfer',
 ];
 
 if (!$isPublic && isLoggedIn()) {
@@ -137,6 +139,7 @@ $planFeatureMap = [
     '/reports/profit-loss'  => 'advanced_reports',
     '/reports/dead-stock'   => 'advanced_reports',
     '/reports/profit-margin' => 'advanced_reports',
+    '/reports/customer-credit' => 'advanced_reports',
     '/import'               => 'imports_exports',
     '/export'               => 'imports_exports',
     '/suspense'             => 'suspense',
@@ -182,7 +185,7 @@ if (!$isPublic && isLoggedIn()) {
     // ── Multi-branch add-on gate ─────────────────────────────
     // Not a plain plan-tier feature (see hasMultiBranch()), so it's
     // checked separately from the $planFeatureMap loop above.
-    if (strpos($path, '/branches') === 0 && !hasMultiBranch()) {
+    if ((strpos($path, '/branches') === 0 || strpos($path, '/transfers') === 0 || strpos($path, '/reports/customer-credit') === 0) && !hasMultiBranch()) {
         http_response_code(403);
         echo '<!DOCTYPE html>
         <html>
@@ -242,6 +245,10 @@ if ($path === '/' || $path === '' || $path === '/dashboard') {
     require APP_PATH . '/controllers/RoleController.php';
 } elseif (strpos($path, '/branches') === 0) {
     require APP_PATH . '/controllers/BranchController.php';
+} elseif (strpos($path, '/transfers') === 0) {
+    require APP_PATH . '/controllers/TransferController.php';
+} elseif (strpos($path, '/audit') === 0) {
+    require APP_PATH . '/controllers/AuditController.php';
 } elseif (strpos($path, '/settings') === 0) {
     require APP_PATH . '/controllers/SettingsController.php';
 } elseif (strpos($path, '/import') === 0) {

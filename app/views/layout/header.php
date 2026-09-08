@@ -175,7 +175,7 @@
                         <!-- Inventory Dropdown -->
                         <div class="relative dropdown">
                             <button
-                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/products', '/categories', '/stock'], $currentPath) ?>">
+                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/products', '/categories', '/stock', '/transfers'], $currentPath) ?>">
                                 Inventory
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -191,6 +191,11 @@
                                 <a href="<?= BASE_URL ?>/stock" class="dropdown-item">
                                     📊 Stock Management
                                 </a>
+                                <?php if (can('stock.transfer') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/transfers" class="dropdown-item">
+                                    🔄 Stock Transfers
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
 
@@ -293,6 +298,11 @@
                                 <a href="<?= BASE_URL ?>/reports/profit-margin" class="dropdown-item">
                                     📈 Profit Margins
                                 </a>
+                                <?php if (hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/reports/customer-credit" class="dropdown-item">
+                                    🔁 Customer Credit Settlement
+                                </a>
+                                <?php endif; ?>
                                 <?php else: ?>
                                 <div class="border-t my-1"></div>
                                 <span class="dropdown-item text-gray-400 cursor-not-allowed" title="Upgrade to unlock">
@@ -444,6 +454,13 @@
                                     @click="mobileOpen = false">
                                     📊 Stock Management
                                 </a>
+                                <?php if (can('stock.transfer') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/transfers"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    🔄 Stock Transfers
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
 
@@ -586,6 +603,13 @@
                                     @click="mobileOpen = false">
                                     📈 Profit Margins
                                 </a>
+                                <?php if (hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/reports/customer-credit"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    🔁 Customer Credit Settlement
+                                </a>
+                                <?php endif; ?>
                                 <?php else: ?>
                                 <span class="nav-link block text-gray-400">🔒 Advanced reports (upgrade)</span>
                                 <?php endif; ?>
