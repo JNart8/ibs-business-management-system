@@ -151,6 +151,14 @@ $planFeatureMap = [
 
 if (!$isPublic && isLoggedIn()) {
     foreach ($planFeatureMap as $prefix => $feature) {
+        // The audit log itself isn't plan-gated (no /audit entry above) —
+        // its export shouldn't be either. It's a compliance feature, not
+        // a "power user" one, so it's exempted from the blanket /export
+        // Growth+ gate rather than requiring an upgrade just to get data
+        // a Core admin can already see on screen.
+        if ($prefix === '/export' && strpos($path, '/export/audit-log') === 0) {
+            continue;
+        }
         if (strpos($path, $prefix) === 0 && !planAllows($feature)) {
             http_response_code(403);
             echo '<!DOCTYPE html>

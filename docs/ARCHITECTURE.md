@@ -764,13 +764,16 @@ to look back further than a year.
 
 **CSV export:** `exportAuditLog()` in `ExportController.php`, filtered identically to the
 on-screen viewer (including the archive toggle), gated by the same `audit.view` permission
-as the viewer itself. **One thing worth deciding:** like every other export in this app, it's
-still blocked by the blanket `/export` → `imports_exports` (Growth+) plan gate — meaning a
-Core-plan admin can see the Export button (since they have `audit.view`) but get an
-"upgrade required" page when they click it. I kept this consistent with how every other
-export already works rather than carving out a one-off exception, but audit-log export is
-arguably more of a compliance feature than a "power user" one — let me know if Core should
-be exempted from that gate specifically.
+as the viewer itself.
+
+**Decided:** audit-log export is exempted from the blanket `/export` → `imports_exports`
+(Growth+) plan gate. `/audit` itself was never plan-gated (only `audit.view`), so blocking
+just its export behind an upgrade was an inconsistency, not a deliberate restriction — and
+it's a compliance feature, not a "power user" one, unlike every other export this gate
+correctly still applies to. `public/index.php`'s `$planFeatureMap` loop now special-cases
+`/export/audit-log` to skip the `/export` prefix's `imports_exports` requirement, while
+leaving every other export (`products`, `sales`, `receivables`, etc.) gated exactly as
+before.
 
 **Built:**
 
