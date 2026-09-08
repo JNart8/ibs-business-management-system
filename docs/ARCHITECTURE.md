@@ -389,8 +389,8 @@ only catches a genuinely separate, newer login.
 | **2** ✅ | `permissions` / `role_permissions` tables + Enterprise role editor | Shipped |
 | **3a** ✅ | Branches, user-branch assignment, branch-level vs. company-wide scoping, branch-scoped Sales/Purchases/Expenses history and reports | Shipped |
 | **3b** ✅ | `branch_stock` replacing `products.current_stock` as the source of truth for every stock read/write | Shipped |
-| **3c** | Inter-branch stock transfers | Not started |
-| **3d** | Customer-credit cross-branch settlement (§5.5) | Not started |
+| **3c** ✅ | Inter-branch stock transfers | Shipped |
+| **3d** ✅ | Customer-credit cross-branch settlement (§5.5) | Shipped |
 
 ## 7b. Phase 2 testing checklist before rolling out to a real client
 
@@ -912,6 +912,271 @@ across all four reports and their exports.
       confirm the stock lands on the importing branch, not Main Branch.
 - [ ] Import a purchase CSV; confirm both the stock quantity (branch-specific) and the
       weighted-average cost (company-wide) update correctly.
+
+## 6q. Phase 3c: inter-branch stock transfers
+
+### Design decisions confirmed before building
+
+Two genuine forks were resolved with you before writing any code, since either would have
+shaped the whole build differently:
+
+1. **One-step (instant) vs. two-step (dispatch → in transit → receive).** Two-step is more
+   realistic — goods physically take time to move, and it can catch loss/damage in transit
+   by letting the receiving side confirm a different quantity than what was sent — but it
+   needs a pending state, a "receive" screen, and a decision about who's allowed to confirm
+   receipt. **You chose one-step**: recording a transfer updates both branches' stock
+   immediately. Simpler, and the right call unless discrepancy tracking becomes something
+   you actually need later. *(Revisited — see §6s: this later became two-step.)*
+2. **Who can dispatch stock out of a branch.** Rather than reuse the existing `stock.manage`
+   permission, **you asked for a dedicated `stock.transfer` permission**, seeded admin-only
+   by default (unlike `stock.manage`, which Staff gets automatically) — so moving stock
+   *between* branches is deliberately a step up from managing stock *within* one, and you
+   can grant it selectively via Enterprise custom roles to specific trusted staff rather than
+   handing it out with general stock access.
+
+### What "source branch" access actually means
+
+Even with `stock.transfer` granted, a user can only **dispatch from** a branch they're
+actually assigned to (`user_branches`) — company-wide users can dispatch from any branch.
+There's no equivalent restriction on the **destination** — you don't need to be assigned to
+a branch to receive stock there, since receiving doesn't require you to have been managing
+that location, just sending does. This mirrors the same reasoning already used for who can
+initiate a sale/purchase at a branch — write access requires assignment, read/receive does
+not.
+
+### The reusable piece: `branch_id` override on the shared product search
+
+Every other branch-aware feature so far (POS, stock-in/out, purchases) only ever needed to
+know about the *current user's own active branch*. Transfers broke that assumption — the
+form needs to show stock at an arbitrary **source** branch, which might not be the
+dispatcher's active branch at all (a company-wide admin could be actively "in" Branch A
+while dispatching stock from Branch B). Rather than build a second, transfer-specific
+product-search endpoint, `ProductController::searchProducts()` (the endpoint already shared
+by POS/stock forms/purchases/distributor) gained an optional `?branch_id=` override —
+access-checked against the requester's own assignments or company-wide status, so it can't
+be used to peek at another branch's stock levels by guessing IDs. This is a generically
+useful addition, not a transfer-only hack; any future feature needing "show me branch X's
+stock, not mine" gets it for free.
+
+### History, not just a ledger side-effect
+
+Two new tables (`stock_transfers`, `stock_transfer_items`) give a proper browsable transfer
+log — "Transfer #TRF-20260813-0001: 3 products, Branch A → Branch B, by John" — separate
+from the per-product `stock_movements` entries (which still get two rows per item, tagged
+with a new `transfer` reference_type: one `out` at the source, one `in` at the destination,
+both linked back to the transfer via `reference_id`). The transfer history itself follows
+the same branch-visibility rule as everywhere else, but adapted for a two-branch record: a
+branch-scoped user sees a transfer if it involves *either* of their branches as source or
+destination, not just a single-column `branchScopeSql()` check.
+
+### Validation, in order, before anything is touched
+
+Every item's requested quantity is checked against the *source branch's actual stock*
+(`getBranchStock()`, not the company-wide total — same overselling protection built for
+POS/purchases in 3b) for the entire cart before the database transaction begins, so a
+transfer either fully succeeds or fails cleanly with a specific, actionable message — never
+partially applies some items and not others.
+
+### Built
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_13_phase3c_stock_transfers.sql` (new) | `stock_transfers`, `stock_transfer_items`; `transfer` added to `stock_movements.reference_type`; `stock.transfer` permission, admin-only by default. |
+| `app/controllers/ProductController.php` (updated) | `searchProducts()` gains the access-checked `?branch_id=` override described above. |
+| `app/controllers/TransferController.php` (new) | List (branch-visibility-aware), create (full validation before any writes, wrapped in a DB transaction), view. Uses `getBranchStock()`/`adjustBranchStock()` from Phase 3b — no new stock-mutation logic, just a new caller of the existing helpers. |
+| `app/views/transfers/index.php`, `create.php`, `view.php` (new) | List, create (product-cart UI matching the POS/purchases pattern, branch pickers, live stock validation), and detail screens. |
+| `public/index.php` (updated) | `/transfers` added to the permission map, the `hasMultiBranch()` gate (alongside `/branches`), and the dispatch table. |
+| `app/views/layout/header.php` (updated) | "Stock Transfers" added to the Inventory dropdown/section (desktop + mobile), gated by `can('stock.transfer') && hasMultiBranch()`. |
+
+### Not built / deliberately deferred
+
+- ~~No dispatch/receive workflow~~ — **built, see §6s.** Transfers moved from one-step
+  (instant) to two-step (dispatch → in transit → receive), with per-item discrepancy
+  tracking (`quantity_received`), exactly along the lines flagged here.
+- ~~No transfer cancellation/reversal screen~~ — **partially built, see §6s.** A transfer
+  still `in_transit` (not yet received) can now be cancelled, which covers the common
+  "sent to the wrong branch" mistake. A *post-receipt* undo is still not built — see §6s
+  for why that's a separate, harder problem.
+- **No cost implications modeled.** A transfer moves quantity, not cost basis — the
+  weighted-average cost (company-wide, per §6p) is untouched by a transfer, which is
+  correct, since the goods haven't left the business, just moved locations.
+
+### Testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first.
+- [ ] As a company-wide user, transfer stock between two branches; confirm both branches'
+      `branch_stock` and `products.current_stock` (the maintained total) update correctly,
+      and that `stock_movements` shows both the `out` and `in` entries with the `transfer`
+      reference_type and matching `reference_id`.
+- [ ] As a branch-scoped user assigned only to Branch A, confirm the "From Branch" dropdown
+      only offers Branch A, and confirm you can still select *any* active branch as the
+      destination.
+- [ ] Try to submit a transfer with a quantity exceeding the source branch's actual stock;
+      confirm it's rejected with a specific message naming the product and the actual
+      available quantity, and that nothing was partially written.
+- [ ] Change the source branch after adding items to the cart; confirm the cart clears
+      (stock levels differ by branch, so stale cart entries validated against the old branch
+      must not survive).
+- [ ] Confirm a user without `stock.transfer` (even one with `stock.manage`) cannot reach
+      `/transfers` at all — this is the permission split from your decision.
+- [ ] Confirm `/transfers` 403s entirely on a single-branch (non-multi-branch) install, even
+      for an admin with `stock.transfer` granted.
+- [ ] As a branch-scoped user, confirm the transfer history only shows transfers touching
+      their own branch(es), and that a company-wide user sees everything.
+- [ ] Try the `?branch_id=` override on `/products/search` directly with a branch ID the
+      current user isn't assigned to (and isn't company-wide); confirm it silently falls
+      back to the user's own active branch rather than leaking the other branch's stock.
+
+## 6r. Phase 3d: customer-credit cross-branch settlement
+
+Built exactly to the §5.5 design: a net-position report, not a per-transaction auto-transfer,
+with settlement reusing the existing `account_transfers` mechanism rather than a new one.
+
+**One correction to §5.4, found while building this:** "each new branch gets a default cash
+account auto-created" was never actually implemented — `BranchController::storeBranch()` only
+inserts into `branches`, nothing in `accounts`. So there's no guaranteed 1:1 branch→account
+mapping. The settlement UI is built around that reality: it links into the existing transfer
+form with the settlement context pre-tagged, but doesn't try to preselect "the" account for a
+branch, since no such single account is guaranteed to exist.
+
+**A real gap closed along the way:** `customer_transactions` (where deposits are logged) had no
+`branch_id` at all — only `sales.branch_id` was reliable. Added `customer_transactions.branch_id`
+(nullable, backfilled to Main Branch for existing rows) and stamped it with `activeBranchId()` in
+`processDeposit()`, mirroring how `sales.branch_id` is stamped. Only the `deposit` transaction
+type is stamped going forward — `payment`/`sale`/`refund`/`adjustment` rows don't need it, since
+the report's redemption side reads `sales.branch_id` directly (already reliable).
+
+**Report definition, deliberately not FIFO/lot-traced (per §5.5):**
+- **Issuance per branch** — `SUM(customer_transactions.amount)` where `transaction_type='deposit'`,
+  grouped by the new `branch_id`, for the selected period.
+- **Redemption per branch** — `SUM(sales.amount_paid)` where `payment_method='deposit'`, grouped
+  by `sales.branch_id`. This payment method already means "paid out of the customer's existing
+  balance" — `SaleController` caps `amount_paid` at `current_balance` on that path — so it's
+  exactly the amount of pooled credit that branch let get redeemed, with no new column needed.
+- **Net = issued − redeemed** per branch. Positive means the branch has handed out more credit
+  than got redeemed there (other branches effectively owe it); negative is the reverse.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_14_phase3d_customer_credit_settlement.sql` (new) | `account_transfers.charged_to` (`'customer'`/`'business'`, default `business`) and `account_transfers.settlement_type` (`'routine'`/`'customer_credit_balancing'`, default `routine`) — both exactly as specified in §5.5. `customer_transactions.branch_id` (nullable, FK, backfilled to 1). |
+| `app/controllers/CustomerController.php` (updated) | `processDeposit()` stamps `branch_id = activeBranchId()` on the `customer_transactions` insert (both the dated and undated variants). |
+| `app/controllers/ReportsController.php` (updated) | New `customerCreditSettlementReport()`, dispatched via `case 'customer-credit':`, following the exact `receivablesReport()`/`payablesReport()` pattern — `branchScopeSql()` on both queries, `$isPartialView` banner flag, period/date-range filters via the existing `calculateDateRange()` helper. |
+| `app/views/reports/customer_credit_settlement.php` (new) | Branch | Issued | Redeemed | Net table, partial-view banner, a "Record Settlement →" link per branch with a nonzero net. |
+| `app/controllers/FinancialAccountsController.php` (updated) | `executeTransfer()` now reads/validates `settlement_type` and `charged_to` from POST (defaulting to `routine`/`business` — a normal transfer's behavior is unchanged) and writes both into the `account_transfers` insert. The existing charge-handling logic (charges always debit the source account) is untouched — `charged_to='customer'` has no wired behavior yet, deliberately, matching §5.5's own recommendation not to bill the customer for a branch-balancing transfer. |
+| `app/views/financial_accounts/transfer.php` (updated) | Shows a small "Recording a customer-credit branch settlement" banner and a hidden `settlement_type` field when arrived at via `?settlement_type=customer_credit_balancing`; pre-fills notes from `?note=`. No account preselection (see the §5.4 correction above). No changes to the ordinary transfer flow. |
+| `app/controllers/ExportController.php` (updated) | New `customer-credit-settlement` export type, recomputing the exact same two queries as the report (never a cached number) — same rule every other export in this app follows. |
+| `public/index.php` (updated) | `/reports/customer-credit` added to `$planFeatureMap` (`advanced_reports`, Growth+) and to the existing `hasMultiBranch()` gate block alongside `/branches` and `/transfers`. |
+| `app/views/layout/header.php` (updated) | "Customer Credit Settlement" added to the Reports dropdown/section (desktop + mobile), inside the `advanced_reports` block and additionally gated by `hasMultiBranch()` — the only report link needing both. |
+
+**Not built / deliberately deferred:** no separate `logAudit()` call for a settlement — like any
+other transfer, the `account_transfers` row itself (now flagged with `settlement_type`) is already
+the audit-quality record, matching the existing "transfers aren't separately audit-logged"
+convention (§6i/6n). No `charged_to='customer'` behavior — the column exists for a possible future
+use case, not this flow. No auto-provisioning of a "the branch's account" — see the §5.4
+correction above.
+
+## 7g. Phase 3d testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first; confirm `account_transfers`
+      gains both new columns with the right defaults and `customer_transactions.branch_id`
+      backfills to `1` for every existing row.
+- [ ] At a single-branch install (or with multi-branch off), confirm the "Customer Credit
+      Settlement" nav link and the `/reports/customer-credit` route are both hidden/403 even
+      with `advanced_reports` on the plan.
+- [ ] Enable multi-branch, create a 2nd branch. Deposit money for a customer while your active
+      branch is Branch A; confirm the new deposit's `customer_transactions.branch_id = A`.
+- [ ] Switch active branch to Branch B; complete a sale for that same customer using payment
+      method "deposit" (spending the balance); confirm `sales.branch_id = B`.
+- [ ] View the report as a company-wide user for a date range covering both actions; confirm
+      Branch A shows issued > 0, Branch B shows redeemed > 0, and the net figures roughly offset.
+- [ ] View the same report as a user scoped only to Branch B; confirm only Branch B's row shows
+      and the partial-view banner appears.
+- [ ] Click "Record Settlement" from a branch row; confirm the transfer form shows the
+      settlement banner and pre-filled note; complete it and confirm the resulting
+      `account_transfers` row has `settlement_type = 'customer_credit_balancing'` and
+      `charged_to = 'business'`.
+- [ ] Confirm an ordinary transfer via `/financial-accounts/transfer` (not arrived at via the
+      report) still behaves exactly as before, writing `settlement_type = 'routine'`.
+- [ ] Export the report's CSV as both a company-wide and a branch-scoped viewer; confirm the
+      figures match the on-screen table exactly in both cases, and the partial-view note appears
+      only for the branch-scoped export.
+
+## 6s. Two-step stock transfers (dispatch → in transit → receive)
+
+Revisits the one-step decision from §6q's design section: transfers now move through
+`in_transit` → `completed` (received) or `cancelled`, rather than completing instantly.
+This also gives cancellation "for free" for the common mistake case — a transfer still
+`in_transit` can be cancelled outright, since the stock hasn't gone anywhere the
+destination could have already used it. A *post-receipt* undo (voiding a `completed`
+transfer) is a genuinely different, harder problem — the stock may have already been
+sold or moved on again — and stays out of scope here, same as before.
+
+**Dispatch** (`storeTransfer()`, modified): unchanged validation and source-branch
+deduction, but no longer credits the destination — it only inserts the `'out'` stock
+movement and creates the transfer as `status = 'in_transit'`.
+
+**Receive** (new): the destination side confirms how much actually arrived, per item —
+defaults to the dispatched quantity, editable down to 0, never above what was
+dispatched. Only the *received* quantity is credited to the destination and logged as
+an `'in'` movement. Any shortfall is simply recorded and shown on the transfer detail
+page — not investigated or approved, matching this app's usual "make it visible, don't
+build a workflow around it" bar.
+
+**Cancel** (new, only while `in_transit`): returns the full dispatched quantity to the
+source branch. No stock-availability check is needed first — dispatched stock sits
+untouched until received, so it can never go negative on the way back.
+
+**A new access rule, symmetric with the existing dispatch-side one:** 3c's rule was "you
+can only dispatch *from* a branch you're assigned to; anyone can pick any destination" —
+about *choosing* a destination at dispatch time. Confirming receipt is a different,
+physical-location action, so:
+- **Receive** requires assignment to the **destination** branch (or company-wide).
+- **Cancel** requires assignment to the **source** branch (or company-wide) — the same
+  right as dispatching, since cancelling undoes a dispatch.
+
+Viewing keeps its existing broader rule (visible if involved in either branch, or
+company-wide) — only the two new mutating actions get the tighter check.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_15_phase3c_two_step_transfers.sql` (new) | `stock_transfers.status` (`in_transit`/`completed`/`cancelled`, defaults to `completed` so pre-existing transfers — which already completed instantly under the old model — read as finished), `received_at`, `received_by`; `stock_transfer_items.quantity_received` (nullable). |
+| `app/controllers/TransferController.php` (updated) | `storeTransfer()` no longer credits the destination at dispatch. New `showReceiveForm()`/`receiveTransfer()` (`case 'receive':`) and `cancelTransfer()` (`case 'cancel':`). New `userCanActOnBranch()` helper for the symmetric access rule above. `viewTransfer()`/`fetchVisibleTransfer()` refactored to share one query (previously duplicated) and now also join the receiving user's name. |
+| `app/views/transfers/receive.php` (new) | Per-item "Received Qty" form, defaulting to the dispatched quantity. |
+| `app/views/transfers/view.php` (updated) | Status badge; "Receive"/"Cancel" actions shown only to a user who can act on the relevant branch; per-item shortfall display once received. |
+| `app/views/transfers/index.php` (updated) | Status badge per row. |
+| `app/views/transfers/create.php` (updated) | Copy update explaining stock won't reach the destination until received; button relabeled "Dispatch Transfer". |
+
+**Not built / deliberately deferred:** post-receipt reversal (voiding a `completed`
+transfer) — a harder problem since the received stock may already have been sold or
+moved on; would need the same kind of pre-validated, all-or-nothing guard
+`voidPurchase()` uses, applied to whatever's left of the received quantity. No
+loss-investigation workflow around a shortfall beyond making it visible.
+
+## 7h. Two-step transfers testing checklist
+
+- [ ] Run the migration against a copy of a client DB; confirm existing transfer rows
+      read as `✅ Completed` and behave unchanged.
+- [ ] Dispatch a new transfer; confirm the source branch's stock drops immediately but
+      the destination's stock is **unchanged** until received, and the transfer shows
+      `⏳ In Transit`.
+- [ ] Receive it in full as a user assigned to the destination branch; confirm the
+      destination's stock increases by the received quantity, status becomes
+      `✅ Completed`, and `stock_transfer.receive` appears in `/audit`.
+- [ ] Dispatch another transfer and receive it with a partial quantity; confirm only
+      the partial amount lands at the destination and the shortfall is visible on the
+      view page.
+- [ ] As a user assigned only to the source branch, confirm the "Receive Transfer"
+      action is unavailable on an in-transit transfer they can otherwise see; confirm
+      the reverse (no "Cancel Transfer") for a destination-only user.
+- [ ] Cancel an in-transit transfer; confirm the source branch's stock is fully
+      restored, status becomes `🚫 Cancelled`, and neither action remains available.
+- [ ] Confirm a `completed` or `cancelled` transfer offers neither Receive nor Cancel,
+      and that re-hitting `/transfers/receive/{id}` or `/transfers/cancel/{id}` directly
+      on one redirects with a clear error rather than acting again.
 
 ## 8. Open decisions for later (not blocking anything now)
 
