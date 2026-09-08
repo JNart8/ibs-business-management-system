@@ -331,6 +331,7 @@ if ($totalAlerts > 0):
         <?php endif; ?>
     </div>
 
+    <?php if (can('purchases.manage')): ?>
     <!-- Recent Purchases -->
     <div class="bg-white rounded-lg shadow-sm p-5">
         <div class="flex items-center justify-between mb-4">
@@ -351,7 +352,7 @@ if ($totalAlerts > 0):
                         </div>
                         <div class="text-right">
                             <div class="text-sm font-bold text-blue-600"><?= formatMoney($purchase['total_amount']) ?></div>
-                            <span class="text-xs px-2 py-0.5 rounded-full 
+                            <span class="text-xs px-2 py-0.5 rounded-full
                                 <?= $purchase['payment_status'] === 'paid' ? 'bg-green-100 text-green-700' : ($purchase['payment_status'] === 'partial' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700') ?>">
                                 <?= ucfirst($purchase['payment_status']) ?>
                             </span>
@@ -366,6 +367,7 @@ if ($totalAlerts > 0):
             </div>
         <?php endif; ?>
     </div>
+    <?php endif; ?>
 
 </div>
 
