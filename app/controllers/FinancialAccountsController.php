@@ -311,10 +311,40 @@ function updateAccount(Database $db, mixed $id)
     }
 
     if ($isActive === 0 && $account['is_active'] == 1) {
-        $otherActive = $db->fetchOne("SELECT COUNT(*) as c FROM accounts WHERE is_active = 1 AND id != ?", [$id]);
-        if (intval($otherActive['c'] ?? 0) === 0) {
+        // Per-branch, not global: a branch's cash account is only "covered"
+        // by an active account that's either its own (branch_id matches) or
+        // company-wide (branch_id IS NULL) — the same visibility rule
+        // accountBranchScopeSql() already applies everywhere else. The old
+        // check just counted active accounts anywhere, so deactivating a
+        // branch's only cash account was allowed as long as some OTHER
+        // branch still had one active — that branch would then have zero
+        // accounts to post sales/purchases to. For a company-wide account
+        // being deactivated, every branch is potentially affected, not
+        // just one — the query below checks all of them either way: when
+        // $account['branch_id'] is a specific branch it only checks that
+        // one (via the `? IS NULL OR` short-circuit), when it's NULL
+        // (company-wide) it checks every branch. Works unchanged for
+        // single-branch installs too, since `branches` always has exactly
+        // one row there. Excludes the suspense account from "coverage" —
+        // it's an internal reconciliation account, not a valid posting
+        // target, the same reason every payment/deposit picker in the app
+        // already excludes it (§6u).
+        $strandedBranches = $db->fetchAll("
+            SELECT b.id, b.name
+            FROM branches b
+            WHERE b.is_active = 1
+              AND (? IS NULL OR b.id = ?)
+              AND NOT EXISTS (
+                  SELECT 1 FROM accounts a
+                  WHERE a.is_active = 1 AND a.is_suspense = 0 AND a.id != ?
+                    AND (a.branch_id = b.id OR a.branch_id IS NULL)
+              )
+        ", [$account['branch_id'], $account['branch_id'], $id]);
+
+        if (!empty($strandedBranches)) {
+            $names = implode(', ', array_column($strandedBranches, 'name'));
             redirect(BASE_URL . '/financial-accounts/edit/' . $id, 'error',
-                'You cannot deactivate the last active account — sales and purchases need at least one to post to.');
+                'You cannot deactivate this account — ' . e($names) . ' would be left with no active account to post sales/purchases to.');
         }
     }
 

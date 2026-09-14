@@ -1516,6 +1516,35 @@ unaffected by the change.
 
 **Status:** done.
 
+## 6y. Gap closed: "last active account" check was global, not per-branch
+
+Flagged during §6t's plan review and deliberately left out of scope at the time:
+`FinancialAccountsController::updateAccount()`'s "can't deactivate the last active
+account" check counted active accounts globally. Since §6t made cash accounts
+branch-scoped, this let someone deactivate a specific branch's only cash account as
+long as *some other* branch still had one active — that branch would then have zero
+accounts to post sales/purchases to, with nothing stopping it.
+
+**Fix:** the check is now per-branch. An account is only "covering" a branch if it's
+that branch's own (`branch_id` matches) or company-wide (`branch_id IS NULL`) — the
+same visibility rule `accountBranchScopeSql()` already applies everywhere else. For a
+branch-scoped account being deactivated, only its own branch is checked; for a
+company-wide account, every active branch is checked (removing shared coverage could
+strand more than one). Works unchanged for single-branch installs too, since
+`branches` always has exactly one row there. Excludes the suspense account from
+"coverage" — it's an internal reconciliation account, not a valid posting target, the
+same reason every payment/deposit picker already excludes it (§6u).
+
+Verified live against `bms_db` (temporarily toggling the two company-wide accounts off
+and back on via the real UI, fully reversible): with no company-wide accounts active,
+deactivating Main Branch's cash account was correctly **blocked** — "Main Branch would
+be left with no active account to post sales/purchases to" — reproducing the exact gap
+described. Reactivating one company-wide account made the same deactivation succeed
+immediately after, confirming the check isn't overly restrictive once real coverage
+exists.
+
+**Status:** done.
+
 ## 8. Open decisions for later (not blocking anything now)
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.
