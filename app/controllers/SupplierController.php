@@ -894,9 +894,12 @@ function generateSupplierCode(Database $db)
         ORDER BY id DESC LIMIT 1
     ", ["$prefix$year-%"]);
 
-    $num = $last
-        ? intval(end(explode('-', $last['supplier_code']))) + 1
-        : 1;
+    if ($last) {
+        $parts = explode('-', $last['supplier_code']);
+        $num   = intval(end($parts)) + 1;
+    } else {
+        $num = 1;
+    }
 
     return $prefix . $year . '-' . str_pad($num, 4, '0', STR_PAD_LEFT);
 }

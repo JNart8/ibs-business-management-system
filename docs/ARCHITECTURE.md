@@ -1570,6 +1570,18 @@ instead of the old `0.00`/`-100.00`.
 
 **Status:** done.
 
+## 6za. Bug found via the IDE: `end(explode(...))` in `generateSupplierCode()`
+
+`end()` requires a by-reference argument; passing a function's return value directly
+(`end(explode('-', ...))`) triggers "Only variables should be passed by reference".
+Fixed to match the exact pattern `CustomerController::generateCustomerCode()` already
+uses correctly — explode into a `$parts` variable first, then `end($parts)`.
+
+Verified live against `bms_db`: created a new supplier and confirmed the code correctly
+incremented (`SUP-2026-0003` → `SUP-2026-0004`) with no warning.
+
+**Status:** done.
+
 ## 8. Open decisions for later (not blocking anything now)
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.
