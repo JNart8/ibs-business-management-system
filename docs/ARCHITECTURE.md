@@ -1315,6 +1315,24 @@ itself also stays unscoped for the same reason — it's the one function both pa
 
 **Status:** done. See §5.13 for the full writeup and live verification against `bms_db`.
 
+## 6u. Pre-existing gap closed: suspense account leaking into payment pickers
+
+While testing POS with a branch-scoped user (§6t), the suspense account (`type = 'bank'`,
+`is_suspense = 1`) showed up as a normal bank payment option. `CustomerController`'s deposit
+picker and `SuspenseController`'s own resolution picker already excluded it
+(`AND is_suspense = 0`), but every other payment/deposit picker — POS, purchase payment,
+supplier deposit, direct delivery, expense creation, and their matching POST-validation
+queries — never did. Not introduced by §6t's work (predates `accounts.branch_id` entirely),
+but the same files were already open, so fixed alongside it: `SaleController.php`,
+`PurchaseController.php`, `SupplierController.php`, `DistributorController.php`,
+`ExpensesController.php`.
+
+`FinancialAccountsController::executeTransfer()` and the admin account-management views
+deliberately keep showing the suspense account — Transfer is the legitimate way to move
+funds out of suspense outside the dedicated resolution flow.
+
+**Status:** done.
+
 ## 8. Open decisions for later (not blocking anything now)
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.

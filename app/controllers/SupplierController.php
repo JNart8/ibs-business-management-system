@@ -303,7 +303,7 @@ function showSupplierDepositForm($db, $id)
     $accounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1 $acctScopeSql
+        WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY type ASC, name ASC
     ", $acctScopeParams);
 
@@ -354,7 +354,7 @@ function processSupplierDeposit($db, $id)
     }
 
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$account) {
         redirect(BASE_URL . '/suppliers/deposit/' . $id, 'error', 'Selected account not found or inactive');
         return;
@@ -556,7 +556,7 @@ function showEditSupplierDepositForm($db, $txId)
     $accounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1 $acctScopeSql
+        WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY type ASC, name ASC
     ", $acctScopeParams);
 
@@ -634,7 +634,7 @@ function updateSupplierDeposit($db, $txId)
     }
 
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$newAccountId], $acctScopeParams));
+    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$newAccountId], $acctScopeParams));
     if (!$newAccount) {
         redirect(BASE_URL . '/suppliers/edit-deposit/' . $txId, 'error', 'Selected account not found or inactive');
         return;

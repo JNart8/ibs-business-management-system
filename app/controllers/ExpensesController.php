@@ -99,7 +99,7 @@ function listExpenses($db)
 function showExpenseForm($db)
 {
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
+    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
     $categories = $db->fetchAll("SELECT DISTINCT category FROM expenses ORDER BY category ASC");
     $pageTitle = 'Record Expense';
     include APP_PATH . '/views/expenses/create.php';
@@ -132,7 +132,7 @@ function storeExpense($db)
     }
 
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$account) {
         redirect(BASE_URL . '/expenses/create', 'error', 'Selected account is invalid or inactive.');
     }

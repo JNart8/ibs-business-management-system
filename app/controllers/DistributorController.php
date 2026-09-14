@@ -133,7 +133,7 @@ function showCreateDistributorDelivery($db)
     $financialAccounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1 $acctScopeSql
+        WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY name ASC
     ", $acctScopeParams);
 
@@ -196,14 +196,14 @@ function completeDistributorDelivery($db)
     // still name another branch's account without this check.
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     if ($supplierAmountPaid > 0 && $supplierAccountId > 0) {
-        $supplierAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$supplierAccountId], $acctScopeParams));
+        $supplierAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$supplierAccountId], $acctScopeParams));
         if (!$supplierAccount) {
             echo json_encode(['success' => false, 'message' => 'Selected supplier payment account is invalid or inactive']);
             return;
         }
     }
     if ($customerAmountPaid > 0 && $customerAccountId > 0) {
-        $customerAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$customerAccountId], $acctScopeParams));
+        $customerAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$customerAccountId], $acctScopeParams));
         if (!$customerAccount) {
             echo json_encode(['success' => false, 'message' => 'Selected customer payment account is invalid or inactive']);
             return;

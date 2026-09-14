@@ -130,7 +130,7 @@ function showPOS($db)
     // Financial accounts for the payment account selector
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY type ASC, name ASC",
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
         $acctScopeParams
     );
 
@@ -642,7 +642,7 @@ function completeSale($db)
                 $expected  = $typeMap[$paymentMethod] ?? null;
                 [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
                     array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
@@ -677,7 +677,7 @@ function completeSale($db)
         // Fetch updated financial accounts to update POS state
         [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
         $financialAccounts = $db->fetchAll(
-            "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY type ASC, name ASC",
+            "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
             $acctScopeParams
         );
 
