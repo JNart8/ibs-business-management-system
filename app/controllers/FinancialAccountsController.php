@@ -151,10 +151,12 @@ function executeTransfer($db)
     $charges       = safeFloat($_POST['charges'] ?? 0.00);
     $notes         = trim($_POST['notes'] ?? '');
 
-    $chargedTo = $_POST['charged_to'] ?? 'business';
-    if (!in_array($chargedTo, ['customer', 'business'], true)) {
-        $chargedTo = 'business';
-    }
+    // Transfers are always charged to the business, never the customer — a
+    // deliberate decision, not a placeholder. `charged_to` stays in the schema
+    // (and the INSERT below) since account_transfers already has the column,
+    // but it's no longer POST-configurable — no UI ever exposed a choice here,
+    // so this was always resolving to 'business' in practice anyway.
+    $chargedTo = 'business';
     $settlementType = $_POST['settlement_type'] ?? 'routine';
     if (!in_array($settlementType, ['routine', 'customer_credit_balancing'], true)) {
         $settlementType = 'routine';

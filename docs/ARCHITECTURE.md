@@ -153,8 +153,9 @@ specific sale. It's significant engineering effort for a number nobody actually 
 that granularity — the business only cares about the net branch position, not the
 provenance of specific banknotes.
 
-**Status:** design only — not yet built. Small, low-risk addition once `accounts.branch_id`
-exists; fold into the Phase 3 build rather than treating it as a separate phase.
+**Status:** done — see §6r. **Decided (later):** `charged_to = 'customer'` will not be built at
+all — transfers are always charged to the business, full stop, not just "recommended away from"
+for branch-balancing specifically as originally scoped above. See §6r's addendum.
 
 ### 5.6 Granular permissions (Enterprise)
 
@@ -1188,9 +1189,15 @@ the report's redemption side reads `sales.branch_id` directly (already reliable)
 **Not built / deliberately deferred:** no separate `logAudit()` call for a settlement — like any
 other transfer, the `account_transfers` row itself (now flagged with `settlement_type`) is already
 the audit-quality record, matching the existing "transfers aren't separately audit-logged"
-convention (§6i/6n). No `charged_to='customer'` behavior — the column exists for a possible future
-use case, not this flow. No auto-provisioning of a "the branch's account" — see the §5.4
+convention (§6i/6n). No auto-provisioning of a "the branch's account" — see the §5.4
 correction above.
+
+**Decided:** `charged_to='customer'` will not be built — account transfers are always charged to
+the business, full stop. Not a "someday" feature at all; the column stays in the schema (default
+`'business'`) since it costs nothing to leave, but `executeTransfer()` should stop treating it as
+POST-configurable. No UI ever exposed it anyway (`transfer.php` has no `charged_to` field), so
+`$_POST['charged_to'] ?? 'business'` was already always resolving to `'business'` in practice —
+this closes the ambiguity in the code/docs, not a behavior change for any real transfer.
 
 ## 7g. Phase 3d testing checklist
 
@@ -1337,5 +1344,9 @@ funds out of suspense outside the dedicated resolution flow.
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.
 - `branch_product_prices` override table — only if a client needs per-branch pricing.
-- Whether staff can belong to more than one branch (would need a pivot table instead of
-  a single `users.branch_id`) — decide when designing the Phase 3 login/POS flow.
+- ~~Whether staff can belong to more than one branch~~ — **decided: no, one branch per staff
+  member.** This entry originally assumed the pivot table didn't exist yet; it was actually
+  built during Phase 3 (`user_branches`, §6h), and `views/users/create.php`/`edit.php`
+  (`name="branch_ids[]"`) currently let an admin check *multiple* branches for any user,
+  staff included — that now contradicts the decision and needs enforcing, not just noting
+  here. Not yet fixed as of this entry — flagging as a real follow-up, not a "someday."
