@@ -1413,6 +1413,12 @@ function processPayment($db, $id)
  */
 function voidSale($db, $id)
 {
+    // Check permissions - requires sales.edit permission
+    if (!can('sales.edit')) {
+        redirect(BASE_URL . '/sales', 'error', 'You do not have permission to void sales');
+        return;
+    }
+
     [$scopeSql, $scopeParams] = branchScopeSql('');
     $sale = $db->fetchOne("SELECT * FROM sales WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$sale) {

@@ -48,7 +48,7 @@ if (!$isPublic && isLoggedIn()) {
 // ── Permission-based access control ───────────────────────────
 // Define which permission each route prefix requires. Anything
 // not listed here is available to any logged-in user (matches
-// today's behavior for /pos, /sales, /dashboard, /reports, /account).
+// today's behavior for /dashboard, /reports, /account).
 // See app/config/plans.php for plan-tier gating (a separate,
 // orthogonal system — a route can require both a permission AND
 // a plan feature).
@@ -57,6 +57,11 @@ if (!$isPublic && isLoggedIn()) {
 // previously reachable by any logged-in user via direct URL (the
 // dashboard only *hid* the button for cashiers, it didn't actually
 // block the route). See ARCHITECTURE.md §5.10.
+//
+// NOTE: '/pos' and '/sales' were added later — a locked-down custom
+// role (products.manage + stock.manage only) could still open Sales
+// and ring up/void sales via direct URL, since neither route was
+// ever listed here. See ARCHITECTURE.md §5.11.
 $permissionRestrictions = [
     '/users'                => 'users.manage',
     '/settings'             => 'settings.manage',
@@ -75,6 +80,8 @@ $permissionRestrictions = [
     '/branches'             => 'branches.manage',
     '/audit'                => 'audit.view',
     '/transfers'            => 'stock.transfer',
+    '/pos'                  => 'sales.access',
+    '/sales'                => 'sales.access',
 ];
 
 if (!$isPublic && isLoggedIn()) {

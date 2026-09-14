@@ -289,6 +289,7 @@ if ($totalAlerts > 0):
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
+    <?php if (can('sales.access')): ?>
     <!-- Recent Sales -->
     <div class="bg-white rounded-lg shadow-sm p-5">
         <div class="flex items-center justify-between mb-4">
@@ -330,6 +331,7 @@ if ($totalAlerts > 0):
             </div>
         <?php endif; ?>
     </div>
+    <?php endif; ?>
 
     <?php if (can('purchases.manage')): ?>
     <!-- Recent Purchases -->

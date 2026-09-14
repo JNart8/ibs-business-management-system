@@ -224,10 +224,10 @@
                         </div>
                         <?php endif; ?>
 
-                        <!-- Finance Dropdown — /sales has no permission gate of its own
-                             (open to any logged-in user), so this always shows at least
-                             that; every other item is hidden unless can() actually allows
-                             the route it links to, so there's never a dead-end link here. -->
+                        <?php if (can('sales.access') || can('purchases.manage') || (planAllows('distributor') && can('distributor.manage')) || can('transactions.manage') || can('financial_accounts.access') || (planAllows('expenses') && can('expenses.manage')) || (planAllows('suspense') && can('suspense.manage'))): ?>
+                        <!-- Finance Dropdown — every item (Sales included) is hidden
+                             unless can() actually allows the route it links to, so
+                             there's never a dead-end link here. -->
                         <div class="relative dropdown">
                             <button
                                 class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/sales', '/purchases', '/transactions', '/financial-accounts', '/expenses', '/distributor', '/suspense'], $currentPath) ?>">
@@ -237,9 +237,11 @@
                                 </svg>
                             </button>
                             <div class="dropdown-content">
+                                <?php if (can('sales.access')): ?>
                                 <a href="<?= BASE_URL ?>/sales" class="dropdown-item">
                                     💰 Sales
                                 </a>
+                                <?php endif; ?>
                                 <?php if (can('purchases.manage')): ?>
                                 <a href="<?= BASE_URL ?>/purchases" class="dropdown-item">
                                     🛍️ Purchases
@@ -272,6 +274,7 @@
                                 <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
                         <!-- Reports Dropdown -->
                         <div class="relative dropdown">
@@ -510,9 +513,9 @@
                         </div>
                         <?php endif; ?>
 
-                        <!-- Finance Section (Mobile) — /sales has no permission gate
-                             of its own, so this always shows at least that; every
-                             other item is hidden unless can() allows it. -->
+                        <?php if (can('sales.access') || can('purchases.manage') || (planAllows('distributor') && can('distributor.manage')) || can('transactions.manage') || can('financial_accounts.access') || (planAllows('expenses') && can('expenses.manage')) || (planAllows('suspense') && can('suspense.manage'))): ?>
+                        <!-- Finance Section (Mobile) — every item (Sales included) is
+                             hidden unless can() actually allows the route it links to. -->
                         <div class="flex flex-col">
                             <button @click="financeOpen = !financeOpen"
                                 class="nav-link flex items-center justify-between w-full text-left">
@@ -524,11 +527,13 @@
                                 </svg>
                             </button>
                             <div x-show="financeOpen" x-cloak class="pl-4 mt-1 space-y-1">
+                                <?php if (can('sales.access')): ?>
                                 <a href="<?= BASE_URL ?>/sales"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💰 Sales
                                 </a>
+                                <?php endif; ?>
                                 <?php if (can('purchases.manage')): ?>
                                 <a href="<?= BASE_URL ?>/purchases"
                                     class="nav-link block"
@@ -573,6 +578,7 @@
                                 <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
                         <!-- Reports Section (Mobile) -->
                         <div class="flex flex-col">

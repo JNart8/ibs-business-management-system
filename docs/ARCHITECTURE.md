@@ -181,6 +181,44 @@ impact should be limited to closing a URL-guessing gap, not to anyone's normal w
 
 **Status:** done. See §6.
 
+### 5.11 Gap found via QA checklist: `/sales` and `/pos` had no permission of their own
+
+A QA pass on a fully locked-down custom role ("Inventory Clerk": `products.manage` +
+`stock.manage` only, nothing else) found that the role could still open `/sales`, ring up
+new sales from `/pos`, and void existing ones — none of Sales, Purchases, Customers, or
+Finance were supposed to be reachable. Purchases/Customers/Finance were correctly blocked
+(§5.10 and the Phase 2 seed already covered those); Sales was not. `header.php` even carried
+a comment stating this was deliberate ("`/sales` has no permission gate of its own... this
+always shows at least that") — true at the time of §8f6cd76, but never actually correct from
+a "restricted custom role" standpoint, since neither `public/index.php`'s
+`$permissionRestrictions` map nor the nav ever gated it.
+
+Separately, and worse: `SaleController.php`'s `voidSale()` had **no permission check at
+all**, for any role. §6b's table claims "both edit/void checks now `can('sales.edit')`" —
+true for `showEditForm()`/`updateSale()`, but `voidSale()` never actually had the check (or
+lost it at some point after Phase 2 shipped). This meant *any* logged-in user, not just a
+restricted custom role, could void a sale — reversing stock and customer/account balances —
+with zero authorization check.
+
+**Fix:**
+- Added `voidSale($db, $id) { if (!can('sales.edit')) { ...redirect...; return; } ... }`,
+  matching the existing pattern in `showEditForm()`/`updateSale()`.
+- Added a new `sales.access` permission ("Access Sales / POS") and included `/sales` and
+  `/pos` in `$permissionRestrictions` in `public/index.php`.
+- `header.php` (desktop + mobile): the Sales link is now wrapped in `can('sales.access')`
+  like every other Finance item, and the whole Finance dropdown/section is now hidden
+  entirely if the viewer has none of its permissions — same pattern §8f6cd76 already applied
+  to the People dropdown.
+- `sales.access` is granted to all three system roles (Admin/Staff/Cashier) by default, since
+  every existing account could already reach Sales/POS — this closes the gap for new custom
+  roles without changing behavior for any existing account. `sales.edit` grants are
+  unchanged (Admin only by default), so this fix also quietly restores the intended
+  restriction on who can void a sale — Staff/Cashier accounts can no longer void via direct
+  URL, matching what §6b already documented as the intended (but not actually enforced)
+  behavior.
+
+**Status:** done. See `database/migrations/2026_09_14_sales_access_permission.sql`.
+
 ### 5.7 Multi-branch build scope
 
 Confirmed as a **full build**: separate stock/sales/purchases per branch, plus transfers.
@@ -313,7 +351,7 @@ because there is only one branch per install right now. That's intentional — s
 | `public/index.php` (updated) | `$roleRestrictions` replaced with a permission-based `$permissionRestrictions` map; `/roles` added to the dispatch table and gated by `roles.manage` + the `advanced_permissions` plan feature. |
 | `app/controllers/UserController.php` (updated) | Admin-only gate now `can('users.manage')`; create/edit now read/write `role_id` (validated against `assignableRoles()`), keeping the legacy `role` enum in sync for the few remaining cosmetic reads. |
 | `app/controllers/SettingsController.php` (updated) | Admin-only gate now `can('settings.manage')`. |
-| `app/controllers/SaleController.php` (updated) | Back-date check now `can('sales.backdate')`; both edit/void checks now `can('sales.edit')` (previously referenced a `'manager'` role that was never actually assignable). |
+| `app/controllers/SaleController.php` (updated) | Back-date check now `can('sales.backdate')`; both edit/void checks now `can('sales.edit')` (previously referenced a `'manager'` role that was never actually assignable). Void's check was later found missing entirely — see §5.11. |
 | `app/views/users/create.php`, `edit.php` (updated) | Role dropdown now built from `assignableRoles()` — shows custom roles too when the plan allows it — and posts `role_id` instead of a hardcoded string. |
 | `app/views/users/index.php`, `app/views/account/index.php` (updated) | Role badge now shows the real role name via `role_id` (so custom role names display correctly), not just the 3-value enum. |
 | `app/views/dashboard/index.php`, `sales/index.php`, `sales/pos.php` (updated) | UI conditionals converted from hardcoded role checks to `can()`. |
