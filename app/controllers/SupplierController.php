@@ -335,7 +335,7 @@ function processSupplierDeposit($db, $id)
     $dateSql = null;
     if (!empty($dateStr)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $dateStr);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/suppliers/deposit/' . $id, 'error', 'Invalid date — must be today or a past date');
             return;
         }
@@ -618,7 +618,7 @@ function updateSupplierDeposit($db, $txId)
     $newDateSql = null;
     if (!empty($newDateStr)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $newDateStr);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/suppliers/edit-deposit/' . $txId, 'error', 'Invalid date — must be today or a past date');
             return;
         }

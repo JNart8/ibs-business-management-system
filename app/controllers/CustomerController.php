@@ -485,7 +485,7 @@ function processDeposit($db, $id)
     $depositDateSql = null;
     if (!empty($depositDate)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $depositDate);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/customers/deposit/' . $id, 'error', 'Invalid deposit date — must be today or a past date');
             return;
         }
@@ -1015,7 +1015,7 @@ function updateCustomerDeposit($db, $txId)
     $newDepositDateSql = null;
     if (!empty($newDepositDate)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $newDepositDate);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/customers/edit-deposit/' . $txId, 'error', 'Invalid deposit date — must be today or a past date');
             return;
         }

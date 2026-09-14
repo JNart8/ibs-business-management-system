@@ -963,7 +963,7 @@ function updateSale($db, $id)
             redirect(BASE_URL . '/sales/edit/' . $id, 'error', 'Invalid sale date format');
             return;
         }
-        if ($dateObj > new DateTime('today')) {
+        if ($dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/sales/edit/' . $id, 'error', 'Sale date cannot be in the future');
             return;
         }

@@ -692,7 +692,7 @@ function processPurchasePayment($db, $id)
     $paymentDateSql = null;
     if (!empty($paymentDate)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $paymentDate);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/purchases/pay/' . $id, 'error', 'Invalid payment date — must be today or a past date');
             return;
         }
