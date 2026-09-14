@@ -138,13 +138,13 @@ function storeUser(Database $db)
     $newUserId = $db->lastInsertId();
 
     if (hasMultiBranch()) {
-        saveUserBranches($db, $newUserId, $_POST['branch_ids'] ?? [], $_POST['primary_branch_id'] ?? null);
+        saveUserBranches($db, $newUserId, $_POST['branch_id'] ?? null);
     } else {
         // Multi-branch isn't active for this install — everyone implicitly
         // works at Main Branch. Keep the new user consistent with that.
         $mainBranch = $db->fetchOne("SELECT id FROM branches ORDER BY id ASC LIMIT 1");
         if ($mainBranch) {
-            saveUserBranches($db, $newUserId, [$mainBranch['id']], $mainBranch['id']);
+            saveUserBranches($db, $newUserId, $mainBranch['id']);
         }
     }
 
@@ -209,7 +209,7 @@ function updateUser(Database $db, mixed $id)
     ", [$newUsername, $fullName, $legacyRole, $roleId, $branchScope, $isActive, $id]);
 
     if (hasMultiBranch()) {
-        saveUserBranches($db, $id, $_POST['branch_ids'] ?? [], $_POST['primary_branch_id'] ?? null);
+        saveUserBranches($db, $id, $_POST['branch_id'] ?? null);
     }
 
     logAudit('user.update', 'user', $id, [
@@ -230,38 +230,32 @@ function updateUser(Database $db, mixed $id)
 }
 
 /**
- * Replace a user's branch assignments with the given list, and set
- * their `branch_id` (the "currently active" branch POS/sales read
- * from, no picker shown) to the chosen primary — falling back to the
- * first assigned branch if no primary was submitted, and to Main
- * Branch if no branches were assigned at all (shouldn't normally
- * happen, since the UI always requires picking at least one).
+ * Set a user's single branch assignment (also their `branch_id` — the
+ * "currently active" branch POS/sales read from). One branch per user,
+ * always — a company-wide user (branch_scope = 'all') still needs
+ * exactly one "home" branch for session/POS defaulting even though
+ * their actual access isn't limited to it. Falls back to Main Branch
+ * (lowest id) if the submitted id isn't a real active branch, matching
+ * the old silent-fallback behavior rather than adding a hard error.
  */
-function saveUserBranches(Database $db, $userId, $branchIds, $primaryBranchId)
+function saveUserBranches(Database $db, $userId, $branchId)
 {
-    $validBranchIds = array_column($db->fetchAll("SELECT id FROM branches WHERE is_active = 1"), 'id');
-    $branchIds = array_values(array_intersect(array_map('intval', $branchIds), $validBranchIds));
+    $branchId = intval($branchId ?? 0);
+    $valid = $branchId > 0 && $db->fetchOne("SELECT id FROM branches WHERE id = ? AND is_active = 1", [$branchId]);
 
-    if (empty($branchIds)) {
-        $fallback = $db->fetchOne("SELECT id FROM branches ORDER BY id ASC LIMIT 1");
-        $branchIds = $fallback ? [$fallback['id']] : [];
-    }
-
-    $primaryBranchId = intval($primaryBranchId ?? 0);
-    if (!in_array($primaryBranchId, $branchIds, true)) {
-        $primaryBranchId = $branchIds[0] ?? null;
+    if (!$valid) {
+        $fallback = $db->fetchOne("SELECT id FROM branches WHERE is_active = 1 ORDER BY id ASC LIMIT 1");
+        $branchId = $fallback ? $fallback['id'] : null;
     }
 
     $db->query("DELETE FROM user_branches WHERE user_id = ?", [$userId]);
-    foreach ($branchIds as $branchId) {
-        $db->query(
-            "INSERT INTO user_branches (user_id, branch_id, is_primary) VALUES (?, ?, ?)",
-            [$userId, $branchId, $branchId === $primaryBranchId ? 1 : 0]
-        );
-    }
 
-    if ($primaryBranchId) {
-        $db->query("UPDATE users SET branch_id = ? WHERE id = ?", [$primaryBranchId, $userId]);
+    if ($branchId) {
+        $db->query(
+            "INSERT INTO user_branches (user_id, branch_id, is_primary) VALUES (?, ?, 1)",
+            [$userId, $branchId]
+        );
+        $db->query("UPDATE users SET branch_id = ? WHERE id = ?", [$branchId, $userId]);
     }
 }
 

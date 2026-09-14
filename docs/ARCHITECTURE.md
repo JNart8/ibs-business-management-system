@@ -1476,13 +1476,48 @@ both as a direct URL hit, not just a hidden nav link.
 
 **Status:** done.
 
+## 6x. Enforced: one branch per user
+
+Closes the §8 note below. You'd already decided a staff member should belong to exactly
+one branch, while explicitly preserving two capabilities that already exist: a
+company-wide admin with full overview, and a branch-level admin restricted to only
+their own branch. That distinction is the existing `branch_scope` column (`'assigned'`
+vs `'all'`, `isCompanyWide()`) — nothing new needed there. What wasn't enforced was the
+"one branch" part: `views/users/create.php`/`edit.php` let an admin check *multiple*
+branches for any user via `branch_ids[]` checkboxes, and one real user in `bms_db`
+(`ksafo`, `branch_scope='assigned'`) was assigned to 2 branches.
+
+**Scope:** the one-branch cap applies to *every* user, not just `branch_scope='assigned'`
+ones. Checked the header branch-switcher (`views/layout/header.php` ~379) before deciding
+this — it only offers a dropdown when a user has more than one assigned branch, which was
+only ever meaningful for `'assigned'`-scope users (a company-wide user's access isn't
+gated by branch count at all, and none had more than one in `bms_db` anyway). Capping
+everyone at one also simplifies the form considerably: no more separate "which one is
+primary" picker, since there's only ever one branch to begin with.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_09_14_single_branch_per_user.sql` (new) | For any user assigned to more than one branch, keeps only their primary-marked one (falling back to `users.branch_id`, then the lowest `branch_id`, if none marked primary) and re-syncs `is_primary`/`users.branch_id` afterward. Generic, not a one-off fix for `ksafo`. |
+| `app/controllers/UserController.php` (`saveUserBranches()`) | Signature simplified from `($db, $userId, $branchIds, $primaryBranchId)` to `($db, $userId, $branchId)` — single value in, single `user_branches` row out (`is_primary = 1`), `users.branch_id` synced. Only caller is this file (3 call sites, all here), so the signature change was safe. `storeUser()`/`updateUser()` now read `$_POST['branch_id']` instead of `branch_ids[]`/`primary_branch_id`. |
+| `app/views/users/create.php`, `edit.php` (updated) | Branch checkbox list + separate "primary" radio column replaced with a single radio-button list, `name="branch_id"`. |
+
+**Not touched:** `views/layout/header.php`'s branch switcher — it only renders its dropdown
+when `count($myBranches) > 1`, which will simply never be true again going forward. No
+code changes needed there; it degrades gracefully to the existing single-branch display.
+
+Verified live against `bms_db`: the migration left `ksafo` with exactly their primary
+branch (Kasoa); creating a new branch-level user through the actual form produced one
+consistent `user_branches` row; editing a user's branch *replaced* the assignment rather
+than adding to it (confirmed exactly one row survives); a branch-scoped user's data
+isolation (`financial-accounts` showing only their own branch's cash account) was
+unaffected by the change.
+
+**Status:** done.
+
 ## 8. Open decisions for later (not blocking anything now)
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.
 - `branch_product_prices` override table — only if a client needs per-branch pricing.
-- ~~Whether staff can belong to more than one branch~~ — **decided: no, one branch per staff
-  member.** This entry originally assumed the pivot table didn't exist yet; it was actually
-  built during Phase 3 (`user_branches`, §6h), and `views/users/create.php`/`edit.php`
-  (`name="branch_ids[]"`) currently let an admin check *multiple* branches for any user,
-  staff included — that now contradicts the decision and needs enforcing, not just noting
-  here. Not yet fixed as of this entry — flagging as a real follow-up, not a "someday."
+- ~~Whether staff can belong to more than one branch~~ — **decided and built, see §6x.**
