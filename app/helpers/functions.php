@@ -567,24 +567,18 @@ function enforceSingleSession()
         'reason' => 'Signed in from another device/session',
     ]);
 
+    // Clear auth state but keep this same session (and its cookie) alive
+    // so the flash message actually reaches /login. An earlier version of
+    // this function expired the cookie and called session_destroy() first
+    // (like processLogout() does), then tried to session_start() a fresh
+    // session under the same ID to carry the flash message — but PHP
+    // doesn't reliably re-send a Set-Cookie for a reused ID once one has
+    // already been expired in the same response, so the browser was left
+    // with no session cookie at all and the flash message never made it
+    // to the login page (QA: "signed out, but no explanatory message").
+    // Simply clearing $_SESSION (as redirect() already does for every
+    // other flash message) avoids the whole cookie/destroy dance.
     $_SESSION = [];
-
-    if (ini_get('session.use_cookies')) {
-        $params = session_get_cookie_params();
-        setcookie(
-            session_name(),
-            '',
-            time() - 42000,
-            $params['path'],
-            $params['domain'],
-            $params['secure'],
-            $params['httponly']
-        );
-    }
-    session_destroy();
-
-    // Start a new session so the flash message survives to the login page.
-    session_start();
     $_SESSION['flash_type'] = 'info';
     $_SESSION['flash_message'] = 'You have been signed out because this account was signed in from another device.';
 
