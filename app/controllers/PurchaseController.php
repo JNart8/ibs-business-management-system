@@ -1074,6 +1074,7 @@ function updatePurchase(Database $db, mixed $id)
         $db->beginTransaction();
 
         // 1. Revert stock and average cost logic
+        $newAverageCostByProduct = [];
         foreach ($allProductIds as $pid) {
             $p = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$pid]);
             $currentStock   = floatval($p['current_stock']); // company-wide total, for cost calc only
@@ -1100,6 +1101,7 @@ function updatePurchase(Database $db, mixed $id)
             } else {
                 $newAverageCost = $newCost;
             }
+            $newAverageCostByProduct[$pid] = $newAverageCost;
 
             // Update product's cost fields (company-wide; not branch-specific)
             $db->query("
@@ -1158,10 +1160,18 @@ function updatePurchase(Database $db, mixed $id)
                 VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
             ", [$p['id'], $vi['qty'], $id, $currentStockBefore, $currentStockAfter, $userId, $purchaseBranchId]);
 
-            // Log cost history
+            // Log cost history — $newAverageCostByProduct was populated per
+            // product id in the loop above (§1, where the same value was
+            // also written to products.average_cost), not re-fetched from
+            // the database here. Previously referenced an undefined
+            // $updatedProduct, which silently coerced to floatval(null) = 0
+            // — every edited purchase recorded new_cost as 0 and
+            // change_percent as a flat -100% in product_cost_history,
+            // regardless of the actual new cost.
+            $newAvgCost = $newAverageCostByProduct[$p['id']] ?? 0;
             $oldAvgCost = isset($oldItemsMap[$p['id']]) ? floatval($oldItemsMap[$p['id']]['unit_cost']) : floatval($p['average_cost']);
             $changePercent = $oldAvgCost > 0
-                ? ((floatval($updatedProduct['average_cost']) - $oldAvgCost) / $oldAvgCost) * 100
+                ? (($newAvgCost - $oldAvgCost) / $oldAvgCost) * 100
                 : 0;
 
             $db->query("
@@ -1173,7 +1183,7 @@ function updatePurchase(Database $db, mixed $id)
                 $p['id'],
                 $id,
                 $oldAvgCost,
-                floatval($updatedProduct['average_cost']),
+                $newAvgCost,
                 $vi['unitCost'],
                 $vi['qty'],
                 $changePercent,

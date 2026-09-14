@@ -1545,6 +1545,31 @@ exists.
 
 **Status:** done.
 
+## 6z. Bug found via the IDE, not testing: undefined `$updatedProduct` silently corrupted cost history
+
+Surfaced by the IDE's "undefined variable" flag, not by testing — a genuine
+silent-corruption bug, not just static-analysis noise like most of §6x/§6y's cleanup.
+
+**`PurchaseController::updatePurchase()` — undefined `$updatedProduct`.** Editing a
+purchase logs `product_cost_history` using `floatval($updatedProduct['average_cost'])`
+for `new_cost`, but `$updatedProduct` was never assigned anywhere in the function — a
+leftover from an incomplete implementation. `floatval(null)` silently evaluates to `0`,
+so **every purchase edit recorded `new_cost` as `0` and `change_percent` as a flat
+`-100%`** in `product_cost_history`, regardless of the real new cost. The correct value
+was being computed two loops earlier (`$newAverageCost`, written to
+`products.average_cost`) but never carried forward to where cost history gets logged.
+
+**Fix:** capture each product's computed average cost into a `$newAverageCostByProduct`
+map in the first loop, keyed by product id, and read from that map in the second loop
+instead of the undefined variable.
+
+Verified live against `bms_db`: created a test purchase (10 units @ GHS 40, average
+cost → 40), edited it to GHS 60/unit, and confirmed `product_cost_history` now records
+`new_cost = 60.00` and `change_percent = 50.00` (matching `products.average_cost`),
+instead of the old `0.00`/`-100.00`.
+
+**Status:** done.
+
 ## 8. Open decisions for later (not blocking anything now)
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.
