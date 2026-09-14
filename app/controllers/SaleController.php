@@ -128,8 +128,10 @@ function showPOS($db)
     );
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     $pageTitle = 'Point of Sale';
@@ -638,9 +640,10 @@ function completeSale($db)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }
@@ -672,8 +675,10 @@ function completeSale($db)
         $saleDate = date('Y-m-d H:i:s');
 
         // Fetch updated financial accounts to update POS state
+        [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
         $financialAccounts = $db->fetchAll(
-            "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+            "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY type ASC, name ASC",
+            $acctScopeParams
         );
 
         // Fetch updated customer details to update POS state
@@ -1132,7 +1137,10 @@ function updateSale($db, $id)
                 $userId
             ]);
 
-            // Adjust financial account balance
+            // Adjust financial account balance — resolve by the sale's own
+            // branch, not the editing admin's active branch, since cash
+            // accounts are branch-scoped (an admin editing a Kasoa sale
+            // while active at Main must still hit Kasoa's cash account).
             if ($paymentDifference > 0) {
                 recordAccountTransaction(
                     $db,
@@ -1141,7 +1149,9 @@ function updateSale($db, $id)
                     'deposit',
                     'sale',
                     $id,
-                    "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")"
+                    "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
+                    null,
+                    $sale['branch_id'] ?? null
                 );
             } else {
                 recordAccountTransaction(
@@ -1151,7 +1161,9 @@ function updateSale($db, $id)
                     'withdrawal',
                     'sale',
                     $id,
-                    "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")"
+                    "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
+                    null,
+                    $sale['branch_id'] ?? null
                 );
             }
         }

@@ -129,12 +129,13 @@ function showCreateDistributorDelivery($db)
     ", [activeBranchId()]);
 
     // Financial accounts
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1
+        WHERE is_active = 1 $acctScopeSql
         ORDER BY name ASC
-    ");
+    ", $acctScopeParams);
 
     $pageTitle = 'Direct Delivery Entry';
     include APP_PATH . '/views/distributor/create.php';
@@ -188,6 +189,25 @@ function completeDistributorDelivery($db)
     if (!$supplier || !$customer) {
         echo json_encode(['success' => false, 'message' => 'Selected Supplier or Customer is invalid or inactive']);
         return;
+    }
+
+    // Validate the two payment accounts (if money is actually moving) — the
+    // picker feeding these is already branch-scoped, but a direct POST could
+    // still name another branch's account without this check.
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    if ($supplierAmountPaid > 0 && $supplierAccountId > 0) {
+        $supplierAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$supplierAccountId], $acctScopeParams));
+        if (!$supplierAccount) {
+            echo json_encode(['success' => false, 'message' => 'Selected supplier payment account is invalid or inactive']);
+            return;
+        }
+    }
+    if ($customerAmountPaid > 0 && $customerAccountId > 0) {
+        $customerAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$customerAccountId], $acctScopeParams));
+        if (!$customerAccount) {
+            echo json_encode(['success' => false, 'message' => 'Selected customer payment account is invalid or inactive']);
+            return;
+        }
     }
 
     try {

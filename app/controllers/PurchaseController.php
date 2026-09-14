@@ -117,8 +117,10 @@ function showCreatePurchase($db)
     ");
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     // Check if a product is preselected
@@ -469,9 +471,10 @@ function completePurchase($db)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank', 'cheque' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }
@@ -657,8 +660,10 @@ function showPurchasePaymentForm($db, $id)
     }
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     $pageTitle = 'Record Payment';
@@ -772,9 +777,10 @@ function processPurchasePayment($db, $id)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank', 'cheque' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }
@@ -896,8 +902,10 @@ function showEditPurchase($db, $id)
     ");
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     // Find if there is an active account transaction to highlight which account was used
@@ -1254,9 +1262,10 @@ function updatePurchase($db, $id)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank', 'cheque' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }

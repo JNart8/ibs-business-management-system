@@ -642,7 +642,8 @@ function exportTransactions($db, $output)
 function exportAccountLedger($db, $output)
 {
     $accountId = intval($_GET['account_id'] ?? 0);
-    $account = $accountId ? $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$accountId]) : null;
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $account = $accountId ? $db->fetchOne("SELECT * FROM accounts WHERE id = ? $acctScopeSql", array_merge([$accountId], $acctScopeParams)) : null;
 
     if (!$account) {
         fputcsv($output, ['Error: account not found or account_id missing.']);

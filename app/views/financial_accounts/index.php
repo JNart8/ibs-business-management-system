@@ -62,6 +62,11 @@
                             <?php if ($account['is_default']): ?>
                                 <span class="text-[10px] font-bold bg-white text-gray-800 ml-1 px-1.5 py-0.5 rounded-full">DEFAULT</span>
                             <?php endif; ?>
+                            <?php if (hasMultiBranch()): ?>
+                                <span class="text-[10px] font-bold bg-white/20 ml-1 px-1.5 py-0.5 rounded-full">
+                                    <?= $account['branch_id'] ? e(branchName($account['branch_id'])) : 'Company-wide' ?>
+                                </span>
+                            <?php endif; ?>
                         </div>
                         <div class="text-2xl"><?= $icon ?></div>
                     </div>
@@ -200,6 +205,20 @@
                 <input type="number" step="0.01" name="initial_balance" value="0.00" required
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
             </div>
+
+            <?php if (hasMultiBranch()): ?>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">Scope</label>
+                <select name="branch_id"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <option value="">Company-wide (all branches)</option>
+                    <?php foreach ($branches as $branch): ?>
+                        <option value="<?= $branch['id'] ?>"><?= e($branch['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="text-xs text-gray-400 mt-1">Shared by default — scope it to one branch if this account lives at a single location.</p>
+            </div>
+            <?php endif; ?>
 
             <div class="flex justify-end gap-2 pt-4">
                 <button type="button" onclick="document.getElementById('addAccountModal').classList.add('hidden')"

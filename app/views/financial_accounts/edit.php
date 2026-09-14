@@ -63,6 +63,31 @@
                 </p>
             </div>
 
+            <?php if ($account['type'] === 'cash'): ?>
+                <?php if (hasMultiBranch()): ?>
+                <div>
+                    <label class="block text-sm font-semibold text-gray-700 mb-1">Scope</label>
+                    <input type="text" disabled value="<?= e(branchName($account['branch_id'])) ?>"
+                        class="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500">
+                    <p class="text-xs text-gray-400 mt-1">
+                        Cash accounts are tied to the branch they were created for and can't be reassigned.
+                    </p>
+                </div>
+                <?php endif; ?>
+            <?php elseif (hasMultiBranch()): ?>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">Scope</label>
+                <select name="branch_id"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <option value="" <?= !$account['branch_id'] ? 'selected' : '' ?>>Company-wide (all branches)</option>
+                    <?php foreach ($branches as $branch): ?>
+                        <option value="<?= $branch['id'] ?>" <?= $account['branch_id'] == $branch['id'] ? 'selected' : '' ?>><?= e($branch['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="text-xs text-gray-400 mt-1">Shared by default — scope it to one branch if this account lives at a single location.</p>
+            </div>
+            <?php endif; ?>
+
             <?php if (!$account['is_default']): ?>
             <div class="flex items-center gap-2 pt-2">
                 <input type="checkbox" name="is_active" id="is_active" value="1" <?= $account['is_active'] ? 'checked' : '' ?>

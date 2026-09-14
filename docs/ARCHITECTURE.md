@@ -112,7 +112,9 @@ Design: `accounts.branch_id`, **nullable**:
   end-of-day cash to head office" — no new table needed for that, just branch-aware
   `from_account`/`to_account`.
 
-**Status:** schema scaffolding done (§6); branch-aware UI/reporting is Phase 3 work.
+**Status:** done — see §5.13. Auto-creation was originally believed built here but
+turned out never to have been wired up (§6r's correction); §5.13 both closes that
+and does the branch-aware query/UI work this section scoped as "Phase 3 work."
 
 ### 5.5 "Customers can deposit money and use it for a future purchase — what if that purchase happens at a different branch? We need to be able to transfer the money, and record any transfer charges (and decide whether the client or the business bears that cost)."
 
@@ -226,6 +228,70 @@ none either — true when that map was written, no longer true once this section
 A role with none of Sales' permissions could still hit `/export/sales` directly and download
 every sale as CSV. Added `'sales' => 'sales.access'` to the map, matching how every other
 export type already mirrors its source page's permission.
+
+### 5.13 Branch-scoped cash accounts, and auto-creation on branch create
+
+QA asked whether creating a second branch would give it its own cash account. It didn't —
+`accounts.branch_id` has existed since Phase 1b, but nothing ever read it: every branch has
+shared one global Cash Account this whole time, and §5.4's "each new branch gets a default
+cash account auto-created" was never actually built (confirmed as a real gap by §6r's
+correction — `BranchController::storeBranch()` only ever inserted into `branches`).
+
+**Scope, refined during review:** cash accounts are always branch-scoped and system-managed —
+`storeAccount()` already refuses to let anyone create a `cash` account manually, so every
+branch's cash account comes only from auto-creation, never a form. Mobile money and bank
+accounts stay manually created, but the person creating (or later editing) one now explicitly
+chooses whether it's company-wide (shared, `branch_id = NULL`) or scoped to one specific
+branch — this was corrected mid-review from an earlier draft that made mobile/bank
+company-wide unconditionally; per your correction, that's a client decision, not something
+the code should assume either way. The suspense account is the one deliberate exception:
+an internal reconciliation holding account, not a physical till, so it stays global with no
+branch picker anywhere — forcing a branch choice on money that is by definition not yet
+identified would work against its whole purpose.
+
+**Visibility rule:** a branch-scoped user sees their own branch's accounts plus every
+company-wide account (`branch_id IS NULL`); a company-wide user sees everything, unaffected.
+New helper `accountBranchScopeSql()` in `functions.php`, alongside `branchScopeSql()` — it
+can't reuse that one directly, since a plain `branch_id IN (...)` filter would wrongly hide
+every NULL-branch (company-wide) row from a branch-scoped user.
+
+**Migration** (`database/migrations/2026_09_14_branch_scoped_cash_accounts.sql`): collapses
+every existing non-cash account (suspense, the seeded bank account, the seeded MoMo account)
+to `branch_id = NULL`, preserving today's de-facto shared behavior on upgrade rather than
+silently cutting a branch off from an account it currently has; backfills a dedicated cash
+account for every existing branch that doesn't already have one (Kasoa Branch, live in
+`bms_db`, immediately got its own on migration). `BranchController::storeBranch()` now
+auto-creates a branch's cash account transactionally at creation time, closing the gap for
+every future branch too.
+
+**Defense-in-depth, not just the picker UI:** every query that lists accounts for a user to
+choose from (customer/supplier deposits, POS, purchase/sale payments, expenses, direct
+delivery, the suspense resolution modal, the Financial Accounts and transfer screens — 9
+controllers, ~20 call sites) got `accountBranchScopeSql()`, and so did every query that
+re-validates a POSTed `account_id` afterward — the same "hidden in the UI but still reachable
+by direct POST" bug class as §5.12, so the picker fix alone would have been cosmetic.
+Deliberately **not** scoped: places that resolve an account from an already-recorded
+`account_transactions`/`suspense_transactions` row to reverse it (`SaleController::voidSale()`,
+`SuspenseController`'s resolution-reversal paths) — a void or reversal must reach the
+*original* account regardless of the acting user's own branch scope, since undoing a
+transaction isn't the same as choosing one. `recordAccountTransaction()`'s type-based
+fallback (used only by `SaleController::editSale()`'s payment-adjustment path) now prefers a
+branch-specific default over a company-wide one, and that call site passes the sale's own
+`branch_id` rather than the editing admin's active branch.
+
+**Verified live against `bms_db`** with three temporary test admins (Kasoa-only,
+Main-only, company-wide) and a temporary third branch created through the actual UI: the
+new branch got a real cash account immediately (`balance = 0.00`, correctly named); a
+Kasoa-scoped user's deposit/POS/transfer pickers showed only Kasoa's cash account plus
+company-wide accounts, never Main's; POSTing Main's cash `account_id` directly as the Kasoa
+user was rejected (`Selected account not found or inactive`) with no balance change, while
+the same deposit through Kasoa's own account succeeded and updated the right balance; a
+Kasoa user could reassign their own mobile money account to company-wide but was blocked
+attempting to reassign it to Main's branch; a company-wide user could still see and transfer
+between every branch's cash account, the actual purpose of that screen. All test data was
+reverted afterward.
+
+**Status:** done.
 
 ### 5.7 Multi-branch build scope
 
@@ -1226,6 +1292,28 @@ loss-investigation workflow around a shortfall beyond making it visible.
 - [ ] Confirm a `completed` or `cancelled` transfer offers neither Receive nor Cancel,
       and that re-hitting `/transfers/receive/{id}` or `/transfers/cancel/{id}` directly
       on one redirects with a clear error rather than acting again.
+
+## 6t. Branch-scoped cash accounts + auto-creation on branch create
+
+Built exactly to the corrected §5.13 design.
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_09_14_branch_scoped_cash_accounts.sql` (new) | Collapses every non-cash account to `branch_id = NULL`; backfills a cash account for every existing branch that lacked one. |
+| `app/helpers/functions.php` (updated) | New `accountBranchScopeSql($alias)` (OR-NULL variant of `branchScopeSql()`) and `resolveAccountBranchChoice($db, $rawBranchId)` (validates a submitted branch for a manually-created/edited account). `recordAccountTransaction()` gains an optional `$branchId` param — its type-based fallback now prefers a branch-specific default over a company-wide one. |
+| `app/controllers/BranchController.php` (`storeBranch()`, updated) | Wrapped in a transaction; auto-inserts a `"<name> Cash Account"` row for the new branch right after it's created. |
+| `app/controllers/FinancialAccountsController.php` (updated) | `listAccounts()`, `showTransferForm()`, `executeTransfer()`, `showTransactions()`, `showEditForm()` scoped. `storeAccount()`/`updateAccount()` read/validate a `branch_id` field (mobile_money/bank only — cash stays locked, same bucket as `type`/`balance`). |
+| `app/views/financial_accounts/index.php`, `edit.php` (updated) | Branch badge on each account card (`branchName()`, already existed); a "Scope" `<select>` on the Add Account modal and Edit form, shown only when `hasMultiBranch()`. |
+| `app/controllers/CustomerController.php`, `PurchaseController.php`, `SaleController.php`, `SupplierController.php`, `SuspenseController.php`, `ExpensesController.php`, `DistributorController.php`, `ExportController.php` (updated) | Every account picker and every re-validation of a POSTed `account_id` scoped with `accountBranchScopeSql()` — ~20 call sites across 8 controllers, the same "picker UI + direct-POST validation" pairing as §5.12, including `DistributorController`'s two payment accounts and `ExportController::exportAccountLedger()`'s `?account_id=`, neither of which had *any* prior validation. |
+
+**Deliberately left unscoped:** reversal/reference lookups that resolve an account from an
+already-recorded transaction (`SaleController::voidSale()`'s `$acctTx['account_id']`,
+`SuspenseController`'s resolution-reversal paths, `ExpensesController::deleteExpense()`'s
+refund) — these must reach the *original* account regardless of the acting user's branch,
+since undoing isn't choosing. `recordAccountTransaction()`'s explicit-`$accountId` branch
+itself also stays unscoped for the same reason — it's the one function both paths share.
+
+**Status:** done. See §5.13 for the full writeup and live verification against `bms_db`.
 
 ## 8. Open decisions for later (not blocking anything now)
 

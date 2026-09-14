@@ -299,12 +299,13 @@ function showSupplierDepositForm($db, $id)
     }
 
     // Load active financial accounts to pay from
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1
+        WHERE is_active = 1 $acctScopeSql
         ORDER BY type ASC, name ASC
-    ");
+    ", $acctScopeParams);
 
     $pageTitle = 'Supplier Payment — ' . $supplier['company_name'];
     include APP_PATH . '/views/suppliers/deposit.php';
@@ -352,7 +353,8 @@ function processSupplierDeposit($db, $id)
         return;
     }
 
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$accountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$account) {
         redirect(BASE_URL . '/suppliers/deposit/' . $id, 'error', 'Selected account not found or inactive');
         return;
@@ -550,12 +552,13 @@ function showEditSupplierDepositForm($db, $txId)
         return;
     }
 
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1
+        WHERE is_active = 1 $acctScopeSql
         ORDER BY type ASC, name ASC
-    ");
+    ", $acctScopeParams);
 
     // Find the linked account_transactions row
     // processSupplierDeposit() stored: reference_type='purchase', reference_id=supplier_id
@@ -630,7 +633,8 @@ function updateSupplierDeposit($db, $txId)
         return;
     }
 
-    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$newAccountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$newAccountId], $acctScopeParams));
     if (!$newAccount) {
         redirect(BASE_URL . '/suppliers/edit-deposit/' . $txId, 'error', 'Selected account not found or inactive');
         return;

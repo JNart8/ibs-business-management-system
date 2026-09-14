@@ -449,7 +449,8 @@ function showDepositForm($db, $id)
         return;
     }
 
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams);
     $pageTitle = 'Customer Deposit';
     include APP_PATH . '/views/customers/deposit.php';
 }
@@ -503,7 +504,8 @@ function processDeposit($db, $id)
     }
 
     // Validate account
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$accountId]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $scopeSql", array_merge([$accountId], $scopeParams));
     if (!$account) {
         redirect(BASE_URL . '/customers/deposit/' . $id, 'error', 'Selected account not found or inactive');
         return;
@@ -948,7 +950,8 @@ function showEditCustomerDepositForm($db, $txId)
         return;
     }
 
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams);
 
     // Retrieve financial account linked to this deposit
     $acctTx = $db->fetchOne("SELECT * FROM account_transactions WHERE reference_type = 'customer_deposit' AND reference_id = ?", [$txId]);
@@ -1028,7 +1031,8 @@ function updateCustomerDeposit($db, $txId)
     }
 
     // Validate account
-    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$newAccountId]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $scopeSql", array_merge([$newAccountId], $scopeParams));
     if (!$newAccount) {
         redirect(BASE_URL . '/customers/edit-deposit/' . $txId, 'error', 'Selected financial account not found or inactive');
         return;

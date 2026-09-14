@@ -91,7 +91,8 @@ function listSuspense($db)
 
     // Fetch customers & active non-suspense accounts for the resolution modal
     $customers = $db->fetchAll("SELECT id, full_name, customer_code FROM customers WHERE is_active = 1 AND is_default = 0 ORDER BY full_name ASC");
-    $accounts = $db->fetchAll("SELECT id, name, type, provider FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
 
     $pageTitle = 'Suspense Account Manager';
     include APP_PATH . '/views/suspense/index.php';
@@ -122,7 +123,8 @@ function storeSuspense($db)
         return;
     }
 
-    $financialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$accountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $financialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$financialAccount) {
         redirect(BASE_URL . '/suspense', 'error', 'Selected financial account not found or inactive.');
         return;
@@ -405,7 +407,8 @@ function showEditSuspenseForm($db, $txId)
         return;
     }
 
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
     $pageTitle = 'Edit Suspense Transaction';
     include APP_PATH . '/views/suspense/edit.php';
 }
@@ -436,7 +439,8 @@ function updateSuspense($db, $txId)
         return;
     }
 
-    $newFinancialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$newAccountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $newFinancialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$newAccountId], $acctScopeParams));
     if (!$newFinancialAccount) {
         redirect(BASE_URL . '/suspense/edit/' . $txId, 'error', 'Selected financial account not found.');
         return;

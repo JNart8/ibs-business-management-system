@@ -79,7 +79,8 @@ function listExpenses($db)
     ", $params);
 
     $categories = $db->fetchAll("SELECT DISTINCT category FROM expenses ORDER BY category ASC");
-    $accounts   = $db->fetchAll("SELECT id, name FROM accounts WHERE is_active = 1 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts   = $db->fetchAll("SELECT id, name FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
 
     // Calculate totals
     $totals = $db->fetchOne("
@@ -97,7 +98,8 @@ function listExpenses($db)
 
 function showExpenseForm($db)
 {
-    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
     $categories = $db->fetchAll("SELECT DISTINCT category FROM expenses ORDER BY category ASC");
     $pageTitle = 'Record Expense';
     include APP_PATH . '/views/expenses/create.php';
@@ -129,7 +131,8 @@ function storeExpense($db)
         redirect(BASE_URL . '/expenses/create', 'error', 'Please select a payment account.');
     }
 
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$accountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$account) {
         redirect(BASE_URL . '/expenses/create', 'error', 'Selected account is invalid or inactive.');
     }

@@ -376,8 +376,11 @@ function normalizeUnit($value)
  * Record a transaction on a financial account.
  *
  * When $accountId is provided the transaction is posted directly to that
- * account. When omitted the helper falls back to the seeded default cash
- * account so that money is never silently dropped.
+ * account. When omitted the helper falls back to the default account for
+ * $paymentMethod's type, preferring one scoped to $branchId (or the
+ * current active branch) over a company-wide one — cash accounts are
+ * branch-scoped, so this matters there; mobile/bank defaults are still
+ * company-wide today and match regardless of branch.
  *
  * @param Database $db
  * @param string   $paymentMethod  'cash', 'mobile', 'bank', etc.
@@ -387,19 +390,29 @@ function normalizeUnit($value)
  * @param int      $referenceId
  * @param string   $notes
  * @param int|null $accountId      Specific account ID (optional)
+ * @param int|null $branchId       Branch to prefer when falling back by type (optional, defaults to activeBranchId())
  * @return bool
  */
-function recordAccountTransaction($db, $paymentMethod, $amount, $type, $referenceType, $referenceId, $notes, $accountId = null)
+function recordAccountTransaction($db, $paymentMethod, $amount, $type, $referenceType, $referenceId, $notes, $accountId = null, $branchId = null)
 {
     $amount = floatval($amount);
     if ($amount <= 0) return false;
 
     // ── Resolve account ────────────────────────────────────────────────────
     if ($accountId && $accountId > 0) {
-        // Use the explicitly selected account
+        // Use the explicitly selected account. Deliberately NOT branch-scoped
+        // here — this single function is also how void/refund flows reverse a
+        // historical account_transactions row (e.g. SaleController::voidSale()
+        // passes $acctTx['account_id']), and that account must be reachable
+        // regardless of the *voiding* user's own branch scope, since undoing a
+        // transaction isn't the same as choosing one. Branch validation of a
+        // freshly-submitted account_id belongs in the caller, before it ever
+        // reaches here — see accountBranchScopeSql() call sites in the
+        // controllers (deposit/payment/POS pickers).
         $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 LIMIT 1", [$accountId]);
     } else {
-        // Auto-resolve: try default account for the payment-method type
+        // Auto-resolve: try default account for the payment-method type,
+        // preferring one scoped to $branchId over a company-wide one.
         $accountType = null;
         if ($paymentMethod === 'cash') {
             $accountType = 'cash';
@@ -409,17 +422,28 @@ function recordAccountTransaction($db, $paymentMethod, $amount, $type, $referenc
             $accountType = 'bank';
         }
 
+        $effectiveBranchId = $branchId ?? activeBranchId();
+
         if ($accountType) {
             $account = $db->fetchOne(
-                "SELECT * FROM accounts WHERE type = ? AND is_default = 1 AND is_active = 1 LIMIT 1",
-                [$accountType]
+                "SELECT * FROM accounts
+                 WHERE type = ? AND is_default = 1 AND is_active = 1
+                   AND (branch_id = ? OR branch_id IS NULL)
+                 ORDER BY (branch_id = ?) DESC
+                 LIMIT 1",
+                [$accountType, $effectiveBranchId, $effectiveBranchId]
             );
         }
 
-        // Final fallback: default cash account (always seeded)
+        // Final fallback: default cash account (always seeded), same branch preference
         if (empty($account)) {
             $account = $db->fetchOne(
-                "SELECT * FROM accounts WHERE type = 'cash' AND is_default = 1 AND is_active = 1 LIMIT 1"
+                "SELECT * FROM accounts
+                 WHERE type = 'cash' AND is_default = 1 AND is_active = 1
+                   AND (branch_id = ? OR branch_id IS NULL)
+                 ORDER BY (branch_id = ?) DESC
+                 LIMIT 1",
+                [$effectiveBranchId, $effectiveBranchId]
             );
         }
     }
@@ -723,6 +747,65 @@ function branchScopeSql($alias = '', $column = 'branch_id')
     $prefix = $alias ? "$alias." : '';
     $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
     return [" AND {$prefix}{$column} IN ($placeholders)", $branchIds];
+}
+
+/**
+ * Same idea as branchScopeSql(), but for accounts specifically: a
+ * branch-scoped user must still see every company-wide account
+ * (branch_id IS NULL — a shared bank account, the suspense account)
+ * alongside their own branch's. branchScopeSql()'s plain `IN (...)`
+ * would wrongly hide every NULL-branch row, so accounts gets its own
+ * OR-NULL variant instead of reusing it directly.
+ *
+ * Usage: identical to branchScopeSql() — [$scopeSql, $scopeParams] = accountBranchScopeSql('a');
+ */
+function accountBranchScopeSql($alias = '')
+{
+    if (!hasMultiBranch() || isCompanyWide()) {
+        return ['', []];
+    }
+    $branchIds = array_column(userBranches(currentUser()['id']), 'id');
+    if (empty($branchIds)) {
+        return [' AND 1=0', []];
+    }
+    $prefix = $alias ? "$alias." : '';
+    $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
+    return [" AND ({$prefix}branch_id IS NULL OR {$prefix}branch_id IN ($placeholders))", $branchIds];
+}
+
+/**
+ * Validates a submitted branch choice for a manually-created/edited
+ * mobile_money or bank account (cash accounts are always system-managed
+ * and branch-scoped — they never go through this). Empty/absent means
+ * company-wide (NULL), always allowed regardless of the submitter's own
+ * branch scope — sharing an account isn't a bigger privilege than
+ * managing your own branch's. A specific branch must exist, be active,
+ * and be one of the submitting user's own branches unless they're
+ * company-wide (isCompanyWide()).
+ *
+ * @return array [int|null $branchId, string|null $error]
+ */
+function resolveAccountBranchChoice($db, $rawBranchId)
+{
+    $rawBranchId = trim((string) $rawBranchId);
+    if ($rawBranchId === '') {
+        return [null, null];
+    }
+
+    $branchId = intval($rawBranchId);
+    $branch = $db->fetchOne("SELECT id FROM branches WHERE id = ? AND is_active = 1", [$branchId]);
+    if (!$branch) {
+        return [null, 'Selected branch is invalid or inactive.'];
+    }
+
+    if (!isCompanyWide()) {
+        $ownBranchIds = array_column(userBranches(currentUser()['id']), 'id');
+        if (!in_array($branchId, $ownBranchIds, true)) {
+            return [null, 'You can only assign an account to your own branch.'];
+        }
+    }
+
+    return [$branchId, null];
 }
 
 /**

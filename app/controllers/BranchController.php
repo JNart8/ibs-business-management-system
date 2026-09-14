@@ -76,11 +76,30 @@ function storeBranch($db)
         redirect(BASE_URL . '/branches/create', 'error', 'Branch name is required.');
     }
 
-    $db->query(
-        "INSERT INTO branches (name, address, phone, is_active) VALUES (?, ?, ?, 1)",
-        [$name, trim($_POST['address'] ?? '') ?: null, trim($_POST['phone'] ?? '') ?: null]
-    );
-    $newBranchId = $db->lastInsertId();
+    try {
+        $db->beginTransaction();
+
+        $db->query(
+            "INSERT INTO branches (name, address, phone, is_active) VALUES (?, ?, ?, 1)",
+            [$name, trim($_POST['address'] ?? '') ?: null, trim($_POST['phone'] ?? '') ?: null]
+        );
+        $newBranchId = $db->lastInsertId();
+
+        // Every branch gets its own cash account — cash is a physical
+        // drawer at a physical location, never shared between branches
+        // (see ARCHITECTURE.md §5.4/§6r). Starts at 0.00, same as a new
+        // branch starting with zero stock everywhere else.
+        $db->query(
+            "INSERT INTO accounts (branch_id, name, type, balance, is_default, is_active) VALUES (?, ?, 'cash', 0.00, 1, 1)",
+            [$newBranchId, $name . ' Cash Account']
+        );
+
+        $db->commit();
+    } catch (Exception $e) {
+        $db->rollback();
+        redirect(BASE_URL . '/branches/create', 'error', 'Failed to create branch: ' . $e->getMessage());
+        return;
+    }
 
     logAudit('branch.create', 'branch', $newBranchId, ['name' => $name]);
 
