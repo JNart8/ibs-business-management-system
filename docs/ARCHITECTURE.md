@@ -1425,14 +1425,31 @@ account than the original payment. Verified live: the exact repro above (complet
 to 150 → void) now nets the account back to *exactly* its pre-sale balance, and a plain
 unedited complete-then-void still works as before (regression-checked).
 
-**Separate gap noticed while designing the fix, not touched:**
+**Separate gap noticed while designing the fix, fixed too:**
 `SaleController::processPayment()` (the "pay remaining balance" flow, distinct from
-`updateSale()`'s payment-adjustment path) updates `sales.amount_paid`/`customer_transactions`
-for a cash/mobile/bank payment but **never calls `recordAccountTransaction()`** — a payment
-taken through `/sales/pay/{id}` doesn't post to any financial account at all. Didn't chase
-this further since it's outside what void's fix needed (the net-based reversal above works
-correctly regardless, since it only reverses what's *actually* in `account_transactions`) —
-but it's a real, separate money-tracking gap worth its own look.
+`updateSale()`'s payment-adjustment path) updated `sales.amount_paid`/`customer_transactions`
+for a cash/mobile/bank payment but **never called `recordAccountTransaction()`** — a payment
+taken through `/sales/pay/{id}` never posted to any financial account at all. Didn't show up
+in the void-fix testing itself (the net-based reversal above works correctly regardless of
+this gap, since it only reverses what's *actually* in `account_transactions`), but it's a
+real, separate money-tracking hole: cash physically received to settle a balance was never
+recorded as having arrived anywhere.
+
+**Fix:** added the missing `recordAccountTransaction()` call to the cash/mobile/bank branch,
+mirroring `completeSale()`'s pattern — no account picker on this form, so it resolves by
+type/branch the same way `completeSale()` does when no explicit account is chosen, and passes
+the sale's own `branch_id` (not the paying admin's active branch) for the same reason
+`updateSale()`'s fix earlier in this section does. Deliberately **not** added to the
+`payment_method === 'deposit'` branch just above it — that money isn't new; it was already
+posted to an account when the customer originally deposited it, so paying with it here just
+applies existing credit to this sale, no new account movement.
+
+Verified live against `bms_db`: a credit sale paid off later via `/sales/pay` now correctly
+deposits into the Cash Account (confirmed the exact amount landed, with the right
+`reference_type`/`reference_id`); voiding that same sale afterward correctly reverses it via
+the net-based fix above, netting back to the original balance; paying via "Pay from Deposit"
+still correctly leaves the financial account untouched, confirming the fix didn't
+over-correct the one branch that's supposed to stay account-neutral.
 
 **Status:** done.
 

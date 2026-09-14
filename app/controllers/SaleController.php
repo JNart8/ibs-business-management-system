@@ -1415,6 +1415,29 @@ function processPayment(Database $db, mixed $id)
                 "UPDATE customers SET current_balance = current_balance + ? WHERE id = ?",
                 [$payment, $sale['customer_id']]
             );
+
+            // Post the actual cash/mobile/bank receipt to a financial
+            // account — this was missing entirely before (a payment taken
+            // here updated the sale and the customer's balance, but never
+            // touched any account, so the money never showed up anywhere
+            // it was actually received into). No account picker on this
+            // form, so resolve by type/branch the same way completeSale()
+            // does when no explicit account is chosen. Deliberately not
+            // done for the 'deposit' branch above — that money isn't new,
+            // it was already posted to an account when the customer
+            // originally deposited it; paying with it here just applies
+            // existing credit to this sale, no new account movement.
+            recordAccountTransaction(
+                $db,
+                $paymentMethod,
+                $payment,
+                'deposit',
+                'sale',
+                $id,
+                "Payment received for Sale #" . $sale['sale_number'],
+                null,
+                $sale['branch_id'] ?? null
+            );
         }
 
         $db->commit();
