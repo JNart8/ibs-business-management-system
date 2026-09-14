@@ -21,7 +21,27 @@ $db = Database::getInstance();
 
 // Parse URL
 $segments = array_values(array_filter(explode('/', trim($path, '/'))));
-$type = $segments[1] ?? null; // categories, products, suppliers, customers
+$type = $segments[1] ?? null; // categories, products, suppliers, customers, purchases
+
+// ── Permission gate ─────────────────────────────────────────────
+// /import was only plan-gated (imports_exports, Growth+) in
+// public/index.php, not permission-gated — any logged-in user on that
+// plan could bulk-import data regardless of whether they could reach
+// the corresponding module page at all. Mirrors ExportController.php's
+// $exportPermissionMap: each import type requires the same permission
+// its module page does.
+$importPermissionMap = [
+    'categories' => 'categories.manage',
+    'products'   => 'products.manage',
+    'suppliers'  => 'suppliers.manage',
+    'customers'  => 'customers.manage',
+    'purchases'  => 'purchases.manage',
+];
+
+if (isset($importPermissionMap[$type]) && !can($importPermissionMap[$type])) {
+    redirect(BASE_URL . '/', 'error', 'You do not have permission to import this data.');
+    exit;
+}
 
 // Template download (GET request)
 if (isset($segments[2]) && $segments[2] === 'template') {

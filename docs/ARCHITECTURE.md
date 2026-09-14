@@ -1453,6 +1453,29 @@ over-correct the one branch that's supposed to stay account-neutral.
 
 **Status:** done.
 
+## 6w. Gap closed: `/import` had no permission gate
+
+`/import` was only plan-gated (`imports_exports`, Growth+) in `public/index.php`'s
+`$planFeatureMap` — never permission-gated. Any logged-in user on that plan could
+bulk-import categories/products/suppliers/customers/purchases regardless of whether they
+could reach the corresponding module page at all, the same "hidden in the UI but still
+reachable directly" bug class as `/sales`/`/export/sales` earlier (§5.12/§6v). `/export`
+already got a proper `$exportPermissionMap`; `/import` never did.
+
+**Fix:** added an `$importPermissionMap` to `ImportController.php`, mirroring
+`ExportController.php`'s pattern exactly — each import type requires the same permission its
+module page does (`categories`→`categories.manage`, `products`→`products.manage`,
+`suppliers`→`suppliers.manage`, `customers`→`customers.manage`,
+`purchases`→`purchases.manage`). Checked once, up front, before the template-download branch
+and the GET/POST dispatch, so it covers all three entry points (`showImportForm()`,
+`previewImport()`, `processImport()`) and the template download in one place.
+
+Verified live against `bms_db`: a role with only `suppliers.manage` could still reach
+`/import/suppliers` but was blocked from `/import/products` (and its template download),
+both as a direct URL hit, not just a hidden nav link.
+
+**Status:** done.
+
 ## 8. Open decisions for later (not blocking anything now)
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.
