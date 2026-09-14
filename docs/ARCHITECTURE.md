@@ -1,7 +1,8 @@
 # IBS Sales App — Multi-Plan / Multi-Branch Architecture
 
-**Status:** Phase 1 shipped. Phase 1b (schema scaffolding) shipped. Phase 2 & 3 not started.
-**Last updated:** 2026-08-02
+**Status:** Phase 1, 1b, 2, and 3 (3a–3d) all shipped — see §6 onward for what's actually
+built, and §8 for what's deliberately still open.
+**Last updated:** 2026-09-14
 
 ---
 
@@ -181,7 +182,7 @@ impact should be limited to closing a URL-guessing gap, not to anyone's normal w
 
 **Status:** done. See §6.
 
-### 5.11 Gap found via QA checklist: `/sales` and `/pos` had no permission of their own
+### 5.12 Gap found via QA checklist: `/sales` and `/pos` had no permission of their own
 
 A QA pass on a fully locked-down custom role ("Inventory Clerk": `products.manage` +
 `stock.manage` only, nothing else) found that the role could still open `/sales`, ring up
@@ -218,6 +219,13 @@ with zero authorization check.
   behavior.
 
 **Status:** done. See `database/migrations/2026_09_14_sales_access_permission.sql`.
+
+**Related gap closed afterward:** `ExportController.php`'s `$exportPermissionMap` explicitly
+exempted `sales` from a permission check, with a comment reasoning that `/sales` itself had
+none either — true when that map was written, no longer true once this section's fix shipped.
+A role with none of Sales' permissions could still hit `/export/sales` directly and download
+every sale as CSV. Added `'sales' => 'sales.access'` to the map, matching how every other
+export type already mirrors its source page's permission.
 
 ### 5.7 Multi-branch build scope
 
@@ -351,7 +359,7 @@ because there is only one branch per install right now. That's intentional — s
 | `public/index.php` (updated) | `$roleRestrictions` replaced with a permission-based `$permissionRestrictions` map; `/roles` added to the dispatch table and gated by `roles.manage` + the `advanced_permissions` plan feature. |
 | `app/controllers/UserController.php` (updated) | Admin-only gate now `can('users.manage')`; create/edit now read/write `role_id` (validated against `assignableRoles()`), keeping the legacy `role` enum in sync for the few remaining cosmetic reads. |
 | `app/controllers/SettingsController.php` (updated) | Admin-only gate now `can('settings.manage')`. |
-| `app/controllers/SaleController.php` (updated) | Back-date check now `can('sales.backdate')`; both edit/void checks now `can('sales.edit')` (previously referenced a `'manager'` role that was never actually assignable). Void's check was later found missing entirely — see §5.11. |
+| `app/controllers/SaleController.php` (updated) | Back-date check now `can('sales.backdate')`; both edit/void checks now `can('sales.edit')` (previously referenced a `'manager'` role that was never actually assignable). Void's check was later found missing entirely — see §5.12. |
 | `app/views/users/create.php`, `edit.php` (updated) | Role dropdown now built from `assignableRoles()` — shows custom roles too when the plan allows it — and posts `role_id` instead of a hardcoded string. |
 | `app/views/users/index.php`, `app/views/account/index.php` (updated) | Role badge now shows the real role name via `role_id` (so custom role names display correctly), not just the 3-value enum. |
 | `app/views/dashboard/index.php`, `sales/index.php`, `sales/pos.php` (updated) | UI conditionals converted from hardcoded role checks to `can()`. |

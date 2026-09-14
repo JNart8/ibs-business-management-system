@@ -49,10 +49,13 @@ if (!in_array($type, [
 // reach the ledger through the UI but could previously still hit
 // /export/account-ledger directly. Report exports (sales-report,
 // stock-valuation, receivables, payables, profit-loss, top-selling,
-// low-stock, dead-stock, profit-margin) and 'sales' intentionally have
-// no entry here — their source pages (/reports/*, /sales) have never
-// required a permission either, so this preserves that behavior rather
-// than introducing a new restriction nobody asked for.
+// low-stock, dead-stock, profit-margin) intentionally have no entry
+// here — their source pages (/reports/*) have never required a
+// permission, so this preserves that behavior rather than introducing
+// a new restriction nobody asked for. 'sales' used to be in the same
+// boat (/sales had no permission of its own), but ARCHITECTURE.md
+// §5.11 closed that gap by gating /sales behind sales.access — this
+// map was out of sync with that until now.
 $exportPermissionMap = [
     'categories'      => 'categories.manage',
     'products'        => 'products.manage',
@@ -62,6 +65,7 @@ $exportPermissionMap = [
     'account-ledger'  => 'financial_accounts.access',
     'stocks'          => 'stock.manage',
     'audit-log'       => 'audit.view',
+    'sales'           => 'sales.access',
 ];
 
 if (isset($exportPermissionMap[$type]) && !can($exportPermissionMap[$type])) {
