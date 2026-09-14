@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse URL
@@ -79,7 +87,7 @@ exportData($db, $type);
 /**
  * Export data to CSV
  */
-function exportData($db, $type)
+function exportData(Database $db, $type)
 {
     // Set headers for download
     $filename = $type . '_export_' . date('Y-m-d_His') . '.csv';
@@ -162,7 +170,7 @@ function exportData($db, $type)
 /**
  * Export categories
  */
-function exportCategories($db, $output)
+function exportCategories(Database $db, $output)
 {
     // Write headers (same as import template)
     fputcsv($output, ['name']);
@@ -186,7 +194,7 @@ function exportCategories($db, $output)
 /**
  * Export products
  */
-function exportProducts($db, $output)
+function exportProducts(Database $db, $output)
 {
     // Write headers (same as import template)
     fputcsv($output, [
@@ -242,7 +250,7 @@ function exportProducts($db, $output)
 /**
  * Export suppliers
  */
-function exportSuppliers($db, $output)
+function exportSuppliers(Database $db, $output)
 {
     // Write headers (same as import template)
     fputcsv($output, [
@@ -281,7 +289,7 @@ function exportSuppliers($db, $output)
 /**
  * Export customers
  */
-function exportCustomers($db, $output)
+function exportCustomers(Database $db, $output)
 {
     // Write headers
     fputcsv($output, [
@@ -345,7 +353,7 @@ function exportCustomers($db, $output)
 /**
  * Export sales with line items - WITH FILTER SUPPORT
  */
-function exportSales($db, $output)
+function exportSales(Database $db, $output)
 {
     // Get filters from URL (same as sales list page)
     $search   = trim($_GET['search'] ?? '');
@@ -501,7 +509,7 @@ function exportSales($db, $output)
 /**
  * Export customer transactions (deposits/payments/credits)
  */
-function exportTransactions($db, $output)
+function exportTransactions(Database $db, $output)
 {
     // Get all filter parameters from URL (same as index page)
     $search     = trim($_GET['search'] ?? '');
@@ -639,7 +647,7 @@ function exportTransactions($db, $output)
  * using the same shared buildLedgerWhere() helper, so the export can
  * never drift from what the user is actually looking at.
  */
-function exportAccountLedger($db, $output)
+function exportAccountLedger(Database $db, $output)
 {
     $accountId = intval($_GET['account_id'] ?? 0);
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
@@ -719,7 +727,7 @@ function exportAccountLedger($db, $output)
  * is (same query shape as AuditController::listAuditLog()), including
  * the same optional UNION with audit_log_archive.
  */
-function exportAuditLog($db, $output)
+function exportAuditLog(Database $db, $output)
 {
     $userId          = $_GET['user_id'] ?? '';
     $action          = $_GET['action'] ?? '';
@@ -800,7 +808,7 @@ function exportAuditLog($db, $output)
 /**
  * Export Stock Valuation Report
  */
-function exportStockValuation($db, $output)
+function exportStockValuation(Database $db, $output)
 {
     // Get filters from URL
     $category = $_GET['category'] ?? '';
@@ -948,7 +956,7 @@ function exportStockValuation($db, $output)
 /**
  * Export Outstanding Receivables Report
  */
-function exportReceivables($db, $output)
+function exportReceivables(Database $db, $output)
 {
     // Get filters
     $aging = $_GET['aging'] ?? '';
@@ -1103,7 +1111,7 @@ function exportReceivables($db, $output)
 /**
  * Export Outstanding Payables Report
  */
-function exportPayables($db, $output)
+function exportPayables(Database $db, $output)
 {
     // Get filters
     $sortBy = $_GET['sort_by'] ?? 'amount_desc';
@@ -1233,7 +1241,7 @@ function exportPayables($db, $output)
  * the exact same two queries as customerCreditSettlementReport() in
  * ReportsController.php, so the export can never drift from the screen.
  */
-function exportCustomerCreditSettlement($db, $output)
+function exportCustomerCreditSettlement(Database $db, $output)
 {
     $period   = $_GET['period']    ?? 'this_month';
     $dateFrom = $_GET['date_from'] ?? '';
@@ -1323,7 +1331,7 @@ function exportCustomerCreditSettlement($db, $output)
 /**
  * Export Sales Report
  */
-function exportSalesReport($db, $output)
+function exportSalesReport(Database $db, $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1464,7 +1472,7 @@ function exportSalesReport($db, $output)
 /**
  * Export Profit & Loss Statement
  */
-function exportProfitLoss($db, $output)
+function exportProfitLoss(Database $db, $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1587,7 +1595,7 @@ function exportProfitLoss($db, $output)
 /**
  * Export Top Selling Products
  */
-function exportTopSelling($db, $output)
+function exportTopSelling(Database $db, $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1698,7 +1706,7 @@ function exportTopSelling($db, $output)
 /**
  * Export Low Stock Alert
  */
-function exportLowStock($db, $output)
+function exportLowStock(Database $db, $output)
 {
     // Get filters
     $category = $_GET['category'] ?? '';
@@ -1805,7 +1813,7 @@ function exportLowStock($db, $output)
 /**
  * Export Dead Stock Report
  */
-function exportDeadStock($db, $output)
+function exportDeadStock(Database $db, $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 90;
@@ -1932,7 +1940,7 @@ function exportDeadStock($db, $output)
 /**
  * Export Profit Margin Analysis
  */
-function exportProfitMargin($db, $output)
+function exportProfitMargin(Database $db, $output)
 {
     // Get filters
     $category = $_GET['category'] ?? '';
@@ -2047,7 +2055,7 @@ function exportProfitMargin($db, $output)
     fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
 }
 
-function exportStocks($db, $output)
+function exportStocks(Database $db, $output)
 {
     // Get filter parameters (matching your stock index page)
     $search     = trim($_GET['search'] ?? '');

@@ -15,6 +15,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 if (!can('roles.manage') || !planAllows('advanced_permissions')) {
     redirect(BASE_URL . '/', 'error', 'Access denied. Role management requires an Enterprise plan and admin permissions.');
 }
@@ -54,7 +62,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listRoles($db)
+function listRoles(Database $db)
 {
     $roles = $db->fetchAll("
         SELECT r.*,
@@ -67,7 +75,7 @@ function listRoles($db)
     include APP_PATH . '/views/roles/index.php';
 }
 
-function permissionCatalog($db)
+function permissionCatalog(Database $db)
 {
     $rows = $db->fetchAll("SELECT `key`, label, category FROM permissions ORDER BY category, label");
     $grouped = [];
@@ -77,7 +85,7 @@ function permissionCatalog($db)
     return $grouped;
 }
 
-function showCreateRole($db)
+function showCreateRole(Database $db)
 {
     $catalog = permissionCatalog($db);
     $checked = []; // nothing pre-checked for a brand new role
@@ -85,7 +93,7 @@ function showCreateRole($db)
     include APP_PATH . '/views/roles/create.php';
 }
 
-function storeRole($db)
+function storeRole(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/roles/create', 'error', 'Invalid form submission');
@@ -109,7 +117,7 @@ function storeRole($db)
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($name) . '" created.');
 }
 
-function showEditRole($db, $id)
+function showEditRole(Database $db, mixed $id)
 {
     $role = $db->fetchOne("SELECT * FROM roles WHERE id = ?", [$id]);
     if (!$role) redirect(BASE_URL . '/roles', 'error', 'Role not found.');
@@ -122,7 +130,7 @@ function showEditRole($db, $id)
     include APP_PATH . '/views/roles/edit.php';
 }
 
-function updateRole($db, $id)
+function updateRole(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/roles/edit/' . $id, 'error', 'Invalid form submission');
@@ -165,7 +173,7 @@ function updateRole($db, $id)
     redirect(BASE_URL . '/roles', 'success', 'Role "' . e($role['name']) . '" updated.');
 }
 
-function deleteRole($db, $id)
+function deleteRole(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/roles', 'error', 'Invalid form submission');
@@ -193,7 +201,7 @@ function deleteRole($db, $id)
  * Only accepts keys that actually exist in the permission catalog,
  * so a tampered form submission can't grant an unknown permission.
  */
-function saveRolePermissions($db, $roleId, $permissionKeys)
+function saveRolePermissions(Database $db, $roleId, $permissionKeys)
 {
     $validKeys = array_column($db->fetchAll("SELECT `key` FROM permissions"), 'key');
     $permissionKeys = array_values(array_intersect($permissionKeys, $validKeys));
@@ -207,7 +215,7 @@ function saveRolePermissions($db, $roleId, $permissionKeys)
 /**
  * Generate a unique slug for a new custom role from its display name.
  */
-function roleSlugFromName($db, $name)
+function roleSlugFromName(Database $db, $name)
 {
     $base = strtolower(trim(preg_replace('/[^a-zA-Z0-9]+/', '-', $name), '-'));
     if ($base === '') $base = 'role';

@@ -14,6 +14,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse URL
@@ -31,7 +39,7 @@ switch ($action) {
 /**
  * List all customer transactions
  */
-function listTransactions($db)
+function listTransactions(Database $db)
 {
     // Get filter parameters
     $customerId = $_GET['customer'] ?? null;

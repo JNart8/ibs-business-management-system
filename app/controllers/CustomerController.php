@@ -112,7 +112,7 @@ switch ($action) {
 /**
  * List all customers with balance info
  */
-function listCustomers($db)
+function listCustomers(Database $db)
 {
     $search = trim($_GET['search'] ?? '');
     $filter = $_GET['filter'] ?? 'all'; // all | owing | credit | default
@@ -202,7 +202,7 @@ function listCustomers($db)
 /**
  * Show create form
  */
-function showCreateForm($db)
+function showCreateForm(Database $db)
 {
     $pageTitle = 'Add New Customer';
     include APP_PATH . '/views/customers/create.php';
@@ -211,7 +211,7 @@ function showCreateForm($db)
 /**
  * Create customer
  */
-function createCustomer($db)
+function createCustomer(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/create', 'error', 'Invalid form submission');
@@ -272,7 +272,7 @@ function createCustomer($db)
 /**
  * View single customer - full details & transaction history
  */
-function viewCustomer($db, $id)
+function viewCustomer(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -329,7 +329,7 @@ function viewCustomer($db, $id)
 /**
  * Show edit form
  */
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -344,7 +344,7 @@ function showEditForm($db, $id)
 /**
  * Update customer
  */
-function updateCustomer($db, $id)
+function updateCustomer(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/edit/' . $id, 'error', 'Invalid form submission');
@@ -405,7 +405,7 @@ function updateCustomer($db, $id)
 /**
  * Delete customer (soft delete if has transactions)
  */
-function deleteCustomer($db, $id)
+function deleteCustomer(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -435,7 +435,7 @@ function deleteCustomer($db, $id)
 /**
  * Show deposit form
  */
-function showDepositForm($db, $id)
+function showDepositForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -458,7 +458,7 @@ function showDepositForm($db, $id)
 /**
  * Process a deposit with auto-apply to outstanding sales
  */
-function processDeposit($db, $id)
+function processDeposit(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/deposit/' . $id, 'error', 'Invalid form submission');
@@ -669,7 +669,7 @@ function processDeposit($db, $id)
 /**
  * Show credit limit adjustment form
  */
-function showCreditForm($db, $id)
+function showCreditForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -684,7 +684,7 @@ function showCreditForm($db, $id)
 /**
  * Adjust credit limit
  */
-function adjustCreditLimit($db, $id)
+function adjustCreditLimit(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/adjust-credit/' . $id, 'error', 'Invalid form submission');
@@ -739,7 +739,7 @@ function adjustCreditLimit($db, $id)
 /**
  * AJAX customer search for POS
  */
-function searchCustomers($db)
+function searchCustomers(Database $db)
 {
     header('Content-Type: application/json');
     $q = trim($_GET['q'] ?? '');
@@ -764,7 +764,7 @@ function searchCustomers($db)
 /**
  * Show statement form - date range selection
  */
-function showStatementForm($db, $id)
+function showStatementForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -785,7 +785,7 @@ function showStatementForm($db, $id)
 /**
  * Generate and display statement
  */
-function generateStatement($db, $id)
+function generateStatement(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -865,7 +865,7 @@ function generateStatement($db, $id)
 /**
  * Revert and delete a customer deposit
  */
-function deleteCustomerDeposit($db, $txId)
+function deleteCustomerDeposit(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
     if (!$tx) {
@@ -936,7 +936,7 @@ function deleteCustomerDeposit($db, $txId)
 /**
  * Show edit deposit form
  */
-function showEditCustomerDepositForm($db, $txId)
+function showEditCustomerDepositForm(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
     if (!$tx) {
@@ -989,7 +989,7 @@ function showEditCustomerDepositForm($db, $txId)
 /**
  * Process updating/editing a customer deposit
  */
-function updateCustomerDeposit($db, $txId)
+function updateCustomerDeposit(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers', 'error', 'Invalid form submission');
@@ -1138,7 +1138,7 @@ function updateCustomerDeposit($db, $txId)
 /**
  * Auto-generate unique customer code
  */
-function generateCustomerCode($db)
+function generateCustomerCode(Database $db)
 {
     $prefix = 'CUST-';
     $year   = date('Y');

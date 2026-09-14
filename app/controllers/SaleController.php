@@ -85,7 +85,7 @@ switch ($action) {
 /**
  * Show POS Interface
  */
-function showPOS($db)
+function showPOS(Database $db)
 {
     // Load settings for receipt + POS behavior
     $settings = $db->fetchOne("SELECT * FROM settings LIMIT 1");
@@ -141,7 +141,7 @@ function showPOS($db)
 /**
  * Complete a sale — the core transaction
  */
-function completeSale($db)
+function completeSale(Database $db)
 {
     header('Content-Type: application/json');
 
@@ -720,7 +720,7 @@ function completeSale($db)
 /**
  * List all sales - WITH DATE RANGE FILTERING
  */
-function listSales($db)
+function listSales(Database $db)
 {
     $search   = trim($_GET['search'] ?? '');
     $status   = $_GET['status']      ?? '';
@@ -821,7 +821,7 @@ function listSales($db)
 /**
  * View single sale
  */
-function viewSale($db, $id)
+function viewSale(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
@@ -865,7 +865,7 @@ function viewSale($db, $id)
 /**
  * Show edit sale form
  */
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     // Check permissions - requires sales.edit permission
     if (!can('sales.edit')) {
@@ -922,7 +922,7 @@ function showEditForm($db, $id)
 /**
  * Update sale
  */
-function updateSale($db, $id)
+function updateSale(Database $db, mixed $id)
 {
     // CSRF check
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
@@ -1197,7 +1197,7 @@ function updateSale($db, $id)
 /**
  * Print-friendly receipt
  */
-function printReceipt($db, $id)
+function printReceipt(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
@@ -1225,7 +1225,7 @@ function printReceipt($db, $id)
 /**
  * Show payment form for outstanding balance
  */
-function showPaymentForm($db, $id)
+function showPaymentForm(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
@@ -1246,7 +1246,7 @@ function showPaymentForm($db, $id)
 /**
  * Process payment on outstanding sale - WITH DEPOSIT SUPPORT
  */
-function processPayment($db, $id)
+function processPayment(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/sales/pay/' . $id, 'error', 'Invalid form submission');
@@ -1423,7 +1423,7 @@ function processPayment($db, $id)
 /**
  * Void/cancel a sale (reverses stock)
  */
-function voidSale($db, $id)
+function voidSale(Database $db, mixed $id)
 {
     // Check permissions - requires sales.edit permission
     if (!can('sales.edit')) {
@@ -1555,7 +1555,7 @@ function voidSale($db, $id)
 // ============================================================
 // HELPERS
 // ============================================================
-function generateSaleNumber($db)
+function generateSaleNumber(Database $db)
 {
     $prefix = 'SALE-' . date('Ymd') . '-';
     $last   = $db->fetchOne("

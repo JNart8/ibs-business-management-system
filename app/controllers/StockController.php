@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // ── Use $path already parsed by the router ───────────────────
@@ -72,7 +80,7 @@ switch ($action) {
 /**
  * Stock Dashboard - overview of all stock levels
  */
-function stockDashboard($db)
+function stockDashboard(Database $db)
 {
     $search     = trim($_GET['search'] ?? '');
     $filter     = $_GET['filter'] ?? 'all';
@@ -183,7 +191,7 @@ function stockDashboard($db)
 /**
  * Show Stock In form
  */
-function showStockInForm($db)
+function showStockInForm(Database $db)
 {
     $preProduct = null;
 
@@ -219,7 +227,7 @@ function showStockInForm($db)
 /**
  * Process Stock In
  */
-function processStockIn($db)
+function processStockIn(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/stock/in', 'error', 'Invalid form submission');
@@ -298,7 +306,7 @@ function processStockIn($db)
 /**
  * Show Stock Out form (manual — sales handle this automatically)
  */
-function showStockOutForm($db)
+function showStockOutForm(Database $db)
 {
     $preProduct = null;
     if (!empty($_GET['product'])) {
@@ -318,7 +326,7 @@ function showStockOutForm($db)
 /**
  * Process Stock Out (manual removal — damaged, expired, etc.)
  */
-function processStockOut($db)
+function processStockOut(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/stock/out', 'error', 'Invalid form submission');
@@ -390,7 +398,7 @@ function processStockOut($db)
 /**
  * Show Adjustment form
  */
-function showAdjustForm($db, $id)
+function showAdjustForm(Database $db, mixed $id)
 {
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ? AND is_active = 1", [$id]);
     if (!$product) {
@@ -406,7 +414,7 @@ function showAdjustForm($db, $id)
 /**
  * Process stock adjustment (set exact quantity)
  */
-function processAdjustment($db, $id)
+function processAdjustment(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/stock/adjust/' . $id, 'error', 'Invalid form submission');
@@ -482,7 +490,7 @@ function processAdjustment($db, $id)
 /**
  * List all stock movements (audit log)
  */
-function listMovements($db)
+function listMovements(Database $db)
 {
     $page   = max(1, (int)($_GET['page'] ?? 1));
     $limit  = 30;
@@ -542,7 +550,7 @@ function listMovements($db)
 /**
  * Low stock alerts
  */
-function lowStockAlerts($db)
+function lowStockAlerts(Database $db)
 {
     $branchId = activeBranchId();
     $alerts = $db->fetchAll("
@@ -577,7 +585,7 @@ function lowStockAlerts($db)
 /**
  * Movements for a single product
  */
-function productMovements($db, $id)
+function productMovements(Database $db, mixed $id)
 {
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$id]);
     if (!$product) {

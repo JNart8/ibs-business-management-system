@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse segments
@@ -48,7 +56,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listAccounts($db)
+function listAccounts(Database $db)
 {
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("
@@ -81,7 +89,7 @@ function listAccounts($db)
     include APP_PATH . '/views/financial_accounts/index.php';
 }
 
-function storeAccount($db)
+function storeAccount(Database $db)
 {
     $name = trim($_POST['name'] ?? '');
     $type = $_POST['type'] ?? '';
@@ -135,7 +143,7 @@ function storeAccount($db)
     }
 }
 
-function showTransferForm($db)
+function showTransferForm(Database $db)
 {
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 $scopeSql ORDER BY name ASC", $scopeParams);
@@ -143,7 +151,7 @@ function showTransferForm($db)
     include APP_PATH . '/views/financial_accounts/transfer.php';
 }
 
-function executeTransfer($db)
+function executeTransfer(Database $db)
 {
     $fromAccountId = safeInt($_POST['from_account_id'] ?? 0);
     $toAccountId   = safeInt($_POST['to_account_id'] ?? 0);
@@ -243,7 +251,7 @@ function executeTransfer($db)
     }
 }
 
-function showTransactions($db, $id)
+function showTransactions(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
     $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
@@ -266,7 +274,7 @@ function showTransactions($db, $id)
     include APP_PATH . '/views/financial_accounts/transactions.php';
 }
 
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
     $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
@@ -285,7 +293,7 @@ function showEditForm($db, $id)
     include APP_PATH . '/views/financial_accounts/edit.php';
 }
 
-function updateAccount($db, $id)
+function updateAccount(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
     $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));

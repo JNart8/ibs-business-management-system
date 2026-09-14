@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse URL
@@ -35,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 /**
  * Show import form
  */
-function showImportForm($db, $type)
+function showImportForm(Database $db, $type)
 {
     if (!in_array($type, ['categories', 'products', 'suppliers', 'customers', 'purchases'])) {
         redirect(BASE_URL . '/', 'error', 'Invalid import type');
@@ -49,7 +57,7 @@ function showImportForm($db, $type)
 /**
  * Preview CSV before importing
  */
-function previewImport($db, $type)
+function previewImport(Database $db, $type)
 {
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
         redirect(BASE_URL . '/import/' . $type, 'error', 'Please upload a valid CSV file');
@@ -84,7 +92,7 @@ function previewImport($db, $type)
 /**
  * Process the actual import
  */
-function processImport($db, $type)
+function processImport(Database $db, $type)
 {
     if (!isset($_SESSION['import_preview']) || $_SESSION['import_preview']['type'] !== $type) {
         redirect(BASE_URL . '/import/' . $type, 'error', 'No preview data found. Please upload again.');
@@ -378,7 +386,7 @@ function validateRow($type, $row, $mode, $db)
 /**
  * Import a single row
  */
-function importRow($db, $type, $row, $mode)
+function importRow(Database $db, $type, $row, $mode)
 {
     $userId = $_SESSION['user_id'] ?? null;
 
@@ -400,7 +408,7 @@ function importRow($db, $type, $row, $mode)
     return ['success' => false, 'message' => 'Unknown type'];
 }
 
-function importCategory($db, $row, $mode, $userId)
+function importCategory(Database $db, $row, $mode, $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM categories WHERE name = ?", [trim($row['name'])]);
 
@@ -418,7 +426,7 @@ function importCategory($db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importProduct($db, $row, $mode, $userId)
+function importProduct(Database $db, $row, $mode, $userId)
 {
     // Look up category and supplier IDs by name
     $category = $db->fetchOne("SELECT id FROM categories WHERE name = ? AND is_active = 1", [trim($row['category'])]);
@@ -496,7 +504,7 @@ function importProduct($db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importSupplier($db, $row, $mode, $userId)
+function importSupplier(Database $db, $row, $mode, $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM suppliers WHERE company_name = ?", [trim($row['company_name'])]);
 
@@ -536,7 +544,7 @@ function importSupplier($db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importCustomer($db, $row, $mode, $userId)
+function importCustomer(Database $db, $row, $mode, $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM customers WHERE phone = ?", [trim($row['phone'])]);
 
@@ -649,7 +657,7 @@ function downloadTemplate($type)
 /**
  * Process purchases import
  */
-function processPurchasesImport($db, $data)
+function processPurchasesImport(Database $db, $data)
 {
     $imported = 0;
     $skipped = 0;
@@ -743,7 +751,7 @@ function processPurchasesImport($db, $data)
 /**
  * Import a single purchase invoice group
  */
-function importPurchaseGroup($db, $group)
+function importPurchaseGroup(Database $db, $group)
 {
     $supplierId = $group['supplier_id'];
     $purchaseDate = $group['purchase_date'];
@@ -991,7 +999,7 @@ function importPurchaseGroup($db, $group)
 /**
  * Generate sequential purchase number for imports based on target date
  */
-function generatePurchaseNumberForImport($db, $dateStr)
+function generatePurchaseNumberForImport(Database $db, $dateStr)
 {
     $prefix = 'PUR-';
     $date = date('Ymd', strtotime($dateStr));

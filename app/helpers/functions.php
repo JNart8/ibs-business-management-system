@@ -393,7 +393,7 @@ function normalizeUnit($value)
  * @param int|null $branchId       Branch to prefer when falling back by type (optional, defaults to activeBranchId())
  * @return bool
  */
-function recordAccountTransaction($db, $paymentMethod, $amount, $type, $referenceType, $referenceId, $notes, $accountId = null, $branchId = null)
+function recordAccountTransaction(Database $db, $paymentMethod, $amount, $type, $referenceType, $referenceId, $notes, $accountId = null, $branchId = null)
 {
     $amount = floatval($amount);
     if ($amount <= 0) return false;
@@ -620,7 +620,7 @@ function enforceSingleSession()
  * setting on proactively fixes it too). Idempotent — safe to call on
  * every POS load; it only ever inserts once.
  */
-function ensureWalkInCustomerExists($db)
+function ensureWalkInCustomerExists(Database $db)
 {
     $existing = $db->fetchOne("SELECT id FROM customers WHERE is_default = 1 LIMIT 1");
     if ($existing) {
@@ -785,7 +785,7 @@ function accountBranchScopeSql($alias = '')
  *
  * @return array [int|null $branchId, string|null $error]
  */
-function resolveAccountBranchChoice($db, $rawBranchId)
+function resolveAccountBranchChoice(Database $db, mixed $rawBranchId)
 {
     $rawBranchId = trim((string) $rawBranchId);
     if ($rawBranchId === '') {
@@ -899,7 +899,7 @@ function getBranchStock($productId, $branchId = null)
  * Upserts the branch_stock row (a product may not have had any
  * recorded stock at this branch yet).
  */
-function adjustBranchStock($db, $productId, $branchId, $delta)
+function adjustBranchStock(Database $db, $productId, $branchId, $delta)
 {
     $db->query("
         INSERT INTO branch_stock (product_id, branch_id, quantity)
@@ -918,7 +918,7 @@ function adjustBranchStock($db, $productId, $branchId, $delta)
  * should use adjustBranchStock() with a relative delta instead).
  * Also keeps products.current_stock in sync.
  */
-function setBranchStock($db, $productId, $branchId, $newQuantity)
+function setBranchStock(Database $db, $productId, $branchId, $newQuantity)
 {
     $db->query("
         INSERT INTO branch_stock (product_id, branch_id, quantity)
@@ -935,7 +935,7 @@ function setBranchStock($db, $productId, $branchId, $newQuantity)
  * adjustBranchStock()/setBranchStock() — exposed standalone too, for
  * a one-off repair if the cache is ever suspected to have drifted.
  */
-function recalcProductTotalStock($db, $productId)
+function recalcProductTotalStock(Database $db, mixed $productId)
 {
     $total = $db->fetchOne(
         "SELECT COALESCE(SUM(quantity), 0) AS total FROM branch_stock WHERE product_id = ?",

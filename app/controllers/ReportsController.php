@@ -80,7 +80,7 @@ switch ($action) {
 // SALES REPORT
 // ============================================================
 
-function salesReport($db)
+function salesReport(Database $db)
 {
     // Get filter parameters
     $period     = $_GET['period']     ?? 'this_month';
@@ -264,7 +264,7 @@ function salesReport($db)
 // STOCK VALUATION REPORT
 // ============================================================
 
-function stockValuationReport($db)
+function stockValuationReport(Database $db)
 {
     // Get filter parameters
     $category   = $_GET['category']   ?? '';
@@ -408,7 +408,7 @@ function stockValuationReport($db)
 // OUTSTANDING RECEIVABLES REPORT
 // ============================================================
 
-function receivablesReport($db)
+function receivablesReport(Database $db)
 {
     // Get filter parameters
     $aging      = $_GET['aging']      ?? '';
@@ -681,7 +681,7 @@ function receivablesReport($db)
 // OUTSTANDING PAYABLES REPORT
 // ============================================================
 
-function payablesReport($db)
+function payablesReport(Database $db)
 {
     // Get filter parameters
     $sortBy = $_GET['sort_by'] ?? 'amount_desc';
@@ -797,7 +797,7 @@ function payablesReport($db)
 // can see which branch effectively "lent" credit to another and
 // settle periodically via a normal account transfer.
 
-function customerCreditSettlementReport($db)
+function customerCreditSettlementReport(Database $db)
 {
     // Get filter parameters
     $period   = $_GET['period']    ?? 'this_month';
@@ -878,7 +878,7 @@ function customerCreditSettlementReport($db)
 // PROFIT & LOSS STATEMENT
 // ============================================================
 
-function profitLossReport($db)
+function profitLossReport(Database $db)
 {
     // Get filter parameters
     $period = $_GET['period'] ?? 'this_month';
@@ -1005,7 +1005,7 @@ function profitLossReport($db)
 // TOP SELLING PRODUCTS REPORT
 // ============================================================
 
-function topSellingReport($db)
+function topSellingReport(Database $db)
 {
     // Get filter parameters
     $period = $_GET['period'] ?? 'this_month';
@@ -1141,7 +1141,7 @@ function topSellingReport($db)
 // LOW STOCK ALERT REPORT
 // ============================================================
 
-function lowStockReport($db)
+function lowStockReport(Database $db)
 {
     // Get filter parameters
     $category = $_GET['category'] ?? '';
@@ -1256,7 +1256,7 @@ function lowStockReport($db)
 // DEAD STOCK REPORT
 // ============================================================
 
-function deadStockReport($db)
+function deadStockReport(Database $db)
 {
     // Get filter parameters
     $period = $_GET['period'] ?? 90; // Days without sales
@@ -1365,7 +1365,7 @@ function deadStockReport($db)
 // PROFIT MARGIN ANALYSIS REPORT
 // ============================================================
 
-function profitMarginReport($db)
+function profitMarginReport(Database $db)
 {
     // Get filter parameters
     $category = $_GET['category'] ?? '';
@@ -1492,7 +1492,7 @@ function profitMarginReport($db)
 // PRODUCTS REPORT (Placeholder)
 // ============================================================
 
-function productsReport($db)
+function productsReport(Database $db)
 {
     echo "<h1>Products Report - Coming Soon</h1>";
     echo "<a href='" . BASE_URL . "/reports'>← Back to Reports</a>";
@@ -1502,7 +1502,7 @@ function productsReport($db)
 // CUSTOMERS REPORT (Placeholder)
 // ============================================================
 
-function customersReport($db)
+function customersReport(Database $db)
 {
     echo "<h1>Customers Report - Coming Soon</h1>";
     echo "<a href='" . BASE_URL . "/reports'>← Back to Reports</a>";
@@ -1512,7 +1512,7 @@ function customersReport($db)
 // INVENTORY REPORT (Placeholder)
 // ============================================================
 
-function inventoryReport($db)
+function inventoryReport(Database $db)
 {
     echo "<h1>Inventory Report - Coming Soon</h1>";
     echo "<a href='" . BASE_URL . "/reports'>← Back to Reports</a>";

@@ -59,7 +59,7 @@ switch ($action) {
 /**
  * List direct distributor deliveries
  */
-function listDistributorDeliveries($db)
+function listDistributorDeliveries(Database $db)
 {
     // Pagination
     $page = max(1, intval($_GET['page'] ?? 1));
@@ -100,7 +100,7 @@ function listDistributorDeliveries($db)
 /**
  * Show Combined Entry Form
  */
-function showCreateDistributorDelivery($db)
+function showCreateDistributorDelivery(Database $db)
 {
     // Active suppliers
     $suppliers = $db->fetchAll("
@@ -144,7 +144,7 @@ function showCreateDistributorDelivery($db)
 /**
  * Handle direct delivery submission
  */
-function completeDistributorDelivery($db)
+function completeDistributorDelivery(Database $db)
 {
     header('Content-Type: application/json');
 
@@ -544,7 +544,7 @@ function completeDistributorDelivery($db)
 /**
  * View distributor direct delivery details
  */
-function viewDistributorDelivery($db, $saleId)
+function viewDistributorDelivery(Database $db, mixed $saleId)
 {
     // Fetch Sale
     $sale = $db->fetchOne("
@@ -619,7 +619,7 @@ function viewDistributorDelivery($db, $saleId)
     include APP_PATH . '/views/distributor/view.php';
 }
 
-function distributorGeneratePurchaseNumber($db)
+function distributorGeneratePurchaseNumber(Database $db)
 {
     $prefix = 'PUR-DD-' . date('Ymd') . '-';
     $last   = $db->fetchOne("
@@ -632,7 +632,7 @@ function distributorGeneratePurchaseNumber($db)
     return $prefix . str_pad($num, 4, '0', STR_PAD_LEFT);
 }
 
-function distributorGenerateSaleNumber($db)
+function distributorGenerateSaleNumber(Database $db)
 {
     $prefix = 'SALE-DD-' . date('Ymd') . '-';
     $last   = $db->fetchOne("

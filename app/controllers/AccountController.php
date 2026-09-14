@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse action
@@ -33,21 +41,21 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function showAccount($db)
+function showAccount(Database $db)
 {
     $user      = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$_SESSION['user_id']]);
     $pageTitle = 'My Account';
     include APP_PATH . '/views/account/index.php';
 }
 
-function showPasswordForm($db)
+function showPasswordForm(Database $db)
 {
     $user      = $db->fetchOne("SELECT id, username, full_name FROM users WHERE id = ?", [$_SESSION['user_id']]);
     $pageTitle = 'Change Password';
     include APP_PATH . '/views/account/password.php';
 }
 
-function updatePassword($db)
+function updatePassword(Database $db)
 {
     $currentPassword = $_POST['current_password']  ?? '';
     $newPassword     = $_POST['password']           ?? '';
@@ -95,7 +103,7 @@ function updatePassword($db)
  * actually assigned to, so this can't be used to spoof another
  * branch's activity.
  */
-function switchBranch($db)
+function switchBranch(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/account', 'error', 'Invalid form submission');

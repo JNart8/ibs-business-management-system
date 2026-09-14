@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse segments
@@ -56,7 +64,7 @@ switch ($action) {
 /**
  * List suspense transactions and show account overview
  */
-function listSuspense($db)
+function listSuspense(Database $db)
 {
     // Retrieve default suspense account details
     $suspenseAccount = $db->fetchOne("SELECT * FROM accounts WHERE is_suspense = 1 AND is_active = 1 LIMIT 1");
@@ -101,7 +109,7 @@ function listSuspense($db)
 /**
  * Record a new unknown deposit in suspense
  */
-function storeSuspense($db)
+function storeSuspense(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suspense', 'error', 'Invalid form submission');
@@ -184,7 +192,7 @@ function storeSuspense($db)
 /**
  * Resolve a suspense transaction and allocate to customer and destination financial account
  */
-function resolveSuspense($db)
+function resolveSuspense(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suspense', 'error', 'Invalid form submission');
@@ -336,7 +344,7 @@ function resolveSuspense($db)
 /**
  * Delete a suspense transaction and reverse all financial/customer impact
  */
-function deleteSuspense($db, $txId)
+function deleteSuspense(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM suspense_transactions WHERE id = ?", [$txId]);
     if (!$tx) {
@@ -399,7 +407,7 @@ function deleteSuspense($db, $txId)
 /**
  * Show edit suspense form
  */
-function showEditSuspenseForm($db, $txId)
+function showEditSuspenseForm(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM suspense_transactions WHERE id = ?", [$txId]);
     if (!$tx) {
@@ -416,7 +424,7 @@ function showEditSuspenseForm($db, $txId)
 /**
  * Process updating a suspense transaction
  */
-function updateSuspense($db, $txId)
+function updateSuspense(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suspense', 'error', 'Invalid form submission');

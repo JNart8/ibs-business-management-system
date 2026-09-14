@@ -17,6 +17,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 if (!can('branches.manage') || !hasMultiBranch()) {
     redirect(BASE_URL . '/', 'error', 'Access denied. Branch management requires multi-branch to be enabled for this account.');
 }
@@ -47,7 +55,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listBranches($db)
+function listBranches(Database $db)
 {
     $branches = $db->fetchAll("
         SELECT b.*,
@@ -59,13 +67,13 @@ function listBranches($db)
     include APP_PATH . '/views/branches/index.php';
 }
 
-function showCreateBranch($db)
+function showCreateBranch(Database $db)
 {
     $pageTitle = 'Add Branch';
     include APP_PATH . '/views/branches/create.php';
 }
 
-function storeBranch($db)
+function storeBranch(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/branches/create', 'error', 'Invalid form submission');
@@ -106,7 +114,7 @@ function storeBranch($db)
     redirect(BASE_URL . '/branches', 'success', 'Branch "' . e($name) . '" created.');
 }
 
-function showEditBranch($db, $id)
+function showEditBranch(Database $db, mixed $id)
 {
     $branch = $db->fetchOne("SELECT * FROM branches WHERE id = ?", [$id]);
     if (!$branch) redirect(BASE_URL . '/branches', 'error', 'Branch not found.');
@@ -115,7 +123,7 @@ function showEditBranch($db, $id)
     include APP_PATH . '/views/branches/edit.php';
 }
 
-function updateBranch($db, $id)
+function updateBranch(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/branches/edit/' . $id, 'error', 'Invalid form submission');

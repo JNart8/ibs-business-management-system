@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // ── Use $path already parsed by the router ────────────────────
@@ -61,7 +69,7 @@ switch ($action) {
 /**
  * List all products with search and pagination
  */
-function listProducts($db)
+function listProducts(Database $db)
 {
     $search   = $_GET['search'] ?? '';
     $page     = max(1, (int)($_GET['page'] ?? 1));
@@ -130,7 +138,7 @@ function listProducts($db)
 /**
  * Show create product form
  */
-function showCreateForm($db)
+function showCreateForm(Database $db)
 {
     $categories = $db->fetchAll(
         "SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name ASC"
@@ -146,7 +154,7 @@ function showCreateForm($db)
 /**
  * Create a new product
  */
-function createProduct($db)
+function createProduct(Database $db)
 {
     // CSRF check
     if (($_POST['csrf_token'] ?? '') !== ($_SESSION['csrf_token'] ?? '')) {
@@ -228,7 +236,7 @@ function createProduct($db)
 /**
  * Show edit product form
  */
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$id]);
     if (!$product) redirect(BASE_URL . '/products', 'error', 'Product not found');
@@ -247,7 +255,7 @@ function showEditForm($db, $id)
 /**
  * Update a product
  */
-function updateProduct($db, $id)
+function updateProduct(Database $db, mixed $id)
 {
     if (($_POST['csrf_token'] ?? '') !== ($_SESSION['csrf_token'] ?? '')) {
         redirect(BASE_URL . '/products/edit/' . $id, 'error', 'Invalid form submission');
@@ -318,7 +326,7 @@ function updateProduct($db, $id)
 /**
  * Delete or deactivate a product
  */
-function deleteProduct($db, $id)
+function deleteProduct(Database $db, mixed $id)
 {
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$id]);
     if (!$product) redirect(BASE_URL . '/products', 'error', 'Product not found');
@@ -342,7 +350,7 @@ function deleteProduct($db, $id)
 /**
  * Show product details
  */
-function viewProduct($db, $id)
+function viewProduct(Database $db, mixed $id)
 {
     // Get product details with category and supplier
     $product = $db->fetchOne("
@@ -444,7 +452,7 @@ function viewProduct($db, $id)
 /**
  * Search products — JSON endpoint used by POS
  */
-function searchProducts($db)
+function searchProducts(Database $db)
 {
     header('Content-Type: application/json');
 

@@ -95,7 +95,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listSuppliers($db)
+function listSuppliers(Database $db)
 {
     $search = trim($_GET['search'] ?? '');
     $filter = $_GET['filter'] ?? 'all';
@@ -150,13 +150,13 @@ function listSuppliers($db)
     include APP_PATH . '/views/suppliers/index.php';
 }
 
-function showCreateForm($db)
+function showCreateForm(Database $db)
 {
     $pageTitle = 'Add New Supplier';
     include APP_PATH . '/views/suppliers/create.php';
 }
 
-function createSupplier($db)
+function createSupplier(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers/create', 'error', 'Invalid form submission');
@@ -222,7 +222,7 @@ function createSupplier($db)
     }
 }
 
-function viewSupplier($db, $id)
+function viewSupplier(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -290,7 +290,7 @@ function viewSupplier($db, $id)
 /**
  * Show supplier deposit (payment) form
  */
-function showSupplierDepositForm($db, $id)
+function showSupplierDepositForm(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -314,7 +314,7 @@ function showSupplierDepositForm($db, $id)
 /**
  * Process a supplier deposit (payment to supplier) from a financial account
  */
-function processSupplierDeposit($db, $id)
+function processSupplierDeposit(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers/deposit/' . $id, 'error', 'Invalid form submission');
@@ -449,7 +449,7 @@ function processSupplierDeposit($db, $id)
 /**
  * Delete a standalone supplier deposit (payment to supplier)
  */
-function deleteSupplierDeposit($db, $txId)
+function deleteSupplierDeposit(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers', 'error', 'Invalid form submission');
@@ -521,7 +521,7 @@ function deleteSupplierDeposit($db, $txId)
     }
 }
 
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -535,7 +535,7 @@ function showEditForm($db, $id)
 /**
  * Show edit form for a supplier deposit (payment to supplier)
  */
-function showEditSupplierDepositForm($db, $txId)
+function showEditSupplierDepositForm(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("
         SELECT * FROM supplier_transactions
@@ -589,7 +589,7 @@ function showEditSupplierDepositForm($db, $txId)
 /**
  * Process updating/editing a supplier deposit (payment to supplier)
  */
-function updateSupplierDeposit($db, $txId)
+function updateSupplierDeposit(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers', 'error', 'Invalid form submission');
@@ -731,7 +731,7 @@ function updateSupplierDeposit($db, $txId)
     }
 }
 
-function updateSupplier($db, $id)
+function updateSupplier(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers/edit/' . $id, 'error', 'Invalid form submission');
@@ -802,7 +802,7 @@ function updateSupplier($db, $id)
     }
 }
 
-function deleteSupplier($db, $id)
+function deleteSupplier(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -831,7 +831,7 @@ function deleteSupplier($db, $id)
     }
 }
 
-function toggleSupplier($db, $id)
+function toggleSupplier(Database $db, mixed $id)
 {
     header('Content-Type: application/json');
     $supplier = $db->fetchOne("SELECT id, is_active FROM suppliers WHERE id = ?", [$id]);
@@ -849,7 +849,7 @@ function toggleSupplier($db, $id)
     exit;
 }
 
-function searchSuppliers($db)
+function searchSuppliers(Database $db)
 {
     header('Content-Type: application/json');
     // Handle "all suppliers" request
@@ -884,7 +884,7 @@ function searchSuppliers($db)
 // ============================================================
 // HELPER
 // ============================================================
-function generateSupplierCode($db)
+function generateSupplierCode(Database $db)
 {
     $prefix = 'SUP-';
     $year   = date('Y');

@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // ── Requires users.manage permission ───────────────────────────
@@ -65,7 +73,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listUsers($db)
+function listUsers(Database $db)
 {
     $users = $db->fetchAll("
         SELECT id, username, full_name, role, role_id, branch_scope, branch_id, is_active,
@@ -77,7 +85,7 @@ function listUsers($db)
     include APP_PATH . '/views/users/index.php';
 }
 
-function showCreateUser($db)
+function showCreateUser(Database $db)
 {
     $roles = assignableRoles();
     $branches = hasMultiBranch()
@@ -87,7 +95,7 @@ function showCreateUser($db)
     include APP_PATH . '/views/users/create.php';
 }
 
-function storeUser($db)
+function storeUser(Database $db)
 {
     $errors = validateUserInput($_POST);
 
@@ -148,7 +156,7 @@ function storeUser($db)
     redirect(BASE_URL . '/users', 'success', 'User created successfully.');
 }
 
-function showEditUser($db, $id)
+function showEditUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -161,7 +169,7 @@ function showEditUser($db, $id)
     include APP_PATH . '/views/users/edit.php';
 }
 
-function updateUser($db, $id)
+function updateUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -229,7 +237,7 @@ function updateUser($db, $id)
  * Branch if no branches were assigned at all (shouldn't normally
  * happen, since the UI always requires picking at least one).
  */
-function saveUserBranches($db, $userId, $branchIds, $primaryBranchId)
+function saveUserBranches(Database $db, $userId, $branchIds, $primaryBranchId)
 {
     $validBranchIds = array_column($db->fetchAll("SELECT id FROM branches WHERE is_active = 1"), 'id');
     $branchIds = array_values(array_intersect(array_map('intval', $branchIds), $validBranchIds));
@@ -257,7 +265,7 @@ function saveUserBranches($db, $userId, $branchIds, $primaryBranchId)
     }
 }
 
-function showPasswordForm($db, $id)
+function showPasswordForm(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT id, username, full_name FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -265,7 +273,7 @@ function showPasswordForm($db, $id)
     include APP_PATH . '/views/users/password.php';
 }
 
-function updatePassword($db, $id)
+function updatePassword(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -296,7 +304,7 @@ function updatePassword($db, $id)
     redirect(BASE_URL . '/users', 'success', 'Password updated successfully.');
 }
 
-function deleteUser($db, $id)
+function deleteUser(Database $db, mixed $id)
 {
     if ($id == $_SESSION['user_id']) {
         redirect(BASE_URL . '/users', 'error', 'You cannot deactivate your own account.');
@@ -320,7 +328,7 @@ function deleteUser($db, $id)
 /**
  * Activate a deactivated user account (NEW!)
  */
-function activateUser($db, $id)
+function activateUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) {
@@ -346,7 +354,7 @@ function activateUser($db, $id)
 /**
  * Unlock a locked user account
  */
-function unlockUser($db, $id)
+function unlockUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');

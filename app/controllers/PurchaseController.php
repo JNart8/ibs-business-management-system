@@ -88,7 +88,7 @@ switch ($action) {
 /**
  * Show purchase creation interface (POS-style)
  */
-function showCreatePurchase($db)
+function showCreatePurchase(Database $db)
 {
     // Get all active suppliers
     $suppliers = $db->fetchAll("
@@ -145,7 +145,7 @@ function showCreatePurchase($db)
 /**
  * Complete a purchase - create record, update costs, update stock
  */
-function completePurchase($db)
+function completePurchase(Database $db)
 {
     header('Content-Type: application/json');
 
@@ -524,7 +524,7 @@ function completePurchase($db)
 /**
  * List all purchases
  */
-function listPurchases($db)
+function listPurchases(Database $db)
 {
     $search = trim($_GET['search'] ?? '');
     $status = $_GET['status']     ?? '';
@@ -600,7 +600,7 @@ function listPurchases($db)
 /**
  * View single purchase
  */
-function viewPurchase($db, $id)
+function viewPurchase(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('p');
     $purchase = $db->fetchOne("
@@ -644,7 +644,7 @@ function viewPurchase($db, $id)
 /**
  * Show payment form for outstanding purchase
  */
-function showPurchasePaymentForm($db, $id)
+function showPurchasePaymentForm(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('p');
     $purchase = $db->fetchOne("
@@ -673,7 +673,7 @@ function showPurchasePaymentForm($db, $id)
 /**
  * Process payment on outstanding purchase
  */
-function processPurchasePayment($db, $id)
+function processPurchasePayment(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/purchases/pay/' . $id, 'error', 'Invalid form submission');
@@ -813,7 +813,7 @@ function processPurchasePayment($db, $id)
 /**
  * Print purchase receipt
  */
-function printPurchaseReceipt($db, $id)
+function printPurchaseReceipt(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('p');
     $purchase = $db->fetchOne("
@@ -842,7 +842,7 @@ function printPurchaseReceipt($db, $id)
 // HELPERS
 // ============================================================
 
-function generatePurchaseNumber($db)
+function generatePurchaseNumber(Database $db)
 {
     $prefix = 'PUR-' . date('Ymd') . '-';
     $last   = $db->fetchOne("
@@ -858,7 +858,7 @@ function generatePurchaseNumber($db)
 /**
  * Show purchase edit interface
  */
-function showEditPurchase($db, $id)
+function showEditPurchase(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('');
     $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
@@ -923,7 +923,7 @@ function showEditPurchase($db, $id)
 /**
  * Process purchase update
  */
-function updatePurchase($db, $id)
+function updatePurchase(Database $db, mixed $id)
 {
     header('Content-Type: application/json');
 
@@ -1334,7 +1334,7 @@ function updatePurchase($db, $id)
 /**
  * Void/delete a purchase and reverse all associated stock and financial effects
  */
-function voidPurchase($db, $id)
+function voidPurchase(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('');
     $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));

@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse segments
@@ -36,7 +44,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listExpenses($db)
+function listExpenses(Database $db)
 {
     // Filter parameters
     $dateFrom = $_GET['date_from'] ?? date('Y-m-01');
@@ -96,7 +104,7 @@ function listExpenses($db)
     include APP_PATH . '/views/expenses/index.php';
 }
 
-function showExpenseForm($db)
+function showExpenseForm(Database $db)
 {
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
@@ -105,7 +113,7 @@ function showExpenseForm($db)
     include APP_PATH . '/views/expenses/create.php';
 }
 
-function storeExpense($db)
+function storeExpense(Database $db)
 {
     $expenseDate = $_POST['expense_date'] ?? date('Y-m-d');
     $category    = trim($_POST['category'] ?? '');
@@ -188,7 +196,7 @@ function storeExpense($db)
     }
 }
 
-function deleteExpense($db, $id)
+function deleteExpense(Database $db, mixed $id)
 {
     [$scopeSql, $scopeParams] = branchScopeSql('');
     $expense = $db->fetchOne("SELECT * FROM expenses WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));

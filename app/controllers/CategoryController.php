@@ -88,7 +88,7 @@ switch ($action) {
 /**
  * List all categories with product counts
  */
-function listCategories($db)
+function listCategories(Database $db)
 {
     $search = trim($_GET['search'] ?? '');
     $params = [];
@@ -135,7 +135,7 @@ function listCategories($db)
 /**
  * Show create form
  */
-function showCreateForm($db)
+function showCreateForm(Database $db)
 {
     $pageTitle = 'Add New Category';
     include APP_PATH . '/views/categories/create.php';
@@ -144,7 +144,7 @@ function showCreateForm($db)
 /**
  * Create a new category
  */
-function createCategory($db)
+function createCategory(Database $db)
 {
     // CSRF check
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
@@ -193,7 +193,7 @@ function createCategory($db)
 /**
  * Show edit form
  */
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     $category = $db->fetchOne("SELECT * FROM categories WHERE id = ?", [$id]);
 
@@ -217,7 +217,7 @@ function showEditForm($db, $id)
 /**
  * Update a category
  */
-function updateCategory($db, $id)
+function updateCategory(Database $db, mixed $id)
 {
     // CSRF check
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
@@ -276,7 +276,7 @@ function updateCategory($db, $id)
  * Delete a category
  * Soft-delete if it has products, hard-delete if empty
  */
-function deleteCategory($db, $id)
+function deleteCategory(Database $db, mixed $id)
 {
     $category = $db->fetchOne("SELECT * FROM categories WHERE id = ?", [$id]);
     if (!$category) {
@@ -305,7 +305,7 @@ function deleteCategory($db, $id)
 /**
  * Toggle active/inactive (AJAX)
  */
-function toggleCategory($db, $id)
+function toggleCategory(Database $db, mixed $id)
 {
     header('Content-Type: application/json');
 

@@ -12,6 +12,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 if (!can('stock.transfer') || !hasMultiBranch()) {
     redirect(BASE_URL . '/', 'error', 'Access denied. Stock transfers require multi-branch and the appropriate permission.');
 }
@@ -50,7 +58,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listTransfers($db)
+function listTransfers(Database $db)
 {
     $page   = max(1, intval($_GET['page'] ?? 1));
     $limit  = 50;
@@ -98,7 +106,7 @@ function listTransfers($db)
     include APP_PATH . '/views/transfers/index.php';
 }
 
-function showCreateTransfer($db)
+function showCreateTransfer(Database $db)
 {
     // Source branch is restricted to branches the user can actually
     // manage stock at — you shouldn't be able to dispatch stock away
@@ -124,7 +132,7 @@ function showCreateTransfer($db)
     include APP_PATH . '/views/transfers/create.php';
 }
 
-function storeTransfer($db)
+function storeTransfer(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/transfers/create', 'error', 'Invalid form submission');
@@ -231,7 +239,7 @@ function storeTransfer($db)
     }
 }
 
-function viewTransfer($db, $id)
+function viewTransfer(Database $db, mixed $id)
 {
     // Same visibility rule as listTransfers(): involves one of the
     // viewer's branches, or company-wide sees everything.
@@ -272,7 +280,7 @@ function userCanActOnBranch($branchId)
     return in_array((int) $branchId, $assignedIds, true);
 }
 
-function showReceiveForm($db, $id)
+function showReceiveForm(Database $db, mixed $id)
 {
     $transfer = fetchVisibleTransfer($db, $id);
     if (!$transfer) {
@@ -297,7 +305,7 @@ function showReceiveForm($db, $id)
     include APP_PATH . '/views/transfers/receive.php';
 }
 
-function receiveTransfer($db, $id)
+function receiveTransfer(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/transfers/receive/' . $id, 'error', 'Invalid form submission');
@@ -379,7 +387,7 @@ function receiveTransfer($db, $id)
     }
 }
 
-function cancelTransfer($db, $id)
+function cancelTransfer(Database $db, mixed $id)
 {
     $transfer = fetchVisibleTransfer($db, $id);
     if (!$transfer) {
@@ -440,7 +448,7 @@ function cancelTransfer($db, $id)
  * A transfer by id, respecting the same two-sided branch visibility
  * rule as viewTransfer()/listTransfers() — shared by receive/cancel.
  */
-function fetchVisibleTransfer($db, $id)
+function fetchVisibleTransfer(Database $db, mixed $id)
 {
     $where  = "WHERE t.id = ?";
     $params = [$id];
@@ -467,7 +475,7 @@ function fetchVisibleTransfer($db, $id)
     ", $params);
 }
 
-function generateTransferNumber($db)
+function generateTransferNumber(Database $db)
 {
     $prefix = 'TRF-' . date('Ymd') . '-';
     $last = $db->fetchOne(

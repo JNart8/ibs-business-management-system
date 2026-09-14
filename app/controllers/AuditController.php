@@ -21,7 +21,7 @@ if (!can('audit.view')) {
 $db = Database::getInstance();
 listAuditLog($db);
 
-function listAuditLog($db)
+function listAuditLog(Database $db)
 {
     $page   = max(1, intval($_GET['page'] ?? 1));
     $limit  = 50;
