@@ -201,7 +201,7 @@ function deleteRole(Database $db, mixed $id)
  * Only accepts keys that actually exist in the permission catalog,
  * so a tampered form submission can't grant an unknown permission.
  */
-function saveRolePermissions(Database $db, $roleId, $permissionKeys)
+function saveRolePermissions(Database $db, mixed $roleId, mixed $permissionKeys)
 {
     $validKeys = array_column($db->fetchAll("SELECT `key` FROM permissions"), 'key');
     $permissionKeys = array_values(array_intersect($permissionKeys, $validKeys));
@@ -215,7 +215,7 @@ function saveRolePermissions(Database $db, $roleId, $permissionKeys)
 /**
  * Generate a unique slug for a new custom role from its display name.
  */
-function roleSlugFromName(Database $db, $name)
+function roleSlugFromName(Database $db, mixed $name)
 {
     $base = strtolower(trim(preg_replace('/[^a-zA-Z0-9]+/', '-', $name), '-'));
     if ($base === '') $base = 'role';

@@ -1525,7 +1525,7 @@ function inventoryReport(Database $db)
 /**
  * Calculate date range based on period
  */
-function calculateDateRange($period, $customFrom = '', $customTo = '')
+function calculateDateRange(mixed $period, mixed $customFrom = '', mixed $customTo = '')
 {
     $today = date('Y-m-d');
     $from  = $today;

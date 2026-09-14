@@ -7,7 +7,7 @@
 /**
  * Redirect to another page with optional flash message
  */
-function redirect($url, $type = null, $message = null)
+function redirect(mixed $url, mixed $type = null, mixed $message = null)
 {
     if ($type && $message) {
         $_SESSION['flash_type'] = $type; // 'success', 'error', 'warning', 'info'
@@ -53,7 +53,7 @@ function flashMessage()
 /**
  * Format currency (NULL-safe for PHP 8+)
  */
-function formatMoney($amount)
+function formatMoney(mixed $amount)
 {
     // Handle NULL and empty values
     $amount = $amount ?? 0;
@@ -69,7 +69,7 @@ function formatMoney($amount)
 /**
  * Format number safely (NULL-safe for PHP 8+)
  */
-function formatNumber($number, $decimals = 0)
+function formatNumber(mixed $number, mixed $decimals = 0)
 {
     $number = $number ?? 0;
     return number_format(floatval($number), $decimals);
@@ -78,7 +78,7 @@ function formatNumber($number, $decimals = 0)
 /**
  * Safe integer conversion
  */
-function safeInt($value)
+function safeInt(mixed $value)
 {
     return intval($value ?? 0);
 }
@@ -86,7 +86,7 @@ function safeInt($value)
 /**
  * Safe float conversion
  */
-function safeFloat($value)
+function safeFloat(mixed $value)
 {
     return floatval($value ?? 0);
 }
@@ -94,7 +94,7 @@ function safeFloat($value)
 /**
  * Escape HTML output (prevent XSS attacks)
  */
-function e($string)
+function e(mixed $string)
 {
     return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8');
 }
@@ -102,7 +102,7 @@ function e($string)
 /**
  * Get old input value (for form validation errors)
  */
-function old($field, $default = '')
+function old(mixed $field, mixed $default = '')
 {
     if (isset($_SESSION['old_input'][$field])) {
         $value = $_SESSION['old_input'][$field];
@@ -203,7 +203,7 @@ function canManageAnything()
  * Does the current user have this permission?
  * Usage: if (can('products.manage')) { ... }
  */
-function can($permission)
+function can(mixed $permission)
 {
     return in_array($permission, currentUserPermissions(), true);
 }
@@ -213,7 +213,7 @@ function can($permission)
  * per-request per role_id since it's looked up repeatedly (e.g.
  * once per user row on the Users list).
  */
-function roleSlug($roleId)
+function roleSlug(mixed $roleId)
 {
     static $cache = [];
     if (!$roleId) return null;
@@ -228,7 +228,7 @@ function roleSlug($roleId)
 /**
  * Display name of a role by id (e.g. for the Users list / badges).
  */
-function roleName($roleId)
+function roleName(mixed $roleId)
 {
     static $cache = [];
     if (!$roleId) return 'Unknown';
@@ -299,7 +299,7 @@ function currentPlanDefinition()
  * Does the current plan include this feature?
  * Usage: if (planAllows('advanced_reports')) { ... }
  */
-function planAllows($feature)
+function planAllows(mixed $feature)
 {
     $definition = currentPlanDefinition();
     return in_array($feature, $definition['features'] ?? [], true);
@@ -309,7 +309,7 @@ function planAllows($feature)
  * Is there room for one more active user under the current plan?
  * Pass the count of currently active users (see UserController).
  */
-function withinUserLimit($activeUserCount)
+function withinUserLimit(mixed $activeUserCount)
 {
     return (int)$activeUserCount < currentPlanDefinition()['max_users'];
 }
@@ -318,7 +318,7 @@ function withinUserLimit($activeUserCount)
  * Render a small "Upgrade your plan" notice, styled like the app's
  * existing flash messages, for use on blocked pages/sections.
  */
-function planUpgradeNotice($featureLabel = 'This feature')
+function planUpgradeNotice(mixed $featureLabel = 'This feature')
 {
     $planLabel = currentPlanDefinition()['label'];
     return "
@@ -331,7 +331,7 @@ function planUpgradeNotice($featureLabel = 'This feature')
 /**
  * Generate unique SKU (if you want auto-generation)
  */
-function generateSKU($prefix = 'PROD')
+function generateSKU(mixed $prefix = 'PROD')
 {
     return $prefix . '-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
 }
@@ -339,7 +339,7 @@ function generateSKU($prefix = 'PROD')
 /**
  * Format date for display
  */
-function formatDate($date, $format = 'Y-m-d H:i')
+function formatDate(mixed $date, mixed $format = 'Y-m-d H:i')
 {
     if (empty($date)) {
         return '';
@@ -350,7 +350,7 @@ function formatDate($date, $format = 'Y-m-d H:i')
 /**
  * Extract numeric ID from a string (e.g., "SALE-0001" → 1)
  */
-function extractId($string)
+function extractId(mixed $string)
 {
     preg_match('/\d+$/', $string, $matches);
     return isset($matches[0]) ? (int)$matches[0] : 0;
@@ -359,7 +359,7 @@ function extractId($string)
 /**
  * Normalize product units so common aliases map to the app's default value.
  */
-function normalizeUnit($value)
+function normalizeUnit(mixed $value)
 {
     $unit = trim((string)($value ?? ''));
     if ($unit === '') {
@@ -393,7 +393,7 @@ function normalizeUnit($value)
  * @param int|null $branchId       Branch to prefer when falling back by type (optional, defaults to activeBranchId())
  * @return bool
  */
-function recordAccountTransaction(Database $db, $paymentMethod, $amount, $type, $referenceType, $referenceId, $notes, $accountId = null, $branchId = null)
+function recordAccountTransaction(Database $db, mixed $paymentMethod, mixed $amount, mixed $type, mixed $referenceType, mixed $referenceId, mixed $notes, mixed $accountId = null, mixed $branchId = null)
 {
     $amount = floatval($amount);
     if ($amount <= 0) return false;
@@ -500,7 +500,7 @@ function ledgerFilters()
  * Build the WHERE clause + params for an account's ledger, given the
  * filters from ledgerFilters().
  */
-function buildLedgerWhere($accountId, $filters)
+function buildLedgerWhere(mixed $accountId, mixed $filters)
 {
     $where  = "WHERE t.account_id = ?";
     $params = [$accountId];
@@ -533,7 +533,7 @@ function buildLedgerWhere($accountId, $filters)
  * stock/quantity support so displays don't silently round a real
  * fractional quantity down to a whole number.
  */
-function formatQty($value)
+function formatQty(mixed $value)
 {
     $value = floatval($value ?? 0);
     $rounded = round($value, 3);
@@ -658,7 +658,7 @@ function hasMultiBranch()
  * All branches a user is assigned to (id, name, is_primary), ordered
  * primary-first. Cached per user id per request.
  */
-function userBranches($userId)
+function userBranches(mixed $userId)
 {
     static $cache = [];
     if (!isset($cache[$userId])) {
@@ -735,7 +735,7 @@ function visibleBranchIds()
  *   $where   .= $scopeSql;
  *   $params   = array_merge($params, $scopeParams);
  */
-function branchScopeSql($alias = '', $column = 'branch_id')
+function branchScopeSql(mixed $alias = '', mixed $column = 'branch_id')
 {
     $branchIds = visibleBranchIds();
     if ($branchIds === null) {
@@ -759,7 +759,7 @@ function branchScopeSql($alias = '', $column = 'branch_id')
  *
  * Usage: identical to branchScopeSql() — [$scopeSql, $scopeParams] = accountBranchScopeSql('a');
  */
-function accountBranchScopeSql($alias = '')
+function accountBranchScopeSql(mixed $alias = '')
 {
     if (!hasMultiBranch() || isCompanyWide()) {
         return ['', []];
@@ -812,7 +812,7 @@ function resolveAccountBranchChoice(Database $db, mixed $rawBranchId)
  * Display name of any branch by id (e.g. for the Users list),
  * cached per-request per branch id.
  */
-function branchName($branchId)
+function branchName(mixed $branchId)
 {
     static $cache = [];
     if (!$branchId) return '—';
@@ -850,7 +850,7 @@ function branchName($branchId)
  *                            just because they happened to be active at their
  *                            own branch when someone made the change.
  */
-function logAudit($action, $entityType = null, $entityId = null, $details = [], $companyWide = false)
+function logAudit(mixed $action, mixed $entityType = null, mixed $entityId = null, mixed $details = [], mixed $companyWide = false)
 {
     try {
         $db = Database::getInstance();
@@ -878,7 +878,7 @@ function logAudit($action, $entityType = null, $entityId = null, $details = [], 
  * source of truth — products.current_stock is a maintained total
  * across all branches, not a substitute for this.
  */
-function getBranchStock($productId, $branchId = null)
+function getBranchStock(mixed $productId, mixed $branchId = null)
 {
     $branchId = $branchId ?? activeBranchId();
     $db = Database::getInstance();
@@ -899,7 +899,7 @@ function getBranchStock($productId, $branchId = null)
  * Upserts the branch_stock row (a product may not have had any
  * recorded stock at this branch yet).
  */
-function adjustBranchStock(Database $db, $productId, $branchId, $delta)
+function adjustBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $delta)
 {
     $db->query("
         INSERT INTO branch_stock (product_id, branch_id, quantity)
@@ -918,7 +918,7 @@ function adjustBranchStock(Database $db, $productId, $branchId, $delta)
  * should use adjustBranchStock() with a relative delta instead).
  * Also keeps products.current_stock in sync.
  */
-function setBranchStock(Database $db, $productId, $branchId, $newQuantity)
+function setBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $newQuantity)
 {
     $db->query("
         INSERT INTO branch_stock (product_id, branch_id, quantity)

@@ -271,7 +271,7 @@ function viewTransfer(Database $db, mixed $id)
  * Is the current user allowed to act on a given branch — assigned to
  * it, or company-wide? Shared by receive/cancel's access checks.
  */
-function userCanActOnBranch($branchId)
+function userCanActOnBranch(mixed $branchId)
 {
     if (isCompanyWide()) {
         return true;

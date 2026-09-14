@@ -87,7 +87,7 @@ exportData($db, $type);
 /**
  * Export data to CSV
  */
-function exportData(Database $db, $type)
+function exportData(Database $db, mixed $type)
 {
     // Set headers for download
     $filename = $type . '_export_' . date('Y-m-d_His') . '.csv';
@@ -170,7 +170,7 @@ function exportData(Database $db, $type)
 /**
  * Export categories
  */
-function exportCategories(Database $db, $output)
+function exportCategories(Database $db, mixed $output)
 {
     // Write headers (same as import template)
     fputcsv($output, ['name']);
@@ -194,7 +194,7 @@ function exportCategories(Database $db, $output)
 /**
  * Export products
  */
-function exportProducts(Database $db, $output)
+function exportProducts(Database $db, mixed $output)
 {
     // Write headers (same as import template)
     fputcsv($output, [
@@ -250,7 +250,7 @@ function exportProducts(Database $db, $output)
 /**
  * Export suppliers
  */
-function exportSuppliers(Database $db, $output)
+function exportSuppliers(Database $db, mixed $output)
 {
     // Write headers (same as import template)
     fputcsv($output, [
@@ -289,7 +289,7 @@ function exportSuppliers(Database $db, $output)
 /**
  * Export customers
  */
-function exportCustomers(Database $db, $output)
+function exportCustomers(Database $db, mixed $output)
 {
     // Write headers
     fputcsv($output, [
@@ -353,7 +353,7 @@ function exportCustomers(Database $db, $output)
 /**
  * Export sales with line items - WITH FILTER SUPPORT
  */
-function exportSales(Database $db, $output)
+function exportSales(Database $db, mixed $output)
 {
     // Get filters from URL (same as sales list page)
     $search   = trim($_GET['search'] ?? '');
@@ -509,7 +509,7 @@ function exportSales(Database $db, $output)
 /**
  * Export customer transactions (deposits/payments/credits)
  */
-function exportTransactions(Database $db, $output)
+function exportTransactions(Database $db, mixed $output)
 {
     // Get all filter parameters from URL (same as index page)
     $search     = trim($_GET['search'] ?? '');
@@ -647,7 +647,7 @@ function exportTransactions(Database $db, $output)
  * using the same shared buildLedgerWhere() helper, so the export can
  * never drift from what the user is actually looking at.
  */
-function exportAccountLedger(Database $db, $output)
+function exportAccountLedger(Database $db, mixed $output)
 {
     $accountId = intval($_GET['account_id'] ?? 0);
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
@@ -727,7 +727,7 @@ function exportAccountLedger(Database $db, $output)
  * is (same query shape as AuditController::listAuditLog()), including
  * the same optional UNION with audit_log_archive.
  */
-function exportAuditLog(Database $db, $output)
+function exportAuditLog(Database $db, mixed $output)
 {
     $userId          = $_GET['user_id'] ?? '';
     $action          = $_GET['action'] ?? '';
@@ -808,7 +808,7 @@ function exportAuditLog(Database $db, $output)
 /**
  * Export Stock Valuation Report
  */
-function exportStockValuation(Database $db, $output)
+function exportStockValuation(Database $db, mixed $output)
 {
     // Get filters from URL
     $category = $_GET['category'] ?? '';
@@ -956,7 +956,7 @@ function exportStockValuation(Database $db, $output)
 /**
  * Export Outstanding Receivables Report
  */
-function exportReceivables(Database $db, $output)
+function exportReceivables(Database $db, mixed $output)
 {
     // Get filters
     $aging = $_GET['aging'] ?? '';
@@ -1111,7 +1111,7 @@ function exportReceivables(Database $db, $output)
 /**
  * Export Outstanding Payables Report
  */
-function exportPayables(Database $db, $output)
+function exportPayables(Database $db, mixed $output)
 {
     // Get filters
     $sortBy = $_GET['sort_by'] ?? 'amount_desc';
@@ -1241,7 +1241,7 @@ function exportPayables(Database $db, $output)
  * the exact same two queries as customerCreditSettlementReport() in
  * ReportsController.php, so the export can never drift from the screen.
  */
-function exportCustomerCreditSettlement(Database $db, $output)
+function exportCustomerCreditSettlement(Database $db, mixed $output)
 {
     $period   = $_GET['period']    ?? 'this_month';
     $dateFrom = $_GET['date_from'] ?? '';
@@ -1331,7 +1331,7 @@ function exportCustomerCreditSettlement(Database $db, $output)
 /**
  * Export Sales Report
  */
-function exportSalesReport(Database $db, $output)
+function exportSalesReport(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1472,7 +1472,7 @@ function exportSalesReport(Database $db, $output)
 /**
  * Export Profit & Loss Statement
  */
-function exportProfitLoss(Database $db, $output)
+function exportProfitLoss(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1595,7 +1595,7 @@ function exportProfitLoss(Database $db, $output)
 /**
  * Export Top Selling Products
  */
-function exportTopSelling(Database $db, $output)
+function exportTopSelling(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1706,7 +1706,7 @@ function exportTopSelling(Database $db, $output)
 /**
  * Export Low Stock Alert
  */
-function exportLowStock(Database $db, $output)
+function exportLowStock(Database $db, mixed $output)
 {
     // Get filters
     $category = $_GET['category'] ?? '';
@@ -1813,7 +1813,7 @@ function exportLowStock(Database $db, $output)
 /**
  * Export Dead Stock Report
  */
-function exportDeadStock(Database $db, $output)
+function exportDeadStock(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 90;
@@ -1940,7 +1940,7 @@ function exportDeadStock(Database $db, $output)
 /**
  * Export Profit Margin Analysis
  */
-function exportProfitMargin(Database $db, $output)
+function exportProfitMargin(Database $db, mixed $output)
 {
     // Get filters
     $category = $_GET['category'] ?? '';
@@ -2055,7 +2055,7 @@ function exportProfitMargin(Database $db, $output)
     fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
 }
 
-function exportStocks(Database $db, $output)
+function exportStocks(Database $db, mixed $output)
 {
     // Get filter parameters (matching your stock index page)
     $search     = trim($_GET['search'] ?? '');
@@ -2247,7 +2247,7 @@ function exportStocks(Database $db, $output)
 /**
  * Calculate date range based on period
  */
-function calculateDateRangeForExport($period, $customFrom = '', $customTo = '')
+function calculateDateRangeForExport(mixed $period, mixed $customFrom = '', mixed $customTo = '')
 {
     $today = date('Y-m-d');
     $from = $today;

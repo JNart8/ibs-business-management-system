@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 /**
  * Show import form
  */
-function showImportForm(Database $db, $type)
+function showImportForm(Database $db, mixed $type)
 {
     if (!in_array($type, ['categories', 'products', 'suppliers', 'customers', 'purchases'])) {
         redirect(BASE_URL . '/', 'error', 'Invalid import type');
@@ -77,7 +77,7 @@ function showImportForm(Database $db, $type)
 /**
  * Preview CSV before importing
  */
-function previewImport(Database $db, $type)
+function previewImport(Database $db, mixed $type)
 {
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
         redirect(BASE_URL . '/import/' . $type, 'error', 'Please upload a valid CSV file');
@@ -112,7 +112,7 @@ function previewImport(Database $db, $type)
 /**
  * Process the actual import
  */
-function processImport(Database $db, $type)
+function processImport(Database $db, mixed $type)
 {
     if (!isset($_SESSION['import_preview']) || $_SESSION['import_preview']['type'] !== $type) {
         redirect(BASE_URL . '/import/' . $type, 'error', 'No preview data found. Please upload again.');
@@ -173,7 +173,7 @@ function processImport(Database $db, $type)
 /**
  * Parse CSV file and validate
  */
-function parseCSV($file, $type, $mode, $db)
+function parseCSV(mixed $file, mixed $type, mixed $mode, Database $db)
 {
     $handle = fopen($file, 'r');
     if (!$handle) {
@@ -244,7 +244,7 @@ function parseCSV($file, $type, $mode, $db)
 /**
  * Get required CSV headers for each type
  */
-function getRequiredHeaders($type)
+function getRequiredHeaders(mixed $type)
 {
     switch ($type) {
         case 'categories':
@@ -265,7 +265,7 @@ function getRequiredHeaders($type)
 /**
  * Validate a single row
  */
-function validateRow($type, $row, $mode, $db)
+function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
 {
     switch ($type) {
         case 'categories':
@@ -406,7 +406,7 @@ function validateRow($type, $row, $mode, $db)
 /**
  * Import a single row
  */
-function importRow(Database $db, $type, $row, $mode)
+function importRow(Database $db, mixed $type, mixed $row, mixed $mode)
 {
     $userId = $_SESSION['user_id'] ?? null;
 
@@ -428,7 +428,7 @@ function importRow(Database $db, $type, $row, $mode)
     return ['success' => false, 'message' => 'Unknown type'];
 }
 
-function importCategory(Database $db, $row, $mode, $userId)
+function importCategory(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM categories WHERE name = ?", [trim($row['name'])]);
 
@@ -446,7 +446,7 @@ function importCategory(Database $db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importProduct(Database $db, $row, $mode, $userId)
+function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     // Look up category and supplier IDs by name
     $category = $db->fetchOne("SELECT id FROM categories WHERE name = ? AND is_active = 1", [trim($row['category'])]);
@@ -524,7 +524,7 @@ function importProduct(Database $db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importSupplier(Database $db, $row, $mode, $userId)
+function importSupplier(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM suppliers WHERE company_name = ?", [trim($row['company_name'])]);
 
@@ -564,7 +564,7 @@ function importSupplier(Database $db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importCustomer(Database $db, $row, $mode, $userId)
+function importCustomer(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM customers WHERE phone = ?", [trim($row['phone'])]);
 
@@ -607,7 +607,7 @@ function importCustomer(Database $db, $row, $mode, $userId)
 /**
  * Download CSV template
  */
-function downloadTemplate($type)
+function downloadTemplate(mixed $type)
 {
     $templates = [
         'categories' => [
@@ -677,7 +677,7 @@ function downloadTemplate($type)
 /**
  * Process purchases import
  */
-function processPurchasesImport(Database $db, $data)
+function processPurchasesImport(Database $db, mixed $data)
 {
     $imported = 0;
     $skipped = 0;
@@ -771,7 +771,7 @@ function processPurchasesImport(Database $db, $data)
 /**
  * Import a single purchase invoice group
  */
-function importPurchaseGroup(Database $db, $group)
+function importPurchaseGroup(Database $db, mixed $group)
 {
     $supplierId = $group['supplier_id'];
     $purchaseDate = $group['purchase_date'];
@@ -1019,7 +1019,7 @@ function importPurchaseGroup(Database $db, $group)
 /**
  * Generate sequential purchase number for imports based on target date
  */
-function generatePurchaseNumberForImport(Database $db, $dateStr)
+function generatePurchaseNumberForImport(Database $db, mixed $dateStr)
 {
     $prefix = 'PUR-';
     $date = date('Ymd', strtotime($dateStr));

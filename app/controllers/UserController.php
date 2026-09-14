@@ -238,7 +238,7 @@ function updateUser(Database $db, mixed $id)
  * (lowest id) if the submitted id isn't a real active branch, matching
  * the old silent-fallback behavior rather than adding a hard error.
  */
-function saveUserBranches(Database $db, $userId, $branchId)
+function saveUserBranches(Database $db, mixed $userId, mixed $branchId)
 {
     $branchId = intval($branchId ?? 0);
     $valid = $branchId > 0 && $db->fetchOne("SELECT id FROM branches WHERE id = ? AND is_active = 1", [$branchId]);
@@ -372,7 +372,7 @@ function unlockUser(Database $db, mixed $id)
 }
 
 // ── Validation helper ─────────────────────────────────────────
-function validateUserInput($data)
+function validateUserInput(mixed $data)
 {
     $errors = [];
 
