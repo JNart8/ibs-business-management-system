@@ -1179,6 +1179,16 @@ function updateSale(Database $db, mixed $id)
             // Table might not exist, that's okay
         }
 
+        // Also log into the unified audit_log — audit_history above is an
+        // older, table-specific mechanism that predates it and was never
+        // wired into /audit, CSV export, archiving, or the security-alert
+        // banner. This is what actually makes a sale edit visible there.
+        logAudit('sale.edit', 'sale', $id, [
+            'sale_number' => $sale['sale_number'],
+            'changes'     => $changeLog,
+            'reason'      => $editReason,
+        ]);
+
         $db->commit();
 
         redirect(

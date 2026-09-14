@@ -316,6 +316,25 @@ function updateProduct(Database $db, mixed $id)
             $id
         ]);
 
+        // High-risk alert: only a big selling-price *drop* in one edit —
+        // routine repricing/promotions happen far too often to flag every
+        // change without burying the signal, but a 30%+ drop is big enough
+        // to filter those out while still catching a fat-fingered price or
+        // someone deliberately undercharging. Increases and cost-price
+        // changes aren't flagged — they're not that failure mode.
+        $oldSellingPrice = floatval($product['selling_price']);
+        if ($oldSellingPrice > 0 && $selling_price < $oldSellingPrice) {
+            $dropPct = (($oldSellingPrice - $selling_price) / $oldSellingPrice) * 100;
+            if ($dropPct >= 30) {
+                logAudit('product.price_change', 'product', $id, [
+                    'name'      => $name,
+                    'old_price' => $oldSellingPrice,
+                    'new_price' => $selling_price,
+                    'drop_pct'  => round($dropPct, 1),
+                ]);
+            }
+        }
+
         redirect(BASE_URL . '/products', 'success', 'Product updated successfully');
     } catch (Exception $e) {
         error_log('Error updating product: ' . $e->getMessage());

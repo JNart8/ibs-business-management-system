@@ -23,6 +23,14 @@ listAuditLog($db);
 
 function listAuditLog(Database $db)
 {
+    // Visiting the log marks the dashboard's security-alert banner (see
+    // DashboardController.php) as seen — same "opening the notification
+    // center clears the badge" convention as everywhere else. currentUser()
+    // caches its row in $_SESSION for the whole session, so without the
+    // unset the banner would keep showing stale data for the rest of it.
+    $db->query("UPDATE users SET last_security_alert_seen_at = NOW() WHERE id = ?", [$_SESSION['user_id'] ?? 0]);
+    unset($_SESSION['user_data']);
+
     $page   = max(1, intval($_GET['page'] ?? 1));
     $limit  = 50;
     $offset = ($page - 1) * $limit;

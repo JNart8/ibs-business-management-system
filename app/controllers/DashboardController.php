@@ -189,6 +189,80 @@ try {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SECURITY ALERTS (high-risk audit_log changes, since this user's last visit
+// to /audit — see AuditController::listAuditLog(), which stamps
+// last_security_alert_seen_at on every visit). Deliberately narrow: role
+// permission losses on users.manage/roles.manage, role deletion, sale voids
+// and edits, and 30%+ selling-price drops (that threshold is enforced at
+// write time in ProductController::updateProduct(), not here).
+// ══════════════════════════════════════════════════════════════════════════════
+
+$securityAlerts = [];
+if (can('audit.view')) {
+    try {
+        $lastSeen = currentUser()['last_security_alert_seen_at'] ?? null;
+        // >=, not > : both this column and audit_log.created_at are plain
+        // TIMESTAMP (1-second resolution, no fractional seconds), so an
+        // action taken right after visiting /audit can land in the very
+        // same second as the seen-stamp — a strict > would silently drop
+        // it from ever alerting. Confirmed live: voiding a sale immediately
+        // after visiting /audit produced identical created_at and
+        // last_security_alert_seen_at values down to the second.
+        $sinceSql = $lastSeen ? "AND created_at >= ?" : "";
+        $sinceParams = $lastSeen ? [$lastSeen] : [];
+
+        [$scopeSql, $scopeParams] = branchScopeSql('');
+        $rows = $db->fetchAll("
+            SELECT * FROM audit_log
+            WHERE action IN ('role.permissions_changed', 'role.delete', 'sale.void', 'sale.edit', 'product.price_change')
+            $sinceSql
+            $scopeSql
+            ORDER BY created_at DESC
+            LIMIT 20
+        ", array_merge($sinceParams, $scopeParams));
+
+        foreach ($rows as $row) {
+            $details = $row['details'] ? json_decode($row['details'], true) : [];
+
+            if ($row['action'] === 'role.permissions_changed') {
+                $removed = $details['removed'] ?? [];
+                if (!in_array('users.manage', $removed, true) && !in_array('roles.manage', $removed, true)) {
+                    continue; // a permission change that didn't touch the two sensitive ones
+                }
+                $lost = array_values(array_intersect($removed, ['users.manage', 'roles.manage']));
+                $securityAlerts[] = [
+                    'summary' => "Role \"" . ($details['name'] ?? '?') . "\" lost " . implode(' and ', $lost),
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'role.delete') {
+                $securityAlerts[] = [
+                    'summary' => "Role \"" . ($details['name'] ?? '?') . "\" was deleted",
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'sale.void') {
+                $securityAlerts[] = [
+                    'summary' => "Sale #" . ($details['sale_number'] ?? $row['entity_id']) . " voided (" . formatMoney($details['total_amount'] ?? 0) . ")",
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'sale.edit') {
+                $securityAlerts[] = [
+                    'summary' => "Sale #" . ($details['sale_number'] ?? $row['entity_id']) . " edited: " . ($details['changes'] ?? ''),
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'product.price_change') {
+                $securityAlerts[] = [
+                    'summary' => "\"" . ($details['name'] ?? '?') . "\" price dropped " . ($details['drop_pct'] ?? '?') . "% ("
+                        . formatMoney($details['old_price'] ?? 0) . " → " . formatMoney($details['new_price'] ?? 0) . ")",
+                    'row'     => $row,
+                ];
+            }
+        }
+    } catch (Exception $e) {
+        error_log('Dashboard security alerts error: ' . $e->getMessage());
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // SALES TREND (LAST 30 DAYS) - WITH PROFIT
 // ══════════════════════════════════════════════════════════════════════════════
 

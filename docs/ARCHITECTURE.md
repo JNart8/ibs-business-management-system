@@ -756,6 +756,7 @@ logged:
 | Action | Where |
 |---|---|
 | `sale.void` | `SaleController::voidSale()` |
+| `sale.edit` (payment amount/method/notes/date changes) | `SaleController::updateSale()` — added in §6v; previously only written to the older, separate `audit_history` table (§6v has the full story) |
 | `purchase.void` | `PurchaseController::voidPurchase()` — **worth knowing**: voiding a purchase deletes the row and its related records outright (pre-existing behavior, not something this phase changed) rather than marking it voided the way a sale is. The audit entry is the only remaining record that purchase ever existed. |
 | `user.create`, `user.update` (role/status before-after), `user.deactivate`, `user.activate` | `UserController.php` |
 | `role.create`, `role.permissions_changed` (**added/removed diff** — the single most security-relevant entry in the app), `role.delete` | `RoleController.php` |
@@ -782,11 +783,10 @@ duplicate `audit_log` entry would just be the same fact twice in two places.
 | `app/views/layout/header.php` (updated) | "Audit Log" added to the Administration dropdown/section (desktop + mobile), gated by `can('audit.view')`. |
 | 8 controllers (`SaleController`, `PurchaseController`, `UserController`, `RoleController`, `BranchController`, `FinancialAccountsController`, `SettingsController`, `AccountController`) + `functions.php` | `logAudit()` calls added at each mutation point listed above. |
 
-**Not built / open for later:** no retention policy or archiving (the table will grow
-indefinitely — worth revisiting once there's real usage data to know how fast); no export
-(CSV) for the audit log itself, unlike every other report; no email/alert on specific
-high-risk entries (e.g. a role losing `users.manage`). None of these were asked for — noting
-them so they're a deliberate choice to defer, not an oversight.
+**Not built at the time / all since closed:** retention/archiving and CSV export shipped in
+§6o; alerting on high-risk entries shipped in §6v — this note was never updated when §6o
+landed, so it kept claiming CSV export/archiving were still open long after they weren't.
+Correcting it here rather than leaving it to mislead the next read.
 
 ## 7d. Phase 3a testing checklist
 
@@ -1337,6 +1337,87 @@ but the same files were already open, so fixed alongside it: `SaleController.php
 `FinancialAccountsController::executeTransfer()` and the admin account-management views
 deliberately keep showing the suspense account — Transfer is the legitimate way to move
 funds out of suspense outside the dedicated resolution flow.
+
+**Status:** done.
+
+## 6v. In-app alert for high-risk audit changes
+
+Closes the last item from §6i/6n's original deferred-features note (retention/archiving and
+CSV export had already shipped in §6o without that note being updated — corrected there too).
+No email infrastructure exists anywhere in this app (no `mail()`, no PHPMailer, no SMTP
+config), so building email alerts would mean standing up a whole new capability first —
+went with an in-app dashboard alert instead, reusing the existing `audit_log` table and
+`audit.view` permission.
+
+**What's flagged (deliberately narrow, to avoid alert fatigue):**
+- `role.permissions_changed` where the `removed` array (already logged — §6i/6n) contains
+  `users.manage` or `roles.manage` — the specific lockout-risk scenario this was originally
+  proposed for, not just any permission change.
+- `role.delete`.
+- `sale.void` and `sale.edit` — every one, no threshold. Both already require a reason
+  (`edit_reason` is a required field), so they're inherently deliberate, not routine.
+  `sale.edit` was **not previously logged to `audit_log` at all** — `updateSale()` only wrote
+  to a separate, older `audit_history` table that predates the unified system this feature
+  (and `/audit`, CSV export, archiving) is built on, and was never wired into any of it. Added
+  a real `logAudit('sale.edit', ...)` call alongside the existing `audit_history` insert
+  (left that one alone — harmless, not worth removing).
+- `product.price_change` — **only** a selling-price drop of 30%+ in one edit, and newly
+  logged (`ProductController::updateProduct()` had no `logAudit()` call before this). This one
+  needed a threshold or it would have been the fatigue case in practice: routine
+  repricing/promotions happen far more often than the other four action types combined.
+  Price *increases* and cost-price changes aren't flagged — not the "sold too cheap"
+  failure mode this guards against. The threshold is enforced at write time, so `audit_log`
+  itself doesn't fill with routine price edits either, not just the banner.
+
+**Seen/dismissal:** new `users.last_security_alert_seen_at` (nullable `TIMESTAMP`). Visiting
+`/audit` marks everything seen (`AuditController::listAuditLog()`), reusing the existing route
+— no new endpoint. `currentUser()` caches its row in `$_SESSION` for the whole session, so the
+visit also `unset()`s that cache, or the dashboard would keep showing the stale banner for the
+rest of the session. **Found live while testing:** both this column and `audit_log.created_at`
+are plain `TIMESTAMP` (1-second resolution, no fractional seconds) — an action taken
+immediately after visiting `/audit` can land in the exact same second as the seen-stamp, and a
+strict `created_at > last_seen` silently drops it from ever alerting. Confirmed by voiding a
+test sale right after visiting `/audit` and getting identical timestamps down to the second.
+Fixed by comparing `>=` instead — the trade-off (a genuinely concurrent request landing in the
+same second as the stamp could be marked pre-seen) is far narrower than the bug it fixes.
+
+**Visibility:** gated by `can('audit.view')`, same as the log itself. The two role-related
+alerts are always company-wide (`branch_id = NULL`, per `logAudit()`'s `$companyWide` flag on
+that call site) and use `branchScopeSql()` like `AuditController.php` already does, so they're
+naturally invisible to branch-scoped viewers — consistent with those viewers already not
+being able to see the entries in `/audit` either. The other three stay normally branch-scoped.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_09_14_security_alert_seen.sql` (new) | `users.last_security_alert_seen_at`. |
+| `app/controllers/SaleController.php` (`updateSale()`) | New `logAudit('sale.edit', ...)` call. |
+| `app/controllers/ProductController.php` (`updateProduct()`) | New `logAudit('product.price_change', ...)` call, 30%+ selling-price-drop threshold. |
+| `app/controllers/DashboardController.php` | New `$securityAlerts` query block, gated by `can('audit.view')`, branch-scoped, filters `role.permissions_changed` rows in PHP for the two sensitive permissions. |
+| `app/views/dashboard/index.php` | New banner (amber, visually distinct from the existing red critical-alerts banner), linking to `/audit`. |
+| `app/controllers/AuditController.php` (`listAuditLog()`) | Stamps the seen-timestamp and invalidates the cached session user row. |
+
+**Verified live against `bms_db`** with temporary company-wide, branch-scoped, and
+no-`audit.view` test admins, a test role, a test product, and a test sale taken through the
+real POS/edit/void flow: each of the five action types correctly triggered the banner with
+accurate details (including the 30%+ threshold's edge — a 10% drop and a price increase both
+correctly produced no alert); a non-sensitive permission change correctly produced no alert;
+the branch-scoping split worked (a branch-scoped admin saw the business events but not the
+role events); the `audit.view`-less user saw nothing. All test data reverted afterward,
+including manually correcting a stray GHS 50 discrepancy in the real Cash Account balance —
+see the note below.
+
+**Unrelated bug found during cleanup, not fixed here:** voiding a sale that was previously
+*edited* reverses the account balance using the sale's **original** payment amount, not its
+current one — `SaleController::voidSale()` looks up the first `account_transactions` row
+where `reference_type = 'sale' AND transaction_type = 'deposit'`, which is always the
+original completion transaction, ignoring any deposit/withdrawal adjustment `updateSale()`
+made since. Reproduced live: complete a sale for 200, edit its paid amount down to 150
+(withdraws 50), then void it (reverses the original 200) — net effect is a 50 overcorrection
+against the account, confirmed against a real balance during this session's testing. Pre-existing,
+unrelated to this feature; flagging rather than fixing since it wasn't asked for and touches
+money-movement logic that deserves its own dedicated pass.
 
 **Status:** done.
 
