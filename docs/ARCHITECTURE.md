@@ -1408,16 +1408,31 @@ role events); the `audit.view`-less user saw nothing. All test data reverted aft
 including manually correcting a stray GHS 50 discrepancy in the real Cash Account balance —
 see the note below.
 
-**Unrelated bug found during cleanup, not fixed here:** voiding a sale that was previously
-*edited* reverses the account balance using the sale's **original** payment amount, not its
-current one — `SaleController::voidSale()` looks up the first `account_transactions` row
-where `reference_type = 'sale' AND transaction_type = 'deposit'`, which is always the
-original completion transaction, ignoring any deposit/withdrawal adjustment `updateSale()`
-made since. Reproduced live: complete a sale for 200, edit its paid amount down to 150
-(withdraws 50), then void it (reverses the original 200) — net effect is a 50 overcorrection
-against the account, confirmed against a real balance during this session's testing. Pre-existing,
-unrelated to this feature; flagging rather than fixing since it wasn't asked for and touches
-money-movement logic that deserves its own dedicated pass.
+**Unrelated bug found during cleanup, fixed separately:** voiding a sale that was previously
+*edited* reversed the account balance using the sale's **original** payment amount, not its
+current one — `SaleController::voidSale()` looked up the first `account_transactions` row
+where `reference_type = 'sale' AND transaction_type = 'deposit'`, which is always the original
+completion transaction, ignoring any deposit/withdrawal adjustment `updateSale()` made since.
+Reproduced live: complete a sale for 200, edit its paid amount down to 150 (withdraws 50),
+then void it — reversed the original 200 instead of the correct 150, a 50 overcorrection
+confirmed against a real account balance.
+
+**Fix:** rewrote the reversal to sum the *net* already posted to `account_transactions` for
+this sale (deposits minus withdrawals, grouped by `account_id`) instead of trusting a single
+original row. Self-correcting regardless of how many edits touched the sale, and also covers
+the rarer case where an edit changed payment method and the adjustment landed in a different
+account than the original payment. Verified live: the exact repro above (complete 200 → edit
+to 150 → void) now nets the account back to *exactly* its pre-sale balance, and a plain
+unedited complete-then-void still works as before (regression-checked).
+
+**Separate gap noticed while designing the fix, not touched:**
+`SaleController::processPayment()` (the "pay remaining balance" flow, distinct from
+`updateSale()`'s payment-adjustment path) updates `sales.amount_paid`/`customer_transactions`
+for a cash/mobile/bank payment but **never calls `recordAccountTransaction()`** — a payment
+taken through `/sales/pay/{id}` doesn't post to any financial account at all. Didn't chase
+this further since it's outside what void's fix needed (the net-based reversal above works
+correctly regardless, since it only reverses what's *actually* in `account_transactions`) —
+but it's a real, separate money-tracking gap worth its own look.
 
 **Status:** done.
 

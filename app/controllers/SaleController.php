@@ -1520,27 +1520,41 @@ function voidSale(Database $db, mixed $id)
             }
         }
 
-        // Reverse financial account deposits for cash/mobile/bank payments
-        if (floatval($sale['amount_paid']) > 0 && !in_array($sale['payment_method'], ['credit', 'deposit'])) {
-            $acctTx = $db->fetchOne("
-                SELECT * FROM account_transactions 
-                WHERE reference_type = 'sale' AND reference_id = ? AND transaction_type = 'deposit' 
-                LIMIT 1
-            ", [$id]);
-            
-            if ($acctTx) {
-                // Log withdrawal refund
-                recordAccountTransaction(
-                    $db,
-                    $acctTx['payment_method'],
-                    $acctTx['amount'],
-                    'withdrawal',
-                    'sale',
-                    $id,
-                    "Refund for Voided Sale #" . $sale['sale_number'],
-                    $acctTx['account_id']
-                );
-            }
+        // Reverse financial account deposits for cash/mobile/bank payments.
+        // Reverses the NET already posted to account_transactions for this
+        // sale (deposits minus withdrawals, per account) rather than a
+        // single original deposit's amount — the old version always
+        // reversed the first deposit found, ignoring any withdrawal/deposit
+        // adjustment a prior edit had already posted (updateSale()'s
+        // payment-adjustment path). Confirmed live: complete a sale for
+        // 200, edit the paid amount down to 150 (posts a 50 withdrawal),
+        // then void — the old code reversed the original 200 instead of
+        // the correct 150, leaving a stray 50 discrepancy in the account.
+        // Grouping by account also covers the (rarer) case where an edit
+        // changed payment method and the adjustment landed in a different
+        // account than the original payment.
+        $netByAccount = $db->fetchAll("
+            SELECT account_id,
+                   SUM(CASE WHEN transaction_type = 'deposit' THEN amount
+                            WHEN transaction_type = 'withdrawal' THEN -amount
+                            ELSE 0 END) AS net_amount
+            FROM account_transactions
+            WHERE reference_type = 'sale' AND reference_id = ?
+            GROUP BY account_id
+            HAVING net_amount > 0.01
+        ", [$id]);
+
+        foreach ($netByAccount as $net) {
+            recordAccountTransaction(
+                $db,
+                $sale['payment_method'],
+                floatval($net['net_amount']),
+                'withdrawal',
+                'sale',
+                $id,
+                "Refund for Voided Sale #" . $sale['sale_number'],
+                $net['account_id']
+            );
         }
 
         // Mark sale as voided
