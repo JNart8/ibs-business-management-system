@@ -33,7 +33,7 @@ define('APP_PATH', __DIR__ . '/../app');
 // (and one with DST, unlike Blantyre). Without this, a date typed here
 // can land on a different calendar day once the app displays it, right
 // around midnight — parse and display have to agree on "now".
-date_default_timezone_set('Africa/Blantyre');
+date_default_timezone_set('Africa/Accra');
 
 require APP_PATH . '/helpers/LicenseCode.php';
 
