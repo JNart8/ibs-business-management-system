@@ -45,6 +45,17 @@ if (!$isPublic && isLoggedIn()) {
     enforceSingleSession();
 }
 
+// ── Subscription lock ───────────────────────────────────────────
+// Computed live per-request (no caching) via licenseState() — see
+// functions.php and app/config/licensing.php. '/license' itself must
+// stay reachable no matter what, or a locked install could never be
+// unlocked. Checked before permission/plan gates below since it's a
+// more fundamental "is this install allowed to run at all" gate.
+$isLicensePage = strpos($path, '/license') === 0;
+if (!$isPublic && !$isLicensePage && isLoggedIn() && licenseState() === 'locked') {
+    redirect(BASE_URL . '/license');
+}
+
 // ── Permission-based access control ───────────────────────────
 // Define which permission each route prefix requires. Anything
 // not listed here is available to any logged-in user (matches
@@ -278,6 +289,8 @@ if ($path === '/' || $path === '' || $path === '/dashboard') {
     require APP_PATH . '/controllers/SuspenseController.php';
 } elseif (strpos($path, '/account') === 0) {
     require APP_PATH . '/controllers/AccountController.php';
+} elseif (strpos($path, '/license') === 0) {
+    require APP_PATH . '/controllers/LicenseController.php';
 } elseif ($path === '/login' || $path === '/logout') {
     require APP_PATH . '/controllers/AuthController.php';
 } else {

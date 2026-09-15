@@ -336,7 +336,7 @@
                         <!-- Administration Dropdown -->
                         <div class="relative dropdown">
                             <button
-                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings', '/branches', '/audit'], $currentPath) ?>">
+                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings', '/license', '/branches', '/audit'], $currentPath) ?>">
                                 Administration
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -366,6 +366,11 @@
                                 <?php if (can('settings.manage')): ?>
                                 <a href="<?= BASE_URL ?>/settings" class="dropdown-item">
                                     ⚙️ Settings
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('settings.manage')): ?>
+                                <a href="<?= BASE_URL ?>/license" class="dropdown-item">
+                                    🔑 Subscription
                                 </a>
                                 <?php endif; ?>
                             </div>
@@ -701,6 +706,13 @@
                                     ⚙️ Settings
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('settings.manage')): ?>
+                                <a href="<?= BASE_URL ?>/license"
+                                    class="nav-link block <?= isActive('/license', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    🔑 Subscription
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endif; ?>
@@ -743,3 +755,15 @@
 
     <!-- Main Content -->
     <main class="flex-1 container mx-auto px-4 py-6">
+        <?php if (isLoggedIn() && licenseState() === 'warning'): $licenseDaysRemaining = licenseDaysRemaining(); ?>
+        <div class="bg-yellow-50 border border-yellow-300 text-yellow-800 px-4 py-3 rounded-lg mb-4 flex flex-wrap items-center justify-between gap-3">
+            <span class="text-sm">
+                <?php if ($licenseDaysRemaining >= 0): ?>
+                    Your subscription expires in <?= $licenseDaysRemaining ?> day<?= $licenseDaysRemaining === 1 ? '' : 's' ?>.
+                <?php else: ?>
+                    Your subscription expired <?= abs($licenseDaysRemaining) ?> day<?= abs($licenseDaysRemaining) === 1 ? '' : 's' ?> ago — renew before the grace period ends to avoid being locked out.
+                <?php endif; ?>
+            </span>
+            <a href="<?= BASE_URL ?>/license" class="whitespace-nowrap text-sm font-semibold underline">Renew now</a>
+        </div>
+        <?php endif; ?>

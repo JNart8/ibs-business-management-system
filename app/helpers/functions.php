@@ -329,6 +329,138 @@ function planUpgradeNotice(mixed $featureLabel = 'This feature')
 }
 
 /**
+ * Load app/config/licensing.php (warning/grace windows + public key).
+ * Cached per-request, same pattern as planDefinitions().
+ */
+function licensingConfig()
+{
+    static $config = null;
+    if ($config === null) {
+        $config = require APP_PATH . '/config/licensing.php';
+    }
+    return $config;
+}
+
+/**
+ * The single `license` row for this install (one row, like `settings`).
+ * Auto-creates it (grandfathered 90 days) if a fresh install somehow
+ * reaches this before the migration has run, so it degrades safely
+ * rather than fatal-erroring every page.
+ * Cached per-request only (not session) — same reasoning as
+ * currentPlan(): entering a code should take effect on the very next
+ * page load, no logout/login needed.
+ */
+function licenseRow()
+{
+    static $row = null;
+    if ($row === null) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT * FROM license ORDER BY id ASC LIMIT 1");
+        if (!$row) {
+            $db->query(
+                "INSERT INTO license (install_id, expires_at) VALUES (?, DATE_ADD(NOW(), INTERVAL 90 DAY))",
+                [bin2hex(random_bytes(8))]
+            );
+            $row = $db->fetchOne("SELECT * FROM license ORDER BY id ASC LIMIT 1");
+        }
+    }
+    return $row;
+}
+
+/**
+ * This install's unique id. Shown on /license so the client can quote
+ * it when requesting a renewal code — codes are bound to one install_id
+ * and won't verify against a different one.
+ */
+function licenseInstallId()
+{
+    return licenseRow()['install_id'];
+}
+
+function licenseExpiresAt()
+{
+    return licenseRow()['expires_at'];
+}
+
+/**
+ * Signed day count to expiry: positive = days remaining, negative =
+ * days since it expired. Display only — see licenseState() for the
+ * actual lock/warning decision (which compares full timestamps, not
+ * rounded days, to avoid off-by-one edge cases at day boundaries).
+ */
+function licenseDaysRemaining()
+{
+    $now       = new DateTimeImmutable('today');
+    $expiresAt = new DateTimeImmutable(licenseExpiresAt());
+    return (int) $now->diff($expiresAt)->format('%r%a');
+}
+
+/**
+ * 'active'  — nothing to show.
+ * 'warning' — inside warning_days of expiry, or past expiry but still
+ *             inside grace_days. App stays fully usable either way.
+ * 'locked'  — past expires_at + grace_days. Every route except
+ *             /license (and login/logout) redirects there — see
+ *             public/index.php.
+ */
+function licenseState()
+{
+    $config    = licensingConfig();
+    $now       = new DateTimeImmutable();
+    $expiresAt = new DateTimeImmutable(licenseExpiresAt());
+
+    if ($now > $expiresAt->modify("+{$config['grace_days']} days")) {
+        return 'locked';
+    }
+    if ($now >= $expiresAt->modify("-{$config['warning_days']} days")) {
+        return 'warning';
+    }
+    return 'active';
+}
+
+/**
+ * Verify and apply an unlock code submitted on /license.
+ * Returns ['ok' => bool, 'message' => string] for the controller to
+ * flash straight back to the user.
+ */
+function applyLicenseCode(mixed $code)
+{
+    $config  = licensingConfig();
+    $decoded = LicenseCode::verify((string) $code, $config['public_key']);
+
+    if ($decoded === null) {
+        return ['ok' => false, 'message' => "That code isn't valid. Double check you copied the whole thing."];
+    }
+
+    if ($decoded['install_id'] !== licenseInstallId()) {
+        return ['ok' => false, 'message' => 'That code was issued for a different installation.'];
+    }
+
+    if ($decoded['expires_at'] <= time()) {
+        return ['ok' => false, 'message' => 'That code has already expired.'];
+    }
+
+    $previousExpiresAt = licenseExpiresAt();
+    $newExpiresAt       = date('Y-m-d H:i:s', $decoded['expires_at']);
+
+    $db = Database::getInstance();
+    $db->query(
+        "UPDATE license SET expires_at = ?, last_code_used = ?, last_unlocked_at = NOW() ORDER BY id ASC LIMIT 1",
+        [$newExpiresAt, substr((string) $code, 0, 255)]
+    );
+
+    logAudit('license.renew', 'license', null, [
+        'previous_expires_at' => $previousExpiresAt,
+        'new_expires_at'      => $newExpiresAt,
+    ], true);
+
+    return [
+        'ok'      => true,
+        'message' => 'Subscription renewed — active until ' . formatDate($newExpiresAt, 'd M Y') . '.',
+    ];
+}
+
+/**
  * Generate unique SKU (if you want auto-generation)
  */
 function generateSKU(mixed $prefix = 'PROD')

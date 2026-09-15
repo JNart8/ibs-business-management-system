@@ -78,7 +78,8 @@ define('LOGIN_TIMEOUT_MINUTES', 15);
 $helpers = [
     'functions.php',
     'validation.php',
-    'response.php'
+    'response.php',
+    'LicenseCode.php'
 ];
 
 foreach ($helpers as $helper) {
