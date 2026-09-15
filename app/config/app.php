@@ -29,7 +29,7 @@ if (getenv('APP_ENV') === 'production') {
 }
 
 // Timezone (adjust to your location)
-date_default_timezone_set('Africa/Blantyre');
+date_default_timezone_set('Africa/Accra');
 
 // Session configuration
 ini_set('session.cookie_httponly', 1); // Prevent JavaScript access to session cookie
