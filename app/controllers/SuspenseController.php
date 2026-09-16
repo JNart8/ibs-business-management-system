@@ -270,8 +270,8 @@ function resolveSuspense(Database $db)
         $db->query("
             INSERT INTO customer_transactions
                 (customer_id, transaction_type, amount, balance_before,
-                 balance_after, reference_type, reference_id, payment_method, notes, user_id)
-            VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?)
+                 balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+            VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?, ?)
         ", [
             $customerId,
             $amount,
@@ -280,7 +280,8 @@ function resolveSuspense(Database $db)
             $txId,
             $financialMethod,
             "Resolved suspense deposit (Ref: " . ($suspenseTx['reference_no'] ?: 'N/A') . ")",
-            $userId
+            $userId,
+            activeBranchId()
         ]);
 
         $db->query("UPDATE customers SET current_balance = current_balance + ? WHERE id = ?", [$amount, $customerId]);
@@ -288,7 +289,7 @@ function resolveSuspense(Database $db)
         // D. Auto-apply deposit to outstanding sales (oldest first - FIFO)
         $remainingDeposit = $amount;
         $outstandingSales = $db->fetchAll("
-            SELECT id, sale_number, amount_due, amount_paid, total_amount
+            SELECT id, sale_number, amount_due, amount_paid, total_amount, branch_id
             FROM sales
             WHERE customer_id = ?
               AND payment_status IN ('unpaid', 'partial')
@@ -318,8 +319,8 @@ function resolveSuspense(Database $db)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)
             ", [
                 $customerId,
                 -$paymentAmount,
@@ -327,7 +328,8 @@ function resolveSuspense(Database $db)
                 $currentCustBalance,
                 $sale['id'],
                 "Auto-applied payment from resolved suspense deposit for sale " . $sale['sale_number'],
-                $userId
+                $userId,
+                $sale['branch_id'] ?? activeBranchId()
             ]);
 
             $remainingDeposit -= $paymentAmount;
@@ -548,8 +550,8 @@ function updateSuspense(Database $db, mixed $txId)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?, ?)
             ", [
                 $customerId,
                 $newAmount,
@@ -558,7 +560,8 @@ function updateSuspense(Database $db, mixed $txId)
                 $txId,
                 $paymentMethod,
                 "Resolved suspense deposit (Ref: " . ($newReferenceNo ?: 'N/A') . ")",
-                $userId
+                $userId,
+                activeBranchId()
             ]);
 
             // Re-debit Suspense (withdrawing)

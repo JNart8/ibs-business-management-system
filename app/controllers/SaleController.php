@@ -476,7 +476,22 @@ function completeSale(Database $db)
                 $db->query("
         INSERT INTO customer_transactions
             (customer_id, transaction_type, amount, balance_before,
-             balance_after, reference_type, reference_id, payment_method, user_id, created_at)
+             balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+        VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)", [
+                    $customerId,
+                    -$totalAmount,
+                    $balanceBefore,
+                    $balanceBefore - $totalAmount,
+                    $saleId,
+                    $userId,
+                    $saleDate,
+                    $branchIdForSale
+                ]);
+            } else {
+                $db->query("
+        INSERT INTO customer_transactions
+            (customer_id, transaction_type, amount, balance_before,
+             balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
         VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)", [
                     $customerId,
                     -$totalAmount,
@@ -484,20 +499,7 @@ function completeSale(Database $db)
                     $balanceBefore - $totalAmount,
                     $saleId,
                     $userId,
-                    $saleDate
-                ]);
-            } else {
-                $db->query("
-        INSERT INTO customer_transactions
-            (customer_id, transaction_type, amount, balance_before,
-             balance_after, reference_type, reference_id, payment_method, user_id)
-        VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'deposit', ?)", [
-                    $customerId,
-                    -$totalAmount,
-                    $balanceBefore,
-                    $balanceBefore - $totalAmount,
-                    $saleId,
-                    $userId
+                    $branchIdForSale
                 ]);
             }
 
@@ -520,8 +522,8 @@ function completeSale(Database $db)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)", [
                     $customerId,
                     -$totalAmount,
                     $balanceBefore,
@@ -529,14 +531,15 @@ function completeSale(Database $db)
                     $saleId,
                     $paymentMethod,
                     $userId,
-                    $saleDate
+                    $saleDate,
+                    $branchIdForSale
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?, ?)
             ", [
                     $customerId,
                     -$totalAmount,
@@ -544,7 +547,8 @@ function completeSale(Database $db)
                     $balanceBefore - $totalAmount,
                     $saleId,
                     $paymentMethod,
-                    $userId
+                    $userId,
+                    $branchIdForSale
                 ]);
             }
             // Record payment (credit)
@@ -552,8 +556,8 @@ function completeSale(Database $db)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)", [
                     $customerId,
                     $amountPaid,
                     $balanceBefore - $totalAmount,
@@ -561,14 +565,15 @@ function completeSale(Database $db)
                     $saleId,
                     $paymentMethod,
                     $userId,
-                    $saleDate
+                    $saleDate,
+                    $branchIdForSale
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)
             ", [
                     $customerId,
                     $amountPaid,
@@ -576,7 +581,8 @@ function completeSale(Database $db)
                     $balanceBefore - $totalAmount + $amountPaid,
                     $saleId,
                     $paymentMethod,
-                    $userId
+                    $userId,
+                    $branchIdForSale
                 ]);
             }
             // Update customer balance (net effect)
@@ -597,29 +603,31 @@ function completeSale(Database $db)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?, ?, ?)", [
                     $customerId,
                     -$totalAmount,
                     $balanceBefore,
                     $balanceBefore - $totalAmount,
                     $saleId,
                     $userId,
-                    $saleDate
+                    $saleDate,
+                    $branchIdForSale
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?, ?)
             ", [
                     $customerId,
                     -$totalAmount,
                     $balanceBefore,
                     $balanceBefore - $totalAmount,
                     $saleId,
-                    $userId
+                    $userId,
+                    $branchIdForSale
                 ]);
             }
 
@@ -1124,8 +1132,8 @@ function updateSale(Database $db, mixed $id)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'adjustment', ?, ?, ?, 'sale', ?, ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'adjustment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)
             ", [
                 $customerId,
                 $paymentDifference,
@@ -1134,7 +1142,8 @@ function updateSale(Database $db, mixed $id)
                 $id,
                 $paymentMethod,
                 $txnNotes,
-                $userId
+                $userId,
+                $sale['branch_id'] ?? activeBranchId()
             ]);
 
             // Adjust financial account balance — resolve by the sale's own
@@ -1344,29 +1353,31 @@ function processPayment(Database $db, mixed $id)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)", [
                     $sale['customer_id'],
                     -$payment, // Negative to reduce balance
                     $balanceBefore,
                     $balanceAfter,
                     $id,
                     $userId,
-                    $sale['sale_date']
+                    $sale['sale_date'],
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)
             ", [
                     $sale['customer_id'],
                     -$payment, // Negative to reduce balance
                     $balanceBefore,
                     $balanceAfter,
                     $id,
-                    $userId
+                    $userId,
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             }
             // Update customer balance - reduce deposit
@@ -1383,8 +1394,8 @@ function processPayment(Database $db, mixed $id)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)", [
                     $sale['customer_id'],
                     $payment,
                     $balanceBefore,
@@ -1392,14 +1403,15 @@ function processPayment(Database $db, mixed $id)
                     $id,
                     $paymentMethod,
                     $userId,
-                    $sale['sale_date']
+                    $sale['sale_date'],
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)
             ", [
                     $sale['customer_id'],
                     $payment,
@@ -1407,7 +1419,8 @@ function processPayment(Database $db, mixed $id)
                     $balanceAfter,
                     $id,
                     $paymentMethod,
-                    $userId
+                    $userId,
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             }
             // Update customer balance
@@ -1521,8 +1534,8 @@ function voidSale(Database $db, mixed $id)
                 $db->query("
                     INSERT INTO customer_transactions
                         (customer_id, transaction_type, amount, balance_before,
-                         balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                    VALUES (?, 'refund', ?, ?, ?, 'sale', ?, ?, ?, ?)
+                         balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                    VALUES (?, 'refund', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)
                 ", [
                     $customer['id'],
                     $customerBalanceAdj,
@@ -1531,7 +1544,8 @@ function voidSale(Database $db, mixed $id)
                     $id,
                     $paymentMethod,
                     "Refund/Reversal for Voided Sale #" . $sale['sale_number'],
-                    $userId
+                    $userId,
+                    $voidBranchId
                 ]);
             } else {
                 // If no balance adjustment (fully paid cash/mobile/bank sale), just subtract total purchases

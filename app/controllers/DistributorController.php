@@ -481,9 +481,9 @@ function completeDistributorDelivery(Database $db)
         $netCustomerBalanceEffect = $customerAmountPaid - $customerTotalAmount;
 
         $db->query("
-            INSERT INTO customer_transactions 
-                (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id)
-            VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Sale', ?)
+            INSERT INTO customer_transactions
+                (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+            VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Sale', ?, ?)
         ", [
             $customerId,
             -$customerTotalAmount,
@@ -491,14 +491,15 @@ function completeDistributorDelivery(Database $db)
             $custBalanceBefore - $customerTotalAmount,
             $saleId,
             $customerPaymentMethod,
-            $userId
+            $userId,
+            $branchIdForDistrib
         ]);
 
         if ($customerAmountPaid > 0) {
             $db->query("
-                INSERT INTO customer_transactions 
-                    (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Customer Payment', ?)
+                INSERT INTO customer_transactions
+                    (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Customer Payment', ?, ?)
             ", [
                 $customerId,
                 $customerAmountPaid,
@@ -506,7 +507,8 @@ function completeDistributorDelivery(Database $db)
                 $custBalanceBefore - $customerTotalAmount + $customerAmountPaid,
                 $saleId,
                 $customerPaymentMethod,
-                $userId
+                $userId,
+                $branchIdForDistrib
             ]);
 
             // Record money inflow to financial account

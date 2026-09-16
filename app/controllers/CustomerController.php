@@ -588,7 +588,7 @@ function processDeposit(Database $db, mixed $id)
 
         // Get all unpaid and partial sales for this customer (oldest first)
         $outstandingSales = $db->fetchAll("
-            SELECT id, sale_number, amount_due, amount_paid, total_amount
+            SELECT id, sale_number, amount_due, amount_paid, total_amount, branch_id
             FROM sales
             WHERE customer_id = ?
               AND payment_status IN ('unpaid', 'partial')
@@ -622,8 +622,8 @@ function processDeposit(Database $db, mixed $id)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)
             ", [
                 $id,
                 -$paymentAmount, // Negative because it's reducing their deposit balance
@@ -631,7 +631,8 @@ function processDeposit(Database $db, mixed $id)
                 $balanceAfterPayment,
                 $sale['id'],
                 "Auto-payment from deposit for sale " . $sale['sale_number'],
-                $userId
+                $userId,
+                $sale['branch_id'] ?? activeBranchId()
             ]);
 
             // Update customer balance (reduce by payment amount)
@@ -713,8 +714,8 @@ function adjustCreditLimit(Database $db, mixed $id)
         $db->query("
             INSERT INTO customer_transactions
                 (customer_id, transaction_type, amount, balance_before,
-                 balance_after, notes, user_id)
-            VALUES (?, 'adjustment', 0, ?, ?, ?, ?)
+                 balance_after, notes, user_id, branch_id)
+            VALUES (?, 'adjustment', 0, ?, ?, ?, ?, ?)
         ", [
             $id,
             $customer['current_balance'],
@@ -722,7 +723,8 @@ function adjustCreditLimit(Database $db, mixed $id)
             "Credit limit changed from " . formatMoney($customer['credit_limit'])
                 . " to " . formatMoney($newLimit)
                 . ($notes ? ". $notes" : ''),
-            $userId
+            $userId,
+            activeBranchId()
         ]);
 
         redirect(
