@@ -46,6 +46,9 @@ switch ($action) {
     case 'customer-credit':
         customerCreditSettlementReport($db);
         break;
+    case 'branch-performance':
+        branchPerformanceReport($db);
+        break;
     case 'products':
         productsReport($db);
         break;
@@ -867,6 +870,103 @@ function customerCreditSettlementReport(Database $db)
     $pageTitle = 'Customer Credit Settlement';
     $isPartialView = hasMultiBranch() && !isCompanyWide();
     include APP_PATH . '/views/reports/customer_credit_settlement.php';
+}
+
+// ============================================================
+// BRANCH PERFORMANCE COMPARISON REPORT
+// ============================================================
+//
+// Company-wide admins could only see one company-wide total or drill
+// into a single branch at a time — no side-by-side view. This puts
+// revenue, transaction volume, and gross profit for every branch in
+// one table so an admin can spot under/over-performing branches at a
+// glance. Company-wide only: a branch-scoped admin has just their own
+// branch to look at, so a comparison table has nothing to compare.
+
+function branchPerformanceReport(Database $db)
+{
+    if (!isCompanyWide()) {
+        redirect(BASE_URL . '/reports', 'error', 'Branch performance comparison is only available to company-wide admins');
+        return;
+    }
+
+    // Get filter parameters
+    $period   = $_GET['period']    ?? 'this_month';
+    $dateFrom = $_GET['date_from'] ?? '';
+    $dateTo   = $_GET['date_to']   ?? '';
+
+    $dates    = calculateDateRange($period, $dateFrom, $dateTo);
+    $dateFrom = $dates['from'];
+    $dateTo   = $dates['to'];
+
+    // ── All active branches (so a branch with zero sales still shows) ──
+    $allBranches = $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC");
+
+    // ── Revenue & transaction count, by branch ──────────────────────
+    $salesRows = $db->fetchAll("
+        SELECT
+            s.branch_id,
+            COUNT(*)                                             AS sale_count,
+            COALESCE(SUM(s.total_amount - s.discount_amount), 0) AS net_sales
+        FROM sales s
+        WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        GROUP BY s.branch_id
+    ", [$dateFrom, $dateTo]);
+
+    // ── Cost of goods sold, by branch (same logic as the P&L report) ──
+    $cogsRows = $db->fetchAll("
+        SELECT
+            s.branch_id,
+            COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs
+        FROM sale_items si
+        INNER JOIN sales s ON si.sale_id = s.id
+        INNER JOIN products p ON si.product_id = p.id
+        WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        GROUP BY s.branch_id
+    ", [$dateFrom, $dateTo]);
+
+    $salesByBranch = [];
+    foreach ($salesRows as $row) {
+        $salesByBranch[$row['branch_id']] = $row;
+    }
+    $cogsByBranch = [];
+    foreach ($cogsRows as $row) {
+        $cogsByBranch[$row['branch_id']] = (float) $row['total_cogs'];
+    }
+
+    $rows = [];
+    foreach ($allBranches as $branch) {
+        $branchId  = $branch['id'];
+        $saleCount = (int) ($salesByBranch[$branchId]['sale_count'] ?? 0);
+        $netSales  = (float) ($salesByBranch[$branchId]['net_sales'] ?? 0);
+        $cogs      = $cogsByBranch[$branchId] ?? 0.0;
+        $profit    = $netSales - $cogs;
+        $margin    = $netSales > 0 ? ($profit / $netSales) * 100 : 0;
+
+        $rows[] = [
+            'branch_id'      => $branchId,
+            'branch_name'    => $branch['name'],
+            'sale_count'     => $saleCount,
+            'revenue'        => $netSales,
+            'avg_sale_value' => $saleCount > 0 ? $netSales / $saleCount : 0,
+            'gross_profit'   => $profit,
+            'margin'         => $margin,
+        ];
+    }
+
+    // Busiest branch (by revenue) leads
+    usort($rows, fn($a, $b) => $b['revenue'] <=> $a['revenue']);
+
+    $summary = [
+        'total_revenue' => array_sum(array_column($rows, 'revenue')),
+        'total_sales'   => array_sum(array_column($rows, 'sale_count')),
+        'total_profit'  => array_sum(array_column($rows, 'gross_profit')),
+    ];
+
+    $pageTitle = 'Branch Performance Comparison';
+    include APP_PATH . '/views/reports/branch_performance.php';
 }
 
 

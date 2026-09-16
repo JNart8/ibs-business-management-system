@@ -321,6 +321,11 @@
                                     🔁 Customer Credit Settlement
                                 </a>
                                 <?php endif; ?>
+                                <?php if (hasMultiBranch() && isCompanyWide()): ?>
+                                <a href="<?= BASE_URL ?>/reports/branch-performance" class="dropdown-item">
+                                    🏢 Branch Performance
+                                </a>
+                                <?php endif; ?>
                                 <?php else: ?>
                                 <div class="border-t my-1"></div>
                                 <span class="dropdown-item text-gray-400 cursor-not-allowed" title="Upgrade to unlock">
@@ -648,6 +653,13 @@
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     🔁 Customer Credit Settlement
+                                </a>
+                                <?php endif; ?>
+                                <?php if (hasMultiBranch() && isCompanyWide()): ?>
+                                <a href="<?= BASE_URL ?>/reports/branch-performance"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    🏢 Branch Performance
                                 </a>
                                 <?php endif; ?>
                                 <?php else: ?>
