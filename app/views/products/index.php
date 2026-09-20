@@ -79,7 +79,7 @@
 
 <!-- Search and Filter -->
 <div class="bg-white p-4 rounded-lg shadow mb-6">
-    <form method="GET" action="<?= BASE_URL ?>/products" class="flex gap-4">
+    <form method="GET" action="<?= BASE_URL ?>/products" class="flex flex-col sm:flex-row gap-4">
         <div class="flex-1">
             <input
                 type="text"
@@ -88,10 +88,15 @@
                 value="<?= e($_GET['search'] ?? '') ?>"
                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
         </div>
+        <select name="status" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <option value="active" <?= $status === 'active' ? 'selected' : '' ?>>Active products</option>
+            <option value="inactive" <?= $status === 'inactive' ? 'selected' : '' ?>>Inactive products</option>
+            <option value="all" <?= $status === 'all' ? 'selected' : '' ?>>All products</option>
+        </select>
         <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition">
             Search
         </button>
-        <?php if (!empty($_GET['search'])): ?>
+        <?php if (!empty($_GET['search']) || $status !== 'active'): ?>
             <a href="<?= BASE_URL ?>/products" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
                 Clear
             </a>
@@ -111,14 +116,15 @@
                     <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Avg Cost (WMA)</th>
                     <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Selling Price</th>
                     <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Stock</th>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Stock Status</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Availability</th>
                     <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-200">
                 <?php if (empty($products)): ?>
                     <tr>
-                        <td colspan="8" class="px-6 py-12 text-center text-gray-500">
+                        <td colspan="9" class="px-6 py-12 text-center text-gray-500">
                             <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
                             </svg>
@@ -172,6 +178,13 @@
                                 </span>
                             </td>
                             <td class="px-6 py-4 text-center">
+                                <?php if ($product['is_active']): ?>
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800">Active</span>
+                                <?php else: ?>
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">Inactive</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="px-6 py-4 text-center">
                                 <div class="flex justify-center gap-2">
                                     <a href="<?= BASE_URL ?>/products/view/<?= $product['id'] ?>"
                                         class="text-blue-600 hover:text-blue-800"
@@ -188,6 +201,19 @@
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                                         </svg>
                                     </a>
+                                    <?php if (!$product['is_active']): ?>
+                                        <form method="POST" action="<?= BASE_URL ?>/products/activate/<?= $product['id'] ?>" class="inline">
+                                            <?= csrfField() ?>
+                                            <button type="submit"
+                                                class="text-blue-600 hover:text-blue-800"
+                                                title="Reactivate product"
+                                                onclick="return confirm('Reactivate <?= e($product['name']) ?>?')">
+                                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                                </svg>
+                                            </button>
+                                        </form>
+                                    <?php endif; ?>
                                     <a href="<?= BASE_URL ?>/products/delete/<?= $product['id'] ?>"
                                         class="text-red-600 hover:text-red-800"
                                         title="Delete"
@@ -214,14 +240,14 @@
                 </div>
                 <div class="flex gap-2">
                     <?php if ($page > 1): ?>
-                        <a href="?page=<?= $page - 1 ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>"
+                        <a href="?page=<?= $page - 1 ?>&status=<?= urlencode($status) ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>"
                             class="px-4 py-2 bg-white border rounded hover:bg-gray-50">
                             Previous
                         </a>
                     <?php endif; ?>
 
                     <?php if ($page < $totalPages): ?>
-                        <a href="?page=<?= $page + 1 ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>"
+                        <a href="?page=<?= $page + 1 ?>&status=<?= urlencode($status) ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>"
                             class="px-4 py-2 bg-white border rounded hover:bg-gray-50">
                             Next
                         </a>

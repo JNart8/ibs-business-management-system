@@ -47,6 +47,11 @@ switch ($action) {
         deleteProduct($db, $id);
         break;
 
+    case 'activate':
+        if (!$id) redirect(BASE_URL . '/products', 'error', 'Product ID required');
+        activateProduct($db, $id);
+        break;
+
     case 'search':
         searchProducts($db);
         break;
@@ -75,9 +80,17 @@ function listProducts(Database $db)
     $page     = max(1, (int)($_GET['page'] ?? 1));
     $perPage  = ITEMS_PER_PAGE;
     $offset   = ($page - 1) * $perPage;
+    $status   = $_GET['status'] ?? 'active';
+    if (!in_array($status, ['active', 'inactive', 'all'], true)) {
+        $status = 'active';
+    }
 
     $params = [];
-    $where  = "WHERE p.is_active = 1";
+    $where  = match ($status) {
+        'inactive' => "WHERE p.is_active = 0",
+        'all'      => "WHERE 1 = 1",
+        default    => "WHERE p.is_active = 1",
+    };
 
     if (!empty($search)) {
         $where   .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)";
@@ -107,7 +120,7 @@ function listProducts(Database $db)
         SELECT
             p.id, p.sku, p.barcode, p.name,
             p.selling_price, p.cost_price, p.average_cost,
-            p.current_stock, p.reorder_level, p.unit,
+            p.current_stock, p.reorder_level, p.unit, p.is_active,
             c.name AS category_name,
             CASE
                 WHEN p.current_stock = 0              THEN 'out-of-stock'
@@ -364,6 +377,27 @@ function deleteProduct(Database $db, mixed $id)
             redirect(BASE_URL . '/products', 'error', 'Failed to delete product');
         }
     }
+}
+
+/**
+ * Restore a product that was deactivated because it has sales history.
+ */
+function activateProduct(Database $db, mixed $id)
+{
+    if (($_POST['csrf_token'] ?? '') !== ($_SESSION['csrf_token'] ?? '')) {
+        redirect(BASE_URL . '/products?status=inactive', 'error', 'Invalid form submission');
+    }
+
+    $product = $db->fetchOne("SELECT id, name, is_active FROM products WHERE id = ?", [$id]);
+    if (!$product) redirect(BASE_URL . '/products?status=inactive', 'error', 'Product not found');
+
+    if ($product['is_active']) {
+        redirect(BASE_URL . '/products', 'success', 'Product is already active');
+    }
+
+    $db->query("UPDATE products SET is_active = 1 WHERE id = ?", [$id]);
+    logAudit('product.activate', 'product', $id, ['name' => $product['name']]);
+    redirect(BASE_URL . '/products', 'success', 'Product reactivated successfully');
 }
 
 /**
