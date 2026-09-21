@@ -293,6 +293,9 @@
                                 <a href="<?= BASE_URL ?>/reports/stock-valuation" class="dropdown-item">
                                     📦 Stock Valuation
                                 </a>
+                                <a href="<?= BASE_URL ?>/reports/inventory" class="dropdown-item">
+                                    🏬 Stock by Branch
+                                </a>
                                 <a href="<?= BASE_URL ?>/reports/top-selling" class="dropdown-item">
                                     ⭐ Top Selling
                                 </a>
@@ -611,6 +614,11 @@
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     📦 Stock Valuation
+                                </a>
+                                <a href="<?= BASE_URL ?>/reports/inventory"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    🏬 Stock by Branch
                                 </a>
                                 <a href="<?= BASE_URL ?>/reports/top-selling"
                                     class="nav-link block"

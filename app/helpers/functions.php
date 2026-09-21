@@ -915,6 +915,145 @@ function allocateCartDiscount(array $rows, string $subtotalKey, string $discount
 }
 
 /**
+ * Branches the current user may look at stock for: every active branch for a
+ * company-wide user, only their own for a branch-scoped one. [] means none.
+ *
+ * @return array [['id' => .., 'name' => ..], ...] ordered by name
+ */
+function viewableBranches(Database $db): array
+{
+    $ids = visibleBranchIds();
+    if ($ids === null) {
+        return $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC");
+    }
+    if (empty($ids)) {
+        return [];
+    }
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    return $db->fetchAll(
+        "SELECT id, name FROM branches WHERE is_active = 1 AND id IN ($placeholders) ORDER BY name ASC",
+        $ids
+    );
+}
+
+/**
+ * Product stock laid out per branch — the data behind the Stock by Branch
+ * report and its CSV export (shared so the two can never disagree).
+ *
+ * Branch filtering is validated against viewableBranches(): a requested
+ * branch the user isn't allowed to see is ignored (falls back to all of
+ * their viewable branches), so a branch-scoped user can't read another
+ * branch's stock by editing the URL.
+ *
+ * $f keys (all optional): branch, category, search, status
+ * (in_stock|low|out), sort_by (name|stock_desc|stock_asc|value_desc|value_asc).
+ *
+ * @return array ['viewable' => [...], 'branches' => [...shown], 'selected' => int|null,
+ *                'rows' => [...], 'branchTotals' => [id => ['units','value']], 'summary' => [...]]
+ */
+function inventoryByBranch(Database $db, array $f): array
+{
+    $viewable    = viewableBranches($db);
+    $viewableIds = array_map('intval', array_column($viewable, 'id'));
+
+    $selected = null;
+    if (($f['branch'] ?? '') !== '' && in_array((int) $f['branch'], $viewableIds, true)) {
+        $selected = (int) $f['branch'];
+    }
+    $shown    = array_values(array_filter($viewable, fn($b) => $selected === null || (int) $b['id'] === $selected));
+    $shownIds = array_map('intval', array_column($shown, 'id'));
+
+    // Product filters
+    $where  = "WHERE p.is_active = 1";
+    $params = [];
+    if (!empty($f['category'])) {
+        $where   .= " AND p.category_id = ?";
+        $params[] = $f['category'];
+    }
+    $search = trim($f['search'] ?? '');
+    if ($search !== '') {
+        $where   .= " AND (p.name LIKE ? OR p.sku LIKE ?)";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
+
+    $products = $db->fetchAll("
+        SELECT p.id, p.sku, p.name, p.unit, p.reorder_level, p.average_cost, p.selling_price,
+               c.name AS category_name
+        FROM products p
+        LEFT JOIN categories c ON c.id = p.category_id
+        $where
+    ", $params);
+
+    // One query for every shown branch's quantities, pivoted below.
+    $qty = [];
+    if ($shownIds) {
+        $ph   = implode(',', array_fill(0, count($shownIds), '?'));
+        $rows = $db->fetchAll("SELECT product_id, branch_id, quantity FROM branch_stock WHERE branch_id IN ($ph)", $shownIds);
+        foreach ($rows as $r) {
+            $qty[(int) $r['product_id']][(int) $r['branch_id']] = (float) $r['quantity'];
+        }
+    }
+
+    $status = $f['status'] ?? '';
+    $out    = [];
+    foreach ($products as $p) {
+        $perBranch = [];
+        $total     = 0.0;
+        foreach ($shownIds as $bid) {
+            $q = $qty[(int) $p['id']][$bid] ?? 0.0;
+            $perBranch[$bid] = $q;
+            $total += $q;
+        }
+        $reorder = (float) $p['reorder_level'];
+        $state   = $total <= 0 ? 'out' : ($total <= $reorder ? 'low' : 'ok');
+        if ($status === 'in_stock' && $total <= 0) continue;
+        if ($status === 'low' && $state !== 'low') continue;
+        if ($status === 'out' && $state !== 'out') continue;
+
+        $p['branch_qty'] = $perBranch;
+        $p['total']      = $total;
+        $p['value']      = $total * (float) $p['average_cost'];
+        $p['state']      = $state;
+        $out[]           = $p;
+    }
+
+    $sortBy = $f['sort_by'] ?? 'name';
+    usort($out, match ($sortBy) {
+        'stock_desc' => fn($a, $b) => $b['total'] <=> $a['total'],
+        'stock_asc'  => fn($a, $b) => $a['total'] <=> $b['total'],
+        'value_desc' => fn($a, $b) => $b['value'] <=> $a['value'],
+        'value_asc'  => fn($a, $b) => $a['value'] <=> $b['value'],
+        default      => fn($a, $b) => strcasecmp($a['name'], $b['name']),
+    });
+
+    $branchTotals = [];
+    foreach ($shownIds as $bid) {
+        $branchTotals[$bid] = ['units' => 0.0, 'value' => 0.0];
+    }
+    $summary = ['products' => count($out), 'units' => 0.0, 'value' => 0.0, 'low' => 0, 'out' => 0];
+    foreach ($out as $p) {
+        $summary['units'] += $p['total'];
+        $summary['value'] += $p['value'];
+        if ($p['state'] === 'low') $summary['low']++;
+        if ($p['state'] === 'out') $summary['out']++;
+        foreach ($p['branch_qty'] as $bid => $q) {
+            $branchTotals[$bid]['units'] += $q;
+            $branchTotals[$bid]['value'] += $q * (float) $p['average_cost'];
+        }
+    }
+
+    return [
+        'viewable'     => $viewable,
+        'branches'     => $shown,
+        'selected'     => $selected,
+        'rows'         => $out,
+        'branchTotals' => $branchTotals,
+        'summary'      => $summary,
+    ];
+}
+
+/**
  * A ready-to-splice SQL fragment + params enforcing branch visibility
  * on a query, built from visibleBranchIds(). Returns ['', []] when
  * there's no restriction to apply. If a user is somehow assigned to

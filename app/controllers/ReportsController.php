@@ -1633,8 +1633,34 @@ function customersReport(Database $db)
 
 function inventoryReport(Database $db)
 {
-    echo "<h1>Inventory Report - Coming Soon</h1>";
-    echo "<a href='" . BASE_URL . "/reports'>← Back to Reports</a>";
+    // Filters (all optional)
+    $branch   = $_GET['branch']   ?? '';
+    $category = $_GET['category'] ?? '';
+    $search   = trim($_GET['search'] ?? '');
+    $status   = $_GET['status']   ?? '';
+    $sortBy   = $_GET['sort_by']  ?? 'name';
+
+    // Branch validation/visibility lives in inventoryByBranch() so this page
+    // and its CSV export share one rule.
+    $data = inventoryByBranch($db, [
+        'branch'   => $branch,
+        'category' => $category,
+        'search'   => $search,
+        'status'   => $status,
+        'sort_by'  => $sortBy,
+    ]);
+
+    $viewableBranches = $data['viewable'];
+    $branches         = $data['branches'];
+    $selectedBranch   = $data['selected'];
+    $rows             = $data['rows'];
+    $branchTotals     = $data['branchTotals'];
+    $summary          = $data['summary'];
+
+    $categories = $db->fetchAll("SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name ASC");
+
+    $pageTitle = 'Stock by Branch';
+    include APP_PATH . '/views/reports/inventory.php';
 }
 
 // ============================================================

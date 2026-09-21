@@ -43,7 +43,8 @@ if (!in_array($type, [
     'top-selling',
     'low-stock',
     'dead-stock',
-    'profit-margin'
+    'profit-margin',
+    'inventory'
 ])) {
     redirect(BASE_URL . '/', 'error', 'Invalid export type');
     exit;
@@ -159,6 +160,9 @@ function exportData(Database $db, mixed $type)
             break;
         case 'profit-margin':
             exportProfitMargin($db, $output);
+            break;
+        case 'inventory':
+            exportInventory($db, $output);
             break;
     }
 
@@ -2298,6 +2302,73 @@ function exportStocks(Database $db, mixed $output)
 // ============================================================
 // HELPER FUNCTION
 // ============================================================
+
+/**
+ * Export Stock by Branch — same filters and the same branch-visibility rule
+ * as the on-screen report (both call inventoryByBranch()).
+ */
+function exportInventory(Database $db, mixed $output)
+{
+    $data = inventoryByBranch($db, [
+        'branch'   => $_GET['branch']   ?? '',
+        'category' => $_GET['category'] ?? '',
+        'search'   => trim($_GET['search'] ?? ''),
+        'status'   => $_GET['status']   ?? '',
+        'sort_by'  => $_GET['sort_by']  ?? 'name',
+    ]);
+    $branches = $data['branches'];
+    $multi    = count($branches) > 1;
+
+    $statusLabel = ['ok' => 'OK', 'low' => 'LOW STOCK', 'out' => 'OUT OF STOCK'];
+
+    // Header row: one quantity column per branch shown
+    $header = ['SKU', 'Product', 'Category', 'Unit'];
+    foreach ($branches as $b) {
+        $header[] = $b['name'];
+    }
+    if ($multi) {
+        $header[] = 'Total Stock';
+    }
+    $header[] = 'Avg Cost (' . CURRENCY_HOLDER . ')';
+    $header[] = 'Stock Value (' . CURRENCY_HOLDER . ')';
+    $header[] = 'Status';
+    fputcsv($output, $header);
+
+    foreach ($data['rows'] as $p) {
+        $row = [$p['sku'], $p['name'], $p['category_name'] ?? '', $p['unit']];
+        foreach ($branches as $b) {
+            $row[] = $p['branch_qty'][(int) $b['id']] ?? 0;
+        }
+        if ($multi) {
+            $row[] = $p['total'];
+        }
+        $row[] = number_format($p['average_cost'], 2, '.', '');
+        $row[] = number_format($p['value'], 2, '.', '');
+        $row[] = $statusLabel[$p['state']];
+        fputcsv($output, $row);
+    }
+
+    // Totals row
+    $totals = ['TOTAL', '', '', ''];
+    foreach ($branches as $b) {
+        $totals[] = $data['branchTotals'][(int) $b['id']]['units'];
+    }
+    if ($multi) {
+        $totals[] = $data['summary']['units'];
+    }
+    $totals[] = '';
+    $totals[] = number_format($data['summary']['value'], 2, '.', '');
+    $totals[] = '';
+    fputcsv($output, $totals);
+
+    fputcsv($output, []);
+    fputcsv($output, ['=== EXPORT SUMMARY ===']);
+    fputcsv($output, ['Export Date:', date('Y-m-d H:i:s')]);
+    fputcsv($output, ['Showing:', $data['selected'] !== null ? $branches[0]['name'] : ($multi ? 'All branches' : ($branches[0]['name'] ?? ''))]);
+    fputcsv($output, ['Total Products:', $data['summary']['products']]);
+    fputcsv($output, ['Low Stock:', $data['summary']['low']]);
+    fputcsv($output, ['Out of Stock:', $data['summary']['out']]);
+}
 
 /**
  * Calculate date range based on period
