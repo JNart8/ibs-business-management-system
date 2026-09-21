@@ -1493,6 +1493,7 @@ function exportProfitLoss(Database $db, mixed $output)
             COALESCE(SUM(subtotal - discount_amount), 0) AS net_sales
         FROM sales
         WHERE DATE(sale_date) BETWEEN ? AND ?
+          AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')
         $scopeSql
     ", array_merge([$dateFrom, $dateTo], $scopeParams));
 
@@ -1505,6 +1506,7 @@ function exportProfitLoss(Database $db, mixed $output)
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
         $scopeSqlS
     ", array_merge([$dateFrom, $dateTo], $scopeParamsS));
 
@@ -1537,6 +1539,7 @@ function exportProfitLoss(Database $db, mixed $output)
         INNER JOIN products p ON si.product_id = p.id
         LEFT JOIN categories c ON p.category_id = c.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
         $scopeSqlS
         GROUP BY p.category_id, c.name
         ORDER BY revenue DESC
