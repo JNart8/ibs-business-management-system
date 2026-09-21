@@ -423,14 +423,10 @@ function exportSales(Database $db, mixed $output)
         'net_line_total'
     ]);
 
-    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
-    $netLine = saleItemNetSql();
-
     // Fetch sales with items (FILTERED)
     $salesItems = $db->fetchAll("
         SELECT
             s.id AS sale_id,
-            {$netLine} AS net_line_total,
             s.sale_number,
             s.sale_date,
             c.full_name as customer_name,
@@ -463,13 +459,15 @@ function exportSales(Database $db, mixed $output)
     ", $params);
 
     // Write data rows. One row per line item, so the sale-level MONEY columns
-    // (subtotal, discount, total, paid, due) are written on a sale's first row
-    // only — repeating them would multiply the sale by its number of lines
-    // when the column is summed. Descriptive columns still repeat on every row
-    // so the file stays filterable by customer, payment method, etc.
+    // (paid, due) are written on a sale's first row only — repeating them would
+    // multiply the sale by its number of lines when the column is summed.
+    // sale_discount_amount is the opposite: each line carries its own share of
+    // the whole-cart discount, so the column sums to the discount given.
+    // Descriptive columns repeat on every row so the file stays filterable.
+    $discountShare = allocateCartDiscount($salesItems, 'sale_subtotal', 'sale_discount_amount');
     $seenSales = [];
     $netRevenue = 0.0;
-    foreach ($salesItems as $item) {
+    foreach ($salesItems as $idx => $item) {
         $first = !isset($seenSales[$item['sale_id']]);
         $seenSales[$item['sale_id']] = true;
         $isVoided = str_contains($item['notes'] ?? '', '[VOIDED]');
@@ -492,14 +490,14 @@ function exportSales(Database $db, mixed $output)
             number_format($item['line_total'], 2, '.', ''),
             $item['sale_discount_type'],
             $item['sale_discount_percent'],
-            $money($item['sale_discount_amount']),
+            number_format($discountShare[$idx], 2, '.', ''),
             $money($item['amount_paid']),
             $money($item['amount_due']),
             $item['payment_method'],
             $item['payment_status'],
             $item['notes'] ?? '',
             $item['sold_by'],
-            number_format($item['net_line_total'], 2, '.', '')
+            number_format((float)$item['line_total'] - $discountShare[$idx], 2, '.', '')
         ]);
     }
 
@@ -1376,12 +1374,9 @@ function exportSalesReport(Database $db, mixed $output)
 
     // Fetch one row per sold item. Sale fields intentionally repeat for Excel analysis.
     [$scopeSql, $scopeParams] = branchScopeSql('s');
-    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
-    $netLine = saleItemNetSql();
     $salesItems = $db->fetchAll("
         SELECT
             s.id AS sale_id,
-            {$netLine} AS net_line_total,
             s.sale_number,
             s.sale_date,
             c.full_name AS customer_name,
@@ -1444,16 +1439,19 @@ function exportSalesReport(Database $db, mixed $output)
     ]);
 
     // Data. One row per line item: the sale-level MONEY columns (subtotal,
-    // discount, total, paid, due) go on a sale's first row only, so summing a
-    // column never multiplies a sale by its line count. Descriptive columns
-    // repeat so the file stays filterable.
+    // total, paid, due) go on a sale's first row only, so summing a column
+    // never multiplies a sale by its line count. Sale Discount is the opposite:
+    // each line carries its own share of the whole-cart discount, so the column
+    // sums to the discount given. Descriptive columns repeat so the file stays
+    // filterable.
+    $discountShare = allocateCartDiscount($salesItems, 'subtotal', 'discount_amount');
     $total = 0;
     $totalPaid = 0;
     $totalDue = 0;
     $totalNetLines = 0;
 
     $uniqueSales = [];
-    foreach ($salesItems as $sale) {
+    foreach ($salesItems as $idx => $sale) {
         $first = !isset($uniqueSales[$sale['sale_id']]);
         $money = fn($v) => $first ? number_format($v, 2, '.', '') : '';
         $datetime = new DateTime($sale['sale_date']);
@@ -1474,17 +1472,17 @@ function exportSalesReport(Database $db, mixed $output)
             $money($sale['subtotal']),
             $sale['sale_discount_type'],
             $sale['sale_discount_percent'],
-            $money($sale['discount_amount']),
+            number_format($discountShare[$idx], 2, '.', ''),
             $money($sale['total_amount']),
             ucfirst($sale['payment_method']),
             ucfirst($sale['payment_status']),
             $money($sale['amount_paid']),
             $money($sale['amount_due']),
             $sale['notes'] ?? '',
-            number_format($sale['net_line_total'], 2, '.', '')
+            number_format((float)$sale['line_total'] - $discountShare[$idx], 2, '.', '')
         ]);
 
-        $totalNetLines += (float)$sale['net_line_total'];
+        $totalNetLines += (float)$sale['line_total'] - $discountShare[$idx];
 
         // Repeated item rows must not multiply sale-level totals.
         if ($first) {

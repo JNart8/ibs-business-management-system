@@ -874,6 +874,47 @@ function saleItemNetSql(string $itemAlias = 'si', string $saleAlias = 's'): stri
 }
 
 /**
+ * Per-line share of each sale's whole-cart discount, for exports that write
+ * one row per line item. Same rule as saleItemNetSql() (pro rata to
+ * line_total), but rounded to cents per line with the leftover cent put on
+ * the sale's LAST line, so a column sum equals the discount actually given.
+ * Rows must carry sale_id and line_total, and be grouped by sale.
+ *
+ * @param array  $rows        export rows, one per line item
+ * @param string $subtotalKey key holding the sale's subtotal on each row
+ * @param string $discountKey key holding the sale's cart discount on each row
+ * @return array [row index => allocated discount, 2dp float]
+ */
+function allocateCartDiscount(array $rows, string $subtotalKey, string $discountKey): array
+{
+    $bySale = [];
+    foreach ($rows as $i => $r) {
+        $bySale[$r['sale_id']][] = $i;
+    }
+
+    $alloc = [];
+    foreach ($bySale as $indexes) {
+        $subtotal = (float) $rows[$indexes[0]][$subtotalKey];
+        $discount = round((float) $rows[$indexes[0]][$discountKey], 2);
+        $given    = 0.0;
+        $last     = count($indexes) - 1;
+
+        foreach ($indexes as $n => $i) {
+            if ($subtotal <= 0 || $discount <= 0) {
+                $alloc[$i] = 0.0;
+                continue;
+            }
+            $share = $n === $last
+                ? round($discount - $given, 2)
+                : round((float) $rows[$i]['line_total'] / $subtotal * $discount, 2);
+            $alloc[$i] = $share;
+            $given    += $share;
+        }
+    }
+    return $alloc;
+}
+
+/**
  * A ready-to-splice SQL fragment + params enforcing branch visibility
  * on a query, built from visibleBranchIds(). Returns ['', []] when
  * there's no restriction to apply. If a user is somehow assigned to
