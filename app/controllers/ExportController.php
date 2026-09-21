@@ -1488,9 +1488,9 @@ function exportProfitLoss(Database $db, mixed $output)
     [$scopeSql, $scopeParams] = branchScopeSql('');
     $revenue = $db->fetchOne("
         SELECT
-            COALESCE(SUM(total_amount), 0) AS total_sales,
+            COALESCE(SUM(subtotal), 0) AS total_sales,
             COALESCE(SUM(discount_amount), 0) AS total_discounts,
-            COALESCE(SUM(total_amount - discount_amount), 0) AS net_sales
+            COALESCE(SUM(subtotal - discount_amount), 0) AS net_sales
         FROM sales
         WHERE DATE(sale_date) BETWEEN ? AND ?
         $scopeSql
@@ -1524,12 +1524,14 @@ function exportProfitLoss(Database $db, mixed $output)
     $netMargin = $revenue['net_sales'] > 0 ? ($netProfit / $revenue['net_sales']) * 100 : 0;
 
     // ── Sales by Category ───────────────────────────────────
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
     $salesByCategory = $db->fetchAll("
         SELECT
             COALESCE(c.name, 'Uncategorized') AS category_name,
-            COALESCE(SUM(si.line_total), 0) AS revenue,
+            COALESCE(SUM({$netLine}), 0) AS revenue,
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS cogs,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS profit
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS profit
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
@@ -1622,6 +1624,9 @@ function exportTopSelling(Database $db, mixed $output)
     $whereCategory .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
     // Fetch top products by quantity
     $topProducts = $db->fetchAll("
         SELECT
@@ -1630,11 +1635,11 @@ function exportTopSelling(Database $db, mixed $output)
             c.name AS category_name,
             SUM(si.quantity) AS total_quantity,
             COUNT(DISTINCT si.sale_id) AS order_count,
-            COALESCE(SUM(si.line_total), 0) AS total_revenue,
+            COALESCE(SUM({$netLine}), 0) AS total_revenue,
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
             CASE WHEN SUM(si.quantity * p.average_cost) > 0 
-                THEN ((SUM(si.line_total) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
+                THEN ((SUM({$netLine}) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
                 ELSE 0 
             END AS profit_margin_pct
         FROM sale_items si

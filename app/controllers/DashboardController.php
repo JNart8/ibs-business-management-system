@@ -309,12 +309,15 @@ for ($i = 29; $i >= 0; $i--) {
 // TOP PERFORMERS (LAST 30 DAYS)
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Line revenue net of the whole-cart discount (see saleItemNetSql()).
+$netLine = saleItemNetSql();
+
 // Top 5 Products by Profit
 $topProducts = $db->fetchAll("
     SELECT 
         p.name,
         SUM(si.quantity) as total_qty,
-        COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
     FROM sale_items si
     INNER JOIN sales s ON si.sale_id = s.id
     INNER JOIN products p ON si.product_id = p.id
@@ -328,8 +331,8 @@ $topProducts = $db->fetchAll("
 $categoryPerformance = $db->fetchAll("
     SELECT 
         COALESCE(c.name, 'Uncategorized') as category,
-        COALESCE(SUM(si.line_total), 0) as revenue,
-        COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}), 0) as revenue,
+        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
     FROM sale_items si
     INNER JOIN sales s ON si.sale_id = s.id
     INNER JOIN products p ON si.product_id = p.id

@@ -856,6 +856,24 @@ function visibleBranchIds()
 }
 
 /**
+ * SQL expression for a sale line's revenue net of the sale-level
+ * discount. sale_items.line_total is already net of the line's own
+ * discount; sales.discount_amount (the whole-cart discount) lives only
+ * on the header, so it is spread across lines pro rata to line_total.
+ * sales.subtotal is the sum of line_totals, so the shares add back up
+ * to the discount given. Use in place of SUM(si.line_total) in any
+ * revenue/profit report that joins sale_items to sales.
+ *
+ * Usage:
+ *   $netLine = saleItemNetSql();          // aliases si / s
+ *   "SELECT SUM({$netLine}) AS revenue FROM sale_items si JOIN sales s ..."
+ */
+function saleItemNetSql(string $itemAlias = 'si', string $saleAlias = 's'): string
+{
+    return "{$itemAlias}.line_total * (1 - COALESCE({$saleAlias}.discount_amount / NULLIF({$saleAlias}.subtotal, 0), 0))";
+}
+
+/**
  * A ready-to-splice SQL fragment + params enforcing branch visibility
  * on a query, built from visibleBranchIds(). Returns ['', []] when
  * there's no restriction to apply. If a user is somehow assigned to

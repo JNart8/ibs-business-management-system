@@ -429,12 +429,15 @@ function viewProduct(Database $db, mixed $id)
         ? (($product['selling_price'] - $product['average_cost']) / $product['selling_price']) * 100
         : 0;
 
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
     // Get sales summary
     $salesSummary = $db->fetchOne("
         SELECT 
             COUNT(DISTINCT si.sale_id) as total_sales,
             COALESCE(SUM(si.quantity), 0) as units_sold,
-            COALESCE(SUM(si.line_total), 0) as revenue_generated,
+            COALESCE(SUM({$netLine}), 0) as revenue_generated,
             MAX(s.sale_date) as last_sale
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
