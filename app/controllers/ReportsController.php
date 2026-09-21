@@ -43,6 +43,12 @@ switch ($action) {
     case 'payables':
         payablesReport($db);
         break;
+    case 'customer-credit':
+        customerCreditSettlementReport($db);
+        break;
+    case 'branch-performance':
+        branchPerformanceReport($db);
+        break;
     case 'products':
         productsReport($db);
         break;
@@ -77,7 +83,7 @@ switch ($action) {
 // SALES REPORT
 // ============================================================
 
-function salesReport($db)
+function salesReport(Database $db)
 {
     // Get filter parameters
     $period     = $_GET['period']     ?? 'this_month';
@@ -99,6 +105,12 @@ function salesReport($db)
     $params[] = $dateFrom;
     $params[] = $dateTo;
 
+    // Branch visibility — applies to every sub-query below, since they
+    // all reuse this same $where/$params.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    $where .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
     if (!empty($payMethod)) {
         $where .= " AND s.payment_method = ?";
         $params[] = $payMethod;
@@ -112,7 +124,12 @@ function salesReport($db)
         $params[] = $cashier;
     }
 
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
     // ── Summary Statistics ──────────────────────────────────
+    // Items are summed via a correlated subquery rather than a JOIN: joining
+    // sale_items would repeat each sale's header amounts once per line item.
     $summary = $db->fetchOne("
         SELECT
             COUNT(*)                                AS total_sales,
@@ -122,9 +139,8 @@ function salesReport($db)
             COALESCE(SUM(s.amount_paid), 0)         AS total_paid,
             COALESCE(SUM(s.amount_due), 0)          AS total_due,
             COALESCE(AVG(s.total_amount), 0)        AS avg_order_value,
-            COALESCE(SUM(si.quantity), 0)           AS total_items_sold
+            COALESCE(SUM((SELECT SUM(si.quantity) FROM sale_items si WHERE si.sale_id = s.id)), 0) AS total_items_sold
         FROM sales s
-        LEFT JOIN sale_items si ON s.id = si.sale_id
         $where
     ", $params);
 
@@ -170,7 +186,7 @@ function salesReport($db)
         SELECT
             si.product_name,
             SUM(si.quantity)                        AS total_quantity,
-            COALESCE(SUM(si.line_total), 0)         AS total_revenue,
+            COALESCE(SUM({$netLine}), 0)            AS total_revenue,
             COUNT(DISTINCT si.sale_id)              AS sale_count
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
@@ -185,7 +201,7 @@ function salesReport($db)
         SELECT
             si.product_name,
             SUM(si.quantity)                        AS total_quantity,
-            COALESCE(SUM(si.line_total), 0)         AS total_revenue,
+            COALESCE(SUM({$netLine}), 0)            AS total_revenue,
             COUNT(DISTINCT si.sale_id)              AS sale_count
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
@@ -255,7 +271,7 @@ function salesReport($db)
 // STOCK VALUATION REPORT
 // ============================================================
 
-function stockValuationReport($db)
+function stockValuationReport(Database $db)
 {
     // Get filter parameters
     $category   = $_GET['category']   ?? '';
@@ -275,18 +291,29 @@ function stockValuationReport($db)
         $where .= " AND p.supplier_id = ?";
         $params[] = $supplier;
     }
-    if ($lowStock === '1') {
-        $where .= " AND p.current_stock <= p.reorder_level";
-    }
+
+    // Low-stock filtering must happen AFTER branches are summed (HAVING),
+    // not before (WHERE) — a branch-scoped user with 2+ visible branches
+    // would otherwise get this evaluated per-branch-row instead of against
+    // the actual combined total, filtering incorrectly.
+    $havingLowStock = ($lowStock === '1') ? "HAVING COALESCE(SUM(bs.quantity), 0) <= p.reorder_level" : "";
 
     // Determine sort order
     $orderBy = match ($sortBy) {
         'value_asc'  => 'stock_value ASC',
         'name'       => 'p.name ASC',
-        'stock_asc'  => 'p.current_stock ASC',
-        'stock_desc' => 'p.current_stock DESC',
+        'stock_asc'  => 'current_stock ASC',
+        'stock_desc' => 'current_stock DESC',
         default      => 'stock_value DESC'
     };
+
+    // Branch visibility — all branches for a company-wide viewer, just
+    // their own for a branch-scoped one. Unlike receivables/payables,
+    // there's no separate "true total" this could be a confusing partial
+    // slice of — the sum across visible branches genuinely is the answer
+    // to "how much stock do I have", so no partial-view warning is needed
+    // here, just a plain "showing: X" label for clarity.
+    [$scopeSql, $scopeParams] = branchScopeSql('bs');
 
     // ── Get products with stock value ──────────────────────
     $products = $db->fetchAll("
@@ -295,7 +322,7 @@ function stockValuationReport($db)
             p.sku,
             p.name,
             p.unit,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.reorder_level,
             p.cost_price,
             p.average_cost,
@@ -303,8 +330,8 @@ function stockValuationReport($db)
             p.last_purchase_date,
             c.name AS category_name,
             s.company_name AS supplier_name,
-            (p.current_stock * p.average_cost) AS stock_value,
-            ((p.selling_price - p.average_cost) * p.current_stock) AS potential_profit,
+            (COALESCE(SUM(bs.quantity), 0) * p.average_cost) AS stock_value,
+            ((p.selling_price - p.average_cost) * COALESCE(SUM(bs.quantity), 0)) AS potential_profit,
             CASE 
                 WHEN p.average_cost > 0 
                 THEN ((p.selling_price - p.average_cost) / p.average_cost) * 100 
@@ -313,49 +340,62 @@ function stockValuationReport($db)
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN suppliers s ON p.supplier_id = s.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
+        GROUP BY p.id, p.sku, p.name, p.unit, p.reorder_level, p.cost_price,
+                 p.average_cost, p.selling_price, p.last_purchase_date, c.name, s.company_name
+        $havingLowStock
         ORDER BY $orderBy
-    ", $params);
+    ", array_merge($scopeParams, $params));
 
     // ── Summary Statistics ──────────────────────────────────
     $summary = $db->fetchOne("
         SELECT
-            COUNT(*) AS total_products,
-            COALESCE(SUM(p.current_stock), 0) AS total_units,
-            COALESCE(SUM(p.current_stock * p.average_cost), 0) AS total_value,
-            COALESCE(SUM((p.selling_price - p.average_cost) * p.current_stock), 0) AS total_potential_profit,
-            COUNT(CASE WHEN p.current_stock <= p.reorder_level THEN 1 END) AS low_stock_count,
-            COUNT(CASE WHEN p.current_stock = 0 THEN 1 END) AS out_of_stock_count
+            COUNT(DISTINCT p.id) AS total_products,
+            COALESCE(SUM(bs.quantity), 0) AS total_units,
+            COALESCE(SUM(bs.quantity * p.average_cost), 0) AS total_value,
+            COALESCE(SUM((p.selling_price - p.average_cost) * bs.quantity), 0) AS total_potential_profit,
+            COUNT(DISTINCT CASE WHEN bs.quantity <= p.reorder_level THEN p.id END) AS low_stock_count,
+            COUNT(DISTINCT CASE WHEN bs.quantity = 0 THEN p.id END) AS out_of_stock_count
         FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
-    ", $params);
+    ", array_merge($scopeParams, $params));
 
     // ── Category Breakdown ──────────────────────────────────
     $categoryBreakdown = $db->fetchAll("
         SELECT
             COALESCE(c.name, 'Uncategorized') AS category_name,
-            COUNT(p.id) AS product_count,
-            COALESCE(SUM(p.current_stock), 0) AS total_stock,
-            COALESCE(SUM(p.current_stock * p.average_cost), 0) AS stock_value
+            COUNT(DISTINCT p.id) AS product_count,
+            COALESCE(SUM(bs.quantity), 0) AS total_stock,
+            COALESCE(SUM(bs.quantity * p.average_cost), 0) AS stock_value
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
         GROUP BY p.category_id, c.name
         ORDER BY stock_value DESC
-    ", $params);
+    ", array_merge($scopeParams, $params));
 
     // ── Top 10 Most Valuable Items ─────────────────────────
+    // (this also fixes a pre-existing bug: this query previously used
+    // $where, which can contain category/supplier ? placeholders, but
+    // never actually passed $params — filtering by category or supplier
+    // would have thrown a param-count mismatch)
     $topValuable = $db->fetchAll("
         SELECT
             p.name,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.average_cost,
-            (p.current_stock * p.average_cost) AS stock_value
+            (COALESCE(SUM(bs.quantity), 0) * p.average_cost) AS stock_value
         FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
+        GROUP BY p.id, p.name, p.average_cost
+        $havingLowStock
         ORDER BY stock_value DESC
         LIMIT 10
-    ");
+    ", array_merge($scopeParams, $params));
 
     // ── Get categories and suppliers for filters ───────────
     $categories = $db->fetchAll("
@@ -367,6 +407,7 @@ function stockValuationReport($db)
     ");
 
     $pageTitle = 'Stock Valuation Report';
+    $viewingScopeLabel = hasMultiBranch() ? (isCompanyWide() ? 'All Branches' : activeBranchName()) : null;
     include APP_PATH . '/views/reports/stock_valuation.php';
 }
 
@@ -374,7 +415,7 @@ function stockValuationReport($db)
 // OUTSTANDING RECEIVABLES REPORT
 // ============================================================
 
-function receivablesReport($db)
+function receivablesReport(Database $db)
 {
     // Get filter parameters
     $aging      = $_GET['aging']      ?? '';
@@ -408,6 +449,14 @@ function receivablesReport($db)
 
     // Get all unpaid invoices with aging calculation
     // Using correct column names from the schema: sale_number, not invoice_no
+    //
+    // Branch-scoped by s.branch_id (which invoice originated where) — this
+    // deliberately makes total_owed/aging a *partial* picture for a
+    // branch-scoped user, while c.current_balance stays the customer's
+    // real company-wide balance (customers are shared across branches by
+    // design, see ARCHITECTURE.md §5.3). The view flags this explicitly
+    // rather than letting a partial number pass as the whole picture.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $unpaidInvoices = $db->fetchAll("
         SELECT 
             c.id AS customer_id,
@@ -430,8 +479,10 @@ function receivablesReport($db)
             AND c.is_default = 0
             AND s.payment_status IN ('unpaid', 'partial')
             AND (s.total_amount - COALESCE(s.amount_paid, 0)) > 0.01
+            AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+            $scopeSql
         ORDER BY c.id, s.sale_date ASC
-    ");
+    ", $scopeParams);
 
     // Group by customer and calculate accurate aging
     $customers = [];
@@ -630,6 +681,7 @@ function receivablesReport($db)
     }
 
     $pageTitle = 'Outstanding Receivables';
+    $isPartialView = hasMultiBranch() && !isCompanyWide();
     include APP_PATH . '/views/reports/receivables.php';
 }
 
@@ -637,20 +689,22 @@ function receivablesReport($db)
 // OUTSTANDING PAYABLES REPORT
 // ============================================================
 
-function payablesReport($db)
+function payablesReport(Database $db)
 {
     // Get filter parameters
     $sortBy = $_GET['sort_by'] ?? 'amount_desc';
 
-    // Determine sort order
-    $orderBy = match ($sortBy) {
-        'amount_asc' => 'amount_owed ASC',
-        'name'       => 's.company_name ASC',
-        'days_desc'  => 'days_outstanding DESC',
-        default      => 'amount_owed DESC'
-    };
-
     // ── Get suppliers we owe money ──────────────────────────
+    // amount_owed is deliberately computed from SUM(purchases.amount_due)
+    // rather than read from suppliers.current_balance — the same approach
+    // as receivablesReport, and for the same reason: current_balance is a
+    // company-wide figure (suppliers, like customers, are shared across
+    // branches by design — see ARCHITECTURE.md §5.3), so it can't be used
+    // as-is for a branch-scoped user without silently showing them a
+    // number bigger than "what my branch owes." Summing scoped invoices
+    // instead makes this a genuine partial view rather than a mislabeled
+    // company-wide one.
+    [$scopeSql, $scopeParams] = branchScopeSql('');
     $suppliers = $db->fetchAll("
         SELECT
             s.id,
@@ -659,18 +713,26 @@ function payablesReport($db)
             s.phone,
             s.email,
             s.current_balance,
-            ABS(s.current_balance) AS amount_owed,
+            (
+                SELECT COALESCE(SUM(amount_due), 0)
+                FROM purchases
+                WHERE supplier_id = s.id
+                AND payment_status IN ('unpaid', 'partial')
+                $scopeSql
+            ) AS amount_owed,
             (
                 SELECT MIN(DATE(purchase_date))
                 FROM purchases
                 WHERE supplier_id = s.id 
                 AND payment_status IN ('unpaid', 'partial')
+                $scopeSql
             ) AS oldest_debt_date,
             (
                 SELECT COUNT(*)
                 FROM purchases
                 WHERE supplier_id = s.id 
                 AND payment_status IN ('unpaid', 'partial')
+                $scopeSql
             ) AS unpaid_invoices,
             DATEDIFF(
                 CURDATE(),
@@ -679,33 +741,34 @@ function payablesReport($db)
                     FROM purchases
                     WHERE supplier_id = s.id 
                     AND payment_status IN ('unpaid', 'partial')
+                    $scopeSql
                 )
             ) AS days_outstanding
         FROM suppliers s
-        WHERE s.is_active = 1 AND s.current_balance < 0
-        ORDER BY $orderBy
-    ");
+        WHERE s.is_active = 1
+        HAVING amount_owed > 0.01
+        ORDER BY " . ($sortBy === 'amount_asc' ? 'amount_owed ASC'
+                : ($sortBy === 'name' ? 's.company_name ASC'
+                : ($sortBy === 'days_desc' ? 'days_outstanding DESC'
+                : 'amount_owed DESC'))) . "
+    ", array_merge($scopeParams, $scopeParams, $scopeParams, $scopeParams));
 
-    // ── Summary Statistics ──────────────────────────────────
-    $summary = $db->fetchOne("
-        SELECT
-            COUNT(*) AS total_suppliers,
-            COALESCE(SUM(ABS(s.current_balance)), 0) AS total_owed,
-            COALESCE(AVG(ABS(s.current_balance)), 0) AS avg_owed,
-            COUNT(CASE 
-                WHEN DATEDIFF(CURDATE(), (
-                    SELECT MIN(DATE(purchase_date))
-                    FROM purchases
-                    WHERE supplier_id = s.id 
-                    AND payment_status IN ('unpaid', 'partial')
-                )) > 30 
-                THEN 1 
-            END) AS overdue_count
-        FROM suppliers s
-        WHERE s.is_active = 1 AND s.current_balance < 0
-    ");
+    // ── Summary statistics — computed in PHP from the already-scoped
+    // $suppliers list above, so it can't drift from what's actually shown
+    // (mirrors how receivablesReport builds its summary from $customers).
+    $totalOwed = array_sum(array_column($suppliers, 'amount_owed'));
+    $totalSuppliers = count($suppliers);
+    $overdueCount = count(array_filter($suppliers, fn($s) => ($s['days_outstanding'] ?? 0) > 30));
+
+    $summary = [
+        'total_suppliers' => $totalSuppliers,
+        'total_owed'      => $totalOwed,
+        'avg_owed'        => $totalSuppliers > 0 ? $totalOwed / $totalSuppliers : 0,
+        'overdue_count'   => $overdueCount,
+    ];
 
     // ── Get unpaid purchases for detail ────────────────────
+    [$detailScopeSql, $detailScopeParams] = branchScopeSql('p');
     $unpaidPurchases = $db->fetchAll("
         SELECT
             p.id,
@@ -720,12 +783,196 @@ function payablesReport($db)
         FROM purchases p
         INNER JOIN suppliers s ON p.supplier_id = s.id
         WHERE p.payment_status IN ('unpaid', 'partial')
+        $detailScopeSql
         ORDER BY p.purchase_date ASC
         LIMIT 50
-    ");
+    ", $detailScopeParams);
 
     $pageTitle = 'Outstanding Payables';
+    $isPartialView = hasMultiBranch() && !isCompanyWide();
     include APP_PATH . '/views/reports/payables.php';
+}
+
+// ============================================================
+// CUSTOMER CREDIT SETTLEMENT REPORT (Phase 3d)
+// ============================================================
+//
+// Customers deposit money at one branch and can spend it at another
+// (customer balances are shared company-wide by design — see
+// ARCHITECTURE.md §5.3). This report doesn't trace which specific
+// deposit funded which specific sale (deliberately — see §5.5); it
+// shows the net position per branch for a period, so the business
+// can see which branch effectively "lent" credit to another and
+// settle periodically via a normal account transfer.
+
+function customerCreditSettlementReport(Database $db)
+{
+    // Get filter parameters
+    $period   = $_GET['period']    ?? 'this_month';
+    $dateFrom = $_GET['date_from'] ?? '';
+    $dateTo   = $_GET['date_to']   ?? '';
+
+    $dates    = calculateDateRange($period, $dateFrom, $dateTo);
+    $dateFrom = $dates['from'];
+    $dateTo   = $dates['to'];
+
+    // ── Deposits issued, by the branch they were made at ───────
+    [$issuedScopeSql, $issuedScopeParams] = branchScopeSql('ct');
+    $issuedRows = $db->fetchAll("
+        SELECT ct.branch_id, SUM(ct.amount) AS issued
+        FROM customer_transactions ct
+        WHERE ct.transaction_type = 'deposit'
+            AND ct.branch_id IS NOT NULL
+            AND DATE(ct.created_at) BETWEEN ? AND ?
+            $issuedScopeSql
+        GROUP BY ct.branch_id
+    ", array_merge([$dateFrom, $dateTo], $issuedScopeParams));
+
+    // ── Credit redeemed, by the branch the sale happened at ────
+    // payment_method = 'deposit' means the sale drew from the
+    // customer's existing balance — SaleController caps amount_paid
+    // at current_balance on that path, so amount_paid here is exactly
+    // how much pooled credit this branch let the customer redeem.
+    [$redeemedScopeSql, $redeemedScopeParams] = branchScopeSql('s');
+    $redeemedRows = $db->fetchAll("
+        SELECT s.branch_id, SUM(s.amount_paid) AS redeemed
+        FROM sales s
+        WHERE s.payment_method = 'deposit'
+            AND DATE(s.sale_date) BETWEEN ? AND ?
+            AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+            $redeemedScopeSql
+        GROUP BY s.branch_id
+    ", array_merge([$dateFrom, $dateTo], $redeemedScopeParams));
+
+    // ── Merge into one row per branch ───────────────────────────
+    $branches = [];
+    foreach ($issuedRows as $row) {
+        $branches[$row['branch_id']]['issued'] = (float) $row['issued'];
+    }
+    foreach ($redeemedRows as $row) {
+        $branches[$row['branch_id']]['redeemed'] = (float) $row['redeemed'];
+    }
+
+    $rows = [];
+    foreach ($branches as $branchId => $amounts) {
+        $issued   = $amounts['issued']   ?? 0.0;
+        $redeemed = $amounts['redeemed'] ?? 0.0;
+        $rows[] = [
+            'branch_id'   => $branchId,
+            'branch_name' => branchName($branchId),
+            'issued'      => $issued,
+            'redeemed'    => $redeemed,
+            'net'         => $issued - $redeemed,
+        ];
+    }
+
+    usort($rows, fn($a, $b) => strcmp($a['branch_name'], $b['branch_name']));
+
+    $summary = [
+        'total_issued'   => array_sum(array_column($rows, 'issued')),
+        'total_redeemed' => array_sum(array_column($rows, 'redeemed')),
+    ];
+
+    $pageTitle = 'Customer Credit Settlement';
+    $isPartialView = hasMultiBranch() && !isCompanyWide();
+    include APP_PATH . '/views/reports/customer_credit_settlement.php';
+}
+
+// ============================================================
+// BRANCH PERFORMANCE COMPARISON REPORT
+// ============================================================
+//
+// Company-wide admins could only see one company-wide total or drill
+// into a single branch at a time — no side-by-side view. This puts
+// revenue, transaction volume, and gross profit for every branch in
+// one table so an admin can spot under/over-performing branches at a
+// glance. Company-wide only: a branch-scoped admin has just their own
+// branch to look at, so a comparison table has nothing to compare.
+
+function branchPerformanceReport(Database $db)
+{
+    if (!isCompanyWide()) {
+        redirect(BASE_URL . '/reports', 'error', 'Branch performance comparison is only available to company-wide admins');
+        return;
+    }
+
+    // Get filter parameters
+    $period   = $_GET['period']    ?? 'this_month';
+    $dateFrom = $_GET['date_from'] ?? '';
+    $dateTo   = $_GET['date_to']   ?? '';
+
+    $dates    = calculateDateRange($period, $dateFrom, $dateTo);
+    $dateFrom = $dates['from'];
+    $dateTo   = $dates['to'];
+
+    // ── All active branches (so a branch with zero sales still shows) ──
+    $allBranches = $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC");
+
+    // ── Revenue & transaction count, by branch ──────────────────────
+    $salesRows = $db->fetchAll("
+        SELECT
+            s.branch_id,
+            COUNT(*)                                             AS sale_count,
+            COALESCE(SUM(s.subtotal - s.discount_amount), 0) AS net_sales
+        FROM sales s
+        WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        GROUP BY s.branch_id
+    ", [$dateFrom, $dateTo]);
+
+    // ── Cost of goods sold, by branch (same logic as the P&L report) ──
+    $cogsRows = $db->fetchAll("
+        SELECT
+            s.branch_id,
+            COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs
+        FROM sale_items si
+        INNER JOIN sales s ON si.sale_id = s.id
+        INNER JOIN products p ON si.product_id = p.id
+        WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        GROUP BY s.branch_id
+    ", [$dateFrom, $dateTo]);
+
+    $salesByBranch = [];
+    foreach ($salesRows as $row) {
+        $salesByBranch[$row['branch_id']] = $row;
+    }
+    $cogsByBranch = [];
+    foreach ($cogsRows as $row) {
+        $cogsByBranch[$row['branch_id']] = (float) $row['total_cogs'];
+    }
+
+    $rows = [];
+    foreach ($allBranches as $branch) {
+        $branchId  = $branch['id'];
+        $saleCount = (int) ($salesByBranch[$branchId]['sale_count'] ?? 0);
+        $netSales  = (float) ($salesByBranch[$branchId]['net_sales'] ?? 0);
+        $cogs      = $cogsByBranch[$branchId] ?? 0.0;
+        $profit    = $netSales - $cogs;
+        $margin    = $netSales > 0 ? ($profit / $netSales) * 100 : 0;
+
+        $rows[] = [
+            'branch_id'      => $branchId,
+            'branch_name'    => $branch['name'],
+            'sale_count'     => $saleCount,
+            'revenue'        => $netSales,
+            'avg_sale_value' => $saleCount > 0 ? $netSales / $saleCount : 0,
+            'gross_profit'   => $profit,
+            'margin'         => $margin,
+        ];
+    }
+
+    // Busiest branch (by revenue) leads
+    usort($rows, fn($a, $b) => $b['revenue'] <=> $a['revenue']);
+
+    $summary = [
+        'total_revenue' => array_sum(array_column($rows, 'revenue')),
+        'total_sales'   => array_sum(array_column($rows, 'sale_count')),
+        'total_profit'  => array_sum(array_column($rows, 'gross_profit')),
+    ];
+
+    $pageTitle = 'Branch Performance Comparison';
+    include APP_PATH . '/views/reports/branch_performance.php';
 }
 
 
@@ -737,7 +984,7 @@ function payablesReport($db)
 // PROFIT & LOSS STATEMENT
 // ============================================================
 
-function profitLossReport($db)
+function profitLossReport(Database $db)
 {
     // Get filter parameters
     $period = $_GET['period'] ?? 'this_month';
@@ -749,18 +996,24 @@ function profitLossReport($db)
     $dateFrom = $dates['from'];
     $dateTo = $dates['to'];
 
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
     // ── Revenue (Sales) ─────────────────────────────────────
+    [$scopeSql, $scopeParams] = branchScopeSql('');
     $revenue = $db->fetchOne("
         SELECT
-            COALESCE(SUM(total_amount), 0) AS total_sales,
+            COALESCE(SUM(subtotal), 0) AS total_sales,
             COALESCE(SUM(discount_amount), 0) AS total_discounts,
-            COALESCE(SUM(total_amount - discount_amount), 0) AS net_sales
+            COALESCE(SUM(subtotal - discount_amount), 0) AS net_sales
         FROM sales
         WHERE DATE(sale_date) BETWEEN ? AND ?
           AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')
-    ", [$dateFrom, $dateTo]);
+        $scopeSql
+    ", array_merge([$dateFrom, $dateTo], $scopeParams));
 
     // ── Cost of Goods Sold (COGS) ──────────────────────────
+    [$scopeSqlS, $scopeParamsS] = branchScopeSql('s');
     $cogs = $db->fetchOne("
         SELECT
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs
@@ -769,7 +1022,8 @@ function profitLossReport($db)
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
           AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ", [$dateFrom, $dateTo]);
+        $scopeSqlS
+    ", array_merge([$dateFrom, $dateTo], $scopeParamsS));
 
     // ── Gross Profit ────────────────────────────────────────
     $grossProfit = $revenue['net_sales'] - $cogs['total_cogs'];
@@ -782,7 +1036,8 @@ function profitLossReport($db)
         SELECT COALESCE(SUM(amount), 0) AS total_expenses
         FROM expenses
         WHERE DATE(expense_date) BETWEEN ? AND ?
-    ", [$dateFrom, $dateTo]) ?? ['total_expenses' => 0];
+        $scopeSql
+    ", array_merge([$dateFrom, $dateTo], $scopeParams)) ?? ['total_expenses' => 0];
 
     // ── Net Profit ──────────────────────────────────────────
     $netProfit = $grossProfit - $expenses['total_expenses'];
@@ -794,34 +1049,36 @@ function profitLossReport($db)
             COALESCE(c.name, 'Uncategorized') AS category_name,
             COUNT(DISTINCT si.sale_id) AS sale_count,
             COALESCE(SUM(si.quantity), 0) AS total_quantity,
-            COALESCE(SUM(si.line_total), 0) AS revenue,
+            COALESCE(SUM({$netLine}), 0) AS revenue,
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS cogs,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS profit
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS profit
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         LEFT JOIN categories c ON p.category_id = c.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
           AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        $scopeSqlS
         GROUP BY p.category_id, c.name
         ORDER BY revenue DESC
-    ", [$dateFrom, $dateTo]);
+    ", array_merge([$dateFrom, $dateTo], $scopeParamsS));
 
     // ── Daily Profit Trend ──────────────────────────────────
     $dailyProfit = $db->fetchAll("
         SELECT
             DATE(s.sale_date) AS sale_date,
-            COALESCE(SUM(s.total_amount), 0) AS revenue,
+            COALESCE(SUM({$netLine}), 0) AS revenue,
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS cogs,
-            COALESCE(SUM(s.total_amount) - SUM(si.quantity * p.average_cost), 0) AS profit
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS profit
         FROM sales s
         INNER JOIN sale_items si ON s.id = si.sale_id
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
           AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        $scopeSqlS
         GROUP BY DATE(s.sale_date)
         ORDER BY sale_date ASC
-    ", [$dateFrom, $dateTo]);
+    ", array_merge([$dateFrom, $dateTo], $scopeParamsS));
 
     // ── Period Comparison (vs previous period) ──────────────
     $periodLength = (strtotime($dateTo) - strtotime($dateFrom)) / 86400;
@@ -829,11 +1086,12 @@ function profitLossReport($db)
     $prevDateFrom = date('Y-m-d', strtotime($prevDateTo . ' -' . $periodLength . ' days'));
 
     $previousRevenue = $db->fetchOne("
-        SELECT COALESCE(SUM(total_amount), 0) AS total_sales
+        SELECT COALESCE(SUM(subtotal - discount_amount), 0) AS net_sales
         FROM sales
         WHERE DATE(sale_date) BETWEEN ? AND ?
           AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')
-    ", [$prevDateFrom, $prevDateTo]);
+        $scopeSql
+    ", array_merge([$prevDateFrom, $prevDateTo], $scopeParams));
 
     $previousCogs = $db->fetchOne("
         SELECT COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs
@@ -842,9 +1100,10 @@ function profitLossReport($db)
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
           AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ", [$prevDateFrom, $prevDateTo]);
+        $scopeSqlS
+    ", array_merge([$prevDateFrom, $prevDateTo], $scopeParamsS));
 
-    $previousProfit = $previousRevenue['total_sales'] - $previousCogs['total_cogs'];
+    $previousProfit = $previousRevenue['net_sales'] - $previousCogs['total_cogs'];
     $profitChange = $previousProfit > 0 ? (($grossProfit - $previousProfit) / $previousProfit) * 100 : 0;
 
     $pageTitle = 'Profit & Loss Statement';
@@ -855,7 +1114,7 @@ function profitLossReport($db)
 // TOP SELLING PRODUCTS REPORT
 // ============================================================
 
-function topSellingReport($db)
+function topSellingReport(Database $db)
 {
     // Get filter parameters
     $period = $_GET['period'] ?? 'this_month';
@@ -877,6 +1136,15 @@ function topSellingReport($db)
         $params[] = $category;
     }
 
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
+    // Branch visibility — appended to $whereCategory since all 3 queries
+    // below reuse it, and $params is the shared base each one extends.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    $whereCategory .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
     // ── Top Products by Quantity ────────────────────────────
     $topByQuantity = $db->fetchAll("
         SELECT
@@ -890,11 +1158,11 @@ function topSellingReport($db)
             c.name AS category_name,
             SUM(si.quantity) AS total_quantity,
             COUNT(DISTINCT si.sale_id) AS order_count,
-            COALESCE(SUM(si.line_total), 0) AS total_revenue,
+            COALESCE(SUM({$netLine}), 0) AS total_revenue,
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
             CASE WHEN SUM(si.quantity * p.average_cost) > 0 
-                THEN ((SUM(si.line_total) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
+                THEN ((SUM({$netLine}) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
                 ELSE 0 
             END AS profit_margin_pct
         FROM sale_items si
@@ -917,8 +1185,8 @@ function topSellingReport($db)
             p.sku,
             c.name AS category_name,
             SUM(si.quantity) AS total_quantity,
-            COALESCE(SUM(si.line_total), 0) AS total_revenue,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS total_profit
+            COALESCE(SUM({$netLine}), 0) AS total_revenue,
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS total_profit
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
@@ -939,10 +1207,10 @@ function topSellingReport($db)
             p.sku,
             c.name AS category_name,
             SUM(si.quantity) AS total_quantity,
-            COALESCE(SUM(si.line_total), 0) AS total_revenue,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
+            COALESCE(SUM({$netLine}), 0) AS total_revenue,
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
             CASE WHEN SUM(si.quantity * p.average_cost) > 0 
-                THEN ((SUM(si.line_total) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
+                THEN ((SUM({$netLine}) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
                 ELSE 0 
             END AS profit_margin_pct
         FROM sale_items si
@@ -962,8 +1230,8 @@ function topSellingReport($db)
         SELECT
             COUNT(DISTINCT si.product_id) AS products_sold,
             COALESCE(SUM(si.quantity), 0) AS total_units,
-            COALESCE(SUM(si.line_total), 0) AS total_revenue,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS total_profit
+            COALESCE(SUM({$netLine}), 0) AS total_revenue,
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS total_profit
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
@@ -985,7 +1253,7 @@ function topSellingReport($db)
 // LOW STOCK ALERT REPORT
 // ============================================================
 
-function lowStockReport($db)
+function lowStockReport(Database $db)
 {
     // Get filter parameters
     $category = $_GET['category'] ?? '';
@@ -1000,25 +1268,30 @@ function lowStockReport($db)
         $params[] = $category;
     }
 
-    // Severity filter
+    // Severity is a stock-level condition, evaluated post-aggregation
+    // (HAVING) since stock is now summed across potentially several
+    // visible branches per product — same reasoning as the stock
+    // valuation report's low-stock filter.
     if ($severity === 'critical') {
-        $where .= " AND p.current_stock = 0";
+        $having = "HAVING COALESCE(SUM(bs.quantity), 0) = 0";
     } elseif ($severity === 'warning') {
-        $where .= " AND p.current_stock > 0 AND p.current_stock <= p.reorder_level";
+        $having = "HAVING COALESCE(SUM(bs.quantity), 0) > 0 AND COALESCE(SUM(bs.quantity), 0) <= p.reorder_level";
     } else {
         // All low stock items (out of stock OR at/below reorder level)
-        $where .= " AND p.current_stock <= p.reorder_level";
+        $having = "HAVING COALESCE(SUM(bs.quantity), 0) <= p.reorder_level";
     }
 
+    // Branch visibility — matches every other report.
+    [$scopeSql, $scopeParams] = branchScopeSql('bs');
+
     // ── Low Stock Products ──────────────────────────────────
-    // FIXED: Simplified query without problematic subqueries
     $products = $db->fetchAll("
         SELECT
             p.id,
             p.sku,
             p.name,
             p.unit,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.reorder_level,
             p.average_cost,
             p.selling_price,
@@ -1027,19 +1300,26 @@ function lowStockReport($db)
             s.company_name AS supplier_name,
             s.phone AS supplier_phone,
             -- Suggested reorder quantity (2x reorder level minus current stock)
-            GREATEST((p.reorder_level * 2) - p.current_stock, p.reorder_level) AS suggested_order_qty
+            GREATEST((p.reorder_level * 2) - COALESCE(SUM(bs.quantity), 0), p.reorder_level) AS suggested_order_qty
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN suppliers s ON p.supplier_id = s.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
+        GROUP BY p.id, p.sku, p.name, p.unit, p.reorder_level, p.average_cost,
+                 p.selling_price, p.last_purchase_date, c.name, s.company_name, s.phone
+        $having
         ORDER BY 
-            CASE WHEN p.current_stock = 0 THEN 0 ELSE 1 END,
-            p.current_stock ASC
-    ", $params);
+            CASE WHEN COALESCE(SUM(bs.quantity), 0) = 0 THEN 0 ELSE 1 END,
+            current_stock ASC
+    ", array_merge($scopeParams, $params));
 
-    // Calculate days until stockout for each product (after fetching)
+    // Calculate days until stockout for each product (after fetching).
+    // Sales velocity is scoped to the same visible branches as the stock
+    // figure above — comparing branch-specific stock against company-wide
+    // sales velocity would give a misleading projection.
+    [$velocityScopeSql, $velocityScopeParams] = branchScopeSql('sa');
     foreach ($products as &$product) {
-        // Get average daily sales for this product (last 30 days)
         $avgDaily = $db->fetchOne("
             SELECT AVG(daily_qty) as avg_daily
             FROM (
@@ -1048,9 +1328,11 @@ function lowStockReport($db)
                 INNER JOIN sales sa ON si.sale_id = sa.id
                 WHERE si.product_id = ?
                 AND DATE(sa.sale_date) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                AND (sa.notes IS NULL OR sa.notes NOT LIKE '%[VOIDED]%')
+                $velocityScopeSql
                 GROUP BY DATE(sa.sale_date)
             ) AS daily_sales
-        ", [$product['id']]);
+        ", array_merge([$product['id']], $velocityScopeParams));
 
         // Calculate days until stockout
         if ($avgDaily && $avgDaily['avg_daily'] > 0 && $product['current_stock'] > 0) {
@@ -1064,13 +1346,14 @@ function lowStockReport($db)
     // ── Summary Stats ───────────────────────────────────────
     $summary = $db->fetchOne("
         SELECT
-            COUNT(*) AS total_items,
-            COUNT(CASE WHEN p.current_stock = 0 THEN 1 END) AS out_of_stock,
-            COUNT(CASE WHEN p.current_stock > 0 AND p.current_stock <= p.reorder_level THEN 1 END) AS low_stock,
-            COALESCE(SUM(p.reorder_level * p.average_cost), 0) AS estimated_reorder_cost
+            COUNT(DISTINCT p.id) AS total_items,
+            COUNT(DISTINCT CASE WHEN bs.quantity = 0 THEN p.id END) AS out_of_stock,
+            COUNT(DISTINCT CASE WHEN bs.quantity > 0 AND bs.quantity <= p.reorder_level THEN p.id END) AS low_stock,
+            COALESCE(SUM(DISTINCT p.reorder_level * p.average_cost), 0) AS estimated_reorder_cost
         FROM products p
-        WHERE p.is_active = 1 AND p.current_stock <= p.reorder_level
-    ");
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
+        WHERE p.is_active = 1 AND COALESCE(bs.quantity, 0) <= p.reorder_level
+    ", $scopeParams);
 
     // ── Categories for filter ───────────────────────────────
     $categories = $db->fetchAll("
@@ -1078,6 +1361,7 @@ function lowStockReport($db)
     ");
 
     $pageTitle = 'Low Stock Alert';
+    $viewingScopeLabel = hasMultiBranch() ? (isCompanyWide() ? 'All Branches' : activeBranchName()) : null;
     include APP_PATH . '/views/reports/low_stock.php';
 }
 
@@ -1085,43 +1369,57 @@ function lowStockReport($db)
 // DEAD STOCK REPORT
 // ============================================================
 
-function deadStockReport($db)
+function deadStockReport(Database $db)
 {
     // Get filter parameters
     $period = $_GET['period'] ?? 90; // Days without sales
     $category = $_GET['category'] ?? '';
     $minValue = $_GET['min_value'] ?? 0; // Minimum stock value to show
 
-    // Build WHERE clause
-    $params = [(int)$period, (float)$minValue];
+    // Branch visibility applies to BOTH halves of this report: the stock
+    // figure itself (branch_stock) and the sales-history subqueries (a
+    // product might be genuinely dead at Branch 2 while selling fine at
+    // Branch 1 — that's exactly the case this report exists to catch, so
+    // both need to agree on the same branch scope, not mix a
+    // branch-specific stock figure with company-wide sales history).
+    [$stockScopeSql, $stockScopeParams] = branchScopeSql('bs');
+    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+
+    // Build WHERE clause (category only — stock-derived conditions move to HAVING)
     $whereCategory = '';
+    $categoryParams = [];
     if (!empty($category)) {
         $whereCategory = " AND p.category_id = ?";
-        $params[] = $category;
+        $categoryParams[] = $category;
     }
 
     // ── Dead Stock Products ─────────────────────────────────
+    // last_sale_date/days_since_last_sale/total_sold correlated subqueries
+    // and the stock_value/current_stock HAVING conditions below all
+    // reference SELECT-list aliases — a MySQL-specific HAVING extension,
+    // used here to avoid repeating the branch-scoped stock expression yet
+    // again.
     $products = $db->fetchAll("
         SELECT
             p.id,
             p.sku,
             p.name,
             p.unit,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.average_cost,
             p.selling_price,
-            (p.current_stock * p.average_cost) AS stock_value,
-            (p.current_stock * p.selling_price) AS potential_revenue,
+            (COALESCE(SUM(bs.quantity), 0) * p.average_cost) AS stock_value,
+            (COALESCE(SUM(bs.quantity), 0) * p.selling_price) AS potential_revenue,
             c.name AS category_name,
             p.last_purchase_date,
-            -- Last sale date
             (
                 SELECT MAX(DATE(s.sale_date))
                 FROM sale_items si
                 INNER JOIN sales s ON si.sale_id = s.id
                 WHERE si.product_id = p.id
+                AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+                $salesScopeSql
             ) AS last_sale_date,
-            -- Days since last sale
             DATEDIFF(
                 CURDATE(),
                 (
@@ -1129,71 +1427,45 @@ function deadStockReport($db)
                     FROM sale_items si
                     INNER JOIN sales s ON si.sale_id = s.id
                     WHERE si.product_id = p.id
+                    AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+                    $salesScopeSql
                 )
             ) AS days_since_last_sale,
-            -- Total quantity ever sold
             (
                 SELECT COALESCE(SUM(si.quantity), 0)
                 FROM sale_items si
                 INNER JOIN sales s ON si.sale_id = s.id
                 WHERE si.product_id = p.id
+                AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+                $salesScopeSql
             ) AS total_sold
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $stockScopeSql
         WHERE p.is_active = 1
-        AND p.current_stock > 0
-        AND (
-            (
-                SELECT MAX(DATE(s.sale_date))
-                FROM sale_items si
-                INNER JOIN sales s ON si.sale_id = s.id
-                WHERE si.product_id = p.id
-            ) IS NULL
-            OR
-            DATEDIFF(
-                CURDATE(),
-                (
-                    SELECT MAX(DATE(s.sale_date))
-                    FROM sale_items si
-                    INNER JOIN sales s ON si.sale_id = s.id
-                    WHERE si.product_id = p.id
-                )
-            ) >= ?
-        )
-        AND (p.current_stock * p.average_cost) >= ?
         $whereCategory
-        ORDER BY (p.current_stock * p.average_cost) DESC
-    ", $params);
+        GROUP BY p.id, p.sku, p.name, p.unit, p.average_cost, p.selling_price,
+                 c.name, p.last_purchase_date
+        HAVING current_stock > 0
+           AND (last_sale_date IS NULL OR days_since_last_sale >= ?)
+           AND stock_value >= ?
+        ORDER BY stock_value DESC
+    ", array_merge(
+        $salesScopeParams, $salesScopeParams, $salesScopeParams,
+        $stockScopeParams, $categoryParams,
+        [(int)$period, (float)$minValue]
+    ));
 
     // ── Summary Stats ───────────────────────────────────────
-    $summary = $db->fetchOne("
-        SELECT
-            COUNT(*) AS total_items,
-            COALESCE(SUM(p.current_stock), 0) AS total_units,
-            COALESCE(SUM(p.current_stock * p.average_cost), 0) AS total_value,
-            COALESCE(SUM(p.current_stock * p.selling_price), 0) AS potential_revenue
-        FROM products p
-        WHERE p.is_active = 1
-        AND p.current_stock > 0
-        AND (
-            (
-                SELECT MAX(DATE(s.sale_date))
-                FROM sale_items si
-                INNER JOIN sales s ON si.sale_id = s.id
-                WHERE si.product_id = p.id
-            ) IS NULL
-            OR
-            DATEDIFF(
-                CURDATE(),
-                (
-                    SELECT MAX(DATE(s.sale_date))
-                    FROM sale_items si
-                    INNER JOIN sales s ON si.sale_id = s.id
-                    WHERE si.product_id = p.id
-                )
-            ) >= ?
-        )
-    ", [(int)$period]);
+    // Computed in PHP from the already-scoped/filtered $products list
+    // above, so it can never drift from what's actually shown — same
+    // approach used by receivablesReport()/payablesReport().
+    $summary = [
+        'total_items'        => count($products),
+        'total_units'        => array_sum(array_column($products, 'current_stock')),
+        'total_value'        => array_sum(array_column($products, 'stock_value')),
+        'potential_revenue'  => array_sum(array_column($products, 'potential_revenue')),
+    ];
 
     // ── Categories for filter ───────────────────────────────
     $categories = $db->fetchAll("
@@ -1201,6 +1473,7 @@ function deadStockReport($db)
     ");
 
     $pageTitle = 'Dead Stock Report';
+    $viewingScopeLabel = hasMultiBranch() ? (isCompanyWide() ? 'All Branches' : activeBranchName()) : null;
     include APP_PATH . '/views/reports/dead_stock.php';
 }
 
@@ -1208,29 +1481,39 @@ function deadStockReport($db)
 // PROFIT MARGIN ANALYSIS REPORT
 // ============================================================
 
-function profitMarginReport($db)
+function profitMarginReport(Database $db)
 {
     // Get filter parameters
     $category = $_GET['category'] ?? '';
     $sortBy = $_GET['sort_by'] ?? 'margin_desc'; // margin_desc, margin_asc, profit_desc, revenue_desc
 
-    // Build WHERE clause
+    // Build WHERE clause (stock-derived "has stock" condition moves to HAVING)
     $params = [];
-    $where = "WHERE p.is_active = 1 AND p.current_stock > 0";
+    $where = "WHERE p.is_active = 1";
 
     if (!empty($category)) {
         $where .= " AND p.category_id = ?";
         $params[] = $category;
     }
 
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
     // Determine sort order
     $orderBy = match ($sortBy) {
         'margin_asc' => 'profit_margin_pct ASC',
         'profit_desc' => 'profit_per_unit DESC',
         'revenue_desc' => 'potential_revenue DESC',
-        'stock_desc' => 'p.current_stock DESC',
+        'stock_desc' => 'current_stock DESC',
         default => 'profit_margin_pct DESC'
     };
+
+    // Margin itself (average_cost, selling_price) is correctly company-wide
+    // — cost accounting doesn't differ per branch, same reasoning as the
+    // weighted-average-cost calculation in Purchase/Sale controllers. Only
+    // the stock quantity and 30-day sales velocity below are branch-scoped.
+    [$stockScopeSql, $stockScopeParams] = branchScopeSql('bs');
+    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
 
     // ── Products with Margin Analysis ───────────────────────
     $products = $db->fetchAll("
@@ -1239,7 +1522,7 @@ function profitMarginReport($db)
             p.sku,
             p.name,
             p.unit,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.average_cost,
             p.selling_price,
             (p.selling_price - p.average_cost) AS profit_per_unit,
@@ -1251,11 +1534,11 @@ function profitMarginReport($db)
                 THEN ((p.selling_price - p.average_cost) / p.selling_price) * 100
                 ELSE 0
             END AS markup_pct,
-            (p.current_stock * p.average_cost) AS stock_value,
-            (p.current_stock * p.selling_price) AS potential_revenue,
-            ((p.selling_price - p.average_cost) * p.current_stock) AS potential_profit,
+            (COALESCE(SUM(bs.quantity), 0) * p.average_cost) AS stock_value,
+            (COALESCE(SUM(bs.quantity), 0) * p.selling_price) AS potential_revenue,
+            ((p.selling_price - p.average_cost) * COALESCE(SUM(bs.quantity), 0)) AS potential_profit,
             c.name AS category_name,
-            -- Last 30 days sales (excluding voided)
+            -- Last 30 days sales (excluding voided), branch-scoped to match current_stock
             (
                 SELECT COALESCE(SUM(si.quantity), 0)
                 FROM sale_items si
@@ -1263,71 +1546,56 @@ function profitMarginReport($db)
                 WHERE si.product_id = p.id
                 AND DATE(s.sale_date) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                 AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+                $salesScopeSql
             ) AS qty_sold_30days,
             (
-                SELECT COALESCE(SUM(si.line_total), 0)
+                SELECT COALESCE(SUM({$netLine}), 0)
                 FROM sale_items si
                 INNER JOIN sales s ON si.sale_id = s.id
                 WHERE si.product_id = p.id
                 AND DATE(s.sale_date) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                 AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+                $salesScopeSql
             ) AS revenue_30days
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $stockScopeSql
         $where
+        GROUP BY p.id, p.sku, p.name, p.unit, p.average_cost, p.selling_price, c.name
+        HAVING current_stock > 0
         ORDER BY $orderBy
-    ", $params);
+    ", array_merge($salesScopeParams, $salesScopeParams, $stockScopeParams, $params));
 
     // ── Summary Stats ───────────────────────────────────────
-    $summary = $db->fetchOne("
-        SELECT
-            COUNT(*) AS total_products,
-            COALESCE(AVG(
-                CASE WHEN p.average_cost > 0 
-                    THEN ((p.selling_price - p.average_cost) / p.average_cost) * 100
-                    ELSE 0 
-                END
-            ), 0) AS avg_margin,
-            COALESCE(SUM(p.current_stock * p.average_cost), 0) AS total_stock_value,
-            COALESCE(SUM((p.selling_price - p.average_cost) * p.current_stock), 0) AS total_potential_profit,
-            COUNT(CASE 
-                WHEN ((p.selling_price - p.average_cost) / NULLIF(p.average_cost, 0)) * 100 < 10 
-                THEN 1 
-            END) AS low_margin_count,
-            COUNT(CASE 
-                WHEN ((p.selling_price - p.average_cost) / NULLIF(p.average_cost, 0)) * 100 >= 30 
-                THEN 1 
-            END) AS high_margin_count
-        FROM products p
-        WHERE p.is_active = 1 AND p.current_stock > 0
-    ");
+    // Computed in PHP from the already-scoped $products list above, so
+    // it can never drift from what's shown — same approach as
+    // deadStockReport()/receivablesReport().
+    $margins = array_column($products, 'profit_margin_pct');
+    $summary = [
+        'total_products'         => count($products),
+        'avg_margin'             => count($margins) > 0 ? array_sum($margins) / count($margins) : 0,
+        'total_stock_value'      => array_sum(array_column($products, 'stock_value')),
+        'total_potential_profit' => array_sum(array_column($products, 'potential_profit')),
+        'low_margin_count'       => count(array_filter($products, fn($p) => $p['profit_margin_pct'] < 10)),
+        'high_margin_count'      => count(array_filter($products, fn($p) => $p['profit_margin_pct'] >= 30)),
+    ];
 
     // ── Margin Distribution ─────────────────────────────────
-    $marginDistribution = $db->fetchAll("
-        SELECT
-            CASE 
-                WHEN ((p.selling_price - p.average_cost) / NULLIF(p.average_cost, 0)) * 100 < 0 THEN 'Negative'
-                WHEN ((p.selling_price - p.average_cost) / NULLIF(p.average_cost, 0)) * 100 < 10 THEN '0-10%'
-                WHEN ((p.selling_price - p.average_cost) / NULLIF(p.average_cost, 0)) * 100 < 20 THEN '10-20%'
-                WHEN ((p.selling_price - p.average_cost) / NULLIF(p.average_cost, 0)) * 100 < 30 THEN '20-30%'
-                WHEN ((p.selling_price - p.average_cost) / NULLIF(p.average_cost, 0)) * 100 < 50 THEN '30-50%'
-                ELSE '50%+'
-            END AS margin_range,
-            COUNT(*) AS product_count,
-            COALESCE(SUM(p.current_stock * p.average_cost), 0) AS stock_value
-        FROM products p
-        WHERE p.is_active = 1 AND p.current_stock > 0
-        GROUP BY margin_range
-        ORDER BY 
-            CASE margin_range
-                WHEN 'Negative' THEN 1
-                WHEN '0-10%' THEN 2
-                WHEN '10-20%' THEN 3
-                WHEN '20-30%' THEN 4
-                WHEN '30-50%' THEN 5
-                WHEN '50%+' THEN 6
-            END
-    ");
+    // Also computed from $products in PHP, for the same reason.
+    $bucketLabels = ['Negative', '0-10%', '10-20%', '20-30%', '30-50%', '50%+'];
+    $buckets = array_fill_keys($bucketLabels, ['product_count' => 0, 'stock_value' => 0]);
+    foreach ($products as $p) {
+        $pct = $p['profit_margin_pct'];
+        $label = $pct < 0 ? 'Negative' : ($pct < 10 ? '0-10%' : ($pct < 20 ? '10-20%' : ($pct < 30 ? '20-30%' : ($pct < 50 ? '30-50%' : '50%+'))));
+        $buckets[$label]['product_count']++;
+        $buckets[$label]['stock_value'] += $p['stock_value'];
+    }
+    $marginDistribution = [];
+    foreach ($bucketLabels as $label) {
+        if ($buckets[$label]['product_count'] > 0) {
+            $marginDistribution[] = array_merge(['margin_range' => $label], $buckets[$label]);
+        }
+    }
 
     // ── Categories for filter ───────────────────────────────
     $categories = $db->fetchAll("
@@ -1335,6 +1603,7 @@ function profitMarginReport($db)
     ");
 
     $pageTitle = 'Profit Margin Analysis';
+    $viewingScopeLabel = hasMultiBranch() ? (isCompanyWide() ? 'All Branches' : activeBranchName()) : null;
     include APP_PATH . '/views/reports/profit_margin.php';
 }
 
@@ -1342,7 +1611,7 @@ function profitMarginReport($db)
 // PRODUCTS REPORT (Placeholder)
 // ============================================================
 
-function productsReport($db)
+function productsReport(Database $db)
 {
     echo "<h1>Products Report - Coming Soon</h1>";
     echo "<a href='" . BASE_URL . "/reports'>← Back to Reports</a>";
@@ -1352,7 +1621,7 @@ function productsReport($db)
 // CUSTOMERS REPORT (Placeholder)
 // ============================================================
 
-function customersReport($db)
+function customersReport(Database $db)
 {
     echo "<h1>Customers Report - Coming Soon</h1>";
     echo "<a href='" . BASE_URL . "/reports'>← Back to Reports</a>";
@@ -1362,7 +1631,7 @@ function customersReport($db)
 // INVENTORY REPORT (Placeholder)
 // ============================================================
 
-function inventoryReport($db)
+function inventoryReport(Database $db)
 {
     echo "<h1>Inventory Report - Coming Soon</h1>";
     echo "<a href='" . BASE_URL . "/reports'>← Back to Reports</a>";
@@ -1375,7 +1644,7 @@ function inventoryReport($db)
 /**
  * Calculate date range based on period
  */
-function calculateDateRange($period, $customFrom = '', $customTo = '')
+function calculateDateRange(mixed $period, mixed $customFrom = '', mixed $customTo = '')
 {
     $today = date('Y-m-d');
     $from  = $today;

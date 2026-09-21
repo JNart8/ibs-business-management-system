@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // ── Requires users.manage permission ───────────────────────────
@@ -65,10 +73,10 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listUsers($db)
+function listUsers(Database $db)
 {
     $users = $db->fetchAll("
-        SELECT id, username, full_name, role, role_id, is_active,
+        SELECT id, username, full_name, role, role_id, branch_scope, branch_id, is_active,
                login_attempts, locked_until, last_login, created_at
         FROM users
         ORDER BY is_active DESC, role ASC, full_name ASC
@@ -77,14 +85,17 @@ function listUsers($db)
     include APP_PATH . '/views/users/index.php';
 }
 
-function showCreateUser($db)
+function showCreateUser(Database $db)
 {
     $roles = assignableRoles();
+    $branches = hasMultiBranch()
+        ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+        : [];
     $pageTitle = 'Add User';
     include APP_PATH . '/views/users/create.php';
 }
 
-function storeUser($db)
+function storeUser(Database $db)
 {
     $errors = validateUserInput($_POST);
 
@@ -109,31 +120,56 @@ function storeUser($db)
     $slug = roleSlug($roleId);
     $legacyRole = in_array($slug, ['admin', 'staff', 'cashier'], true) ? $slug : 'staff';
 
+    $branchScope = (hasMultiBranch() && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+
     $db->query("
-        INSERT INTO users (username, password_hash, full_name, role, role_id, is_active)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO users (username, password_hash, full_name, role, role_id, branch_scope, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     ", [
         trim($_POST['username']),
         password_hash($_POST['password'], PASSWORD_DEFAULT),
         trim($_POST['full_name']),
         $legacyRole,
         $roleId,
+        $branchScope,
         isset($_POST['is_active']) ? 1 : 0,
+    ]);
+
+    $newUserId = $db->lastInsertId();
+
+    if (hasMultiBranch()) {
+        saveUserBranches($db, $newUserId, $_POST['branch_id'] ?? null);
+    } else {
+        // Multi-branch isn't active for this install — everyone implicitly
+        // works at Main Branch. Keep the new user consistent with that.
+        $mainBranch = $db->fetchOne("SELECT id FROM branches ORDER BY id ASC LIMIT 1");
+        if ($mainBranch) {
+            saveUserBranches($db, $newUserId, $mainBranch['id']);
+        }
+    }
+
+    logAudit('user.create', 'user', $newUserId, [
+        'username' => trim($_POST['username']),
+        'role'     => roleName($roleId),
     ]);
 
     redirect(BASE_URL . '/users', 'success', 'User created successfully.');
 }
 
-function showEditUser($db, $id)
+function showEditUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
     $roles = assignableRoles();
+    $branches = hasMultiBranch()
+        ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+        : [];
+    $assignedBranches = hasMultiBranch() ? userBranches($id) : [];
     $pageTitle = 'Edit User';
     include APP_PATH . '/views/users/edit.php';
 }
 
-function updateUser($db, $id)
+function updateUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -165,10 +201,24 @@ function updateUser($db, $id)
         }
     }
 
+    $branchScope = (hasMultiBranch() && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+
     $db->query("
-        UPDATE users SET username = ?, full_name = ?, role = ?, role_id = ?, is_active = ?
+        UPDATE users SET username = ?, full_name = ?, role = ?, role_id = ?, branch_scope = ?, is_active = ?
         WHERE id = ?
-    ", [$newUsername, $fullName, $legacyRole, $roleId, $isActive, $id]);
+    ", [$newUsername, $fullName, $legacyRole, $roleId, $branchScope, $isActive, $id]);
+
+    if (hasMultiBranch()) {
+        saveUserBranches($db, $id, $_POST['branch_id'] ?? null);
+    }
+
+    logAudit('user.update', 'user', $id, [
+        'username'      => $newUsername,
+        'role_before'   => roleName($user['role_id']),
+        'role_after'    => roleName($roleId),
+        'active_before' => (bool) $user['is_active'],
+        'active_after'  => (bool) $isActive,
+    ]);
 
     if ($id == $_SESSION['user_id']) {
         $_SESSION['full_name'] = $fullName;
@@ -179,7 +229,37 @@ function updateUser($db, $id)
     redirect(BASE_URL . '/users', 'success', 'User updated successfully.');
 }
 
-function showPasswordForm($db, $id)
+/**
+ * Set a user's single branch assignment (also their `branch_id` — the
+ * "currently active" branch POS/sales read from). One branch per user,
+ * always — a company-wide user (branch_scope = 'all') still needs
+ * exactly one "home" branch for session/POS defaulting even though
+ * their actual access isn't limited to it. Falls back to Main Branch
+ * (lowest id) if the submitted id isn't a real active branch, matching
+ * the old silent-fallback behavior rather than adding a hard error.
+ */
+function saveUserBranches(Database $db, mixed $userId, mixed $branchId)
+{
+    $branchId = intval($branchId ?? 0);
+    $valid = $branchId > 0 && $db->fetchOne("SELECT id FROM branches WHERE id = ? AND is_active = 1", [$branchId]);
+
+    if (!$valid) {
+        $fallback = $db->fetchOne("SELECT id FROM branches WHERE is_active = 1 ORDER BY id ASC LIMIT 1");
+        $branchId = $fallback ? $fallback['id'] : null;
+    }
+
+    $db->query("DELETE FROM user_branches WHERE user_id = ?", [$userId]);
+
+    if ($branchId) {
+        $db->query(
+            "INSERT INTO user_branches (user_id, branch_id, is_primary) VALUES (?, ?, 1)",
+            [$userId, $branchId]
+        );
+        $db->query("UPDATE users SET branch_id = ? WHERE id = ?", [$branchId, $userId]);
+    }
+}
+
+function showPasswordForm(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT id, username, full_name FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -187,7 +267,7 @@ function showPasswordForm($db, $id)
     include APP_PATH . '/views/users/password.php';
 }
 
-function updatePassword($db, $id)
+function updatePassword(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -218,7 +298,7 @@ function updatePassword($db, $id)
     redirect(BASE_URL . '/users', 'success', 'Password updated successfully.');
 }
 
-function deleteUser($db, $id)
+function deleteUser(Database $db, mixed $id)
 {
     if ($id == $_SESSION['user_id']) {
         redirect(BASE_URL . '/users', 'error', 'You cannot deactivate your own account.');
@@ -235,13 +315,14 @@ function deleteUser($db, $id)
     }
 
     $db->query("UPDATE users SET is_active = 0 WHERE id = ?", [$id]);
+    logAudit('user.deactivate', 'user', $id, ['username' => $user['username']]);
     redirect(BASE_URL . '/users', 'success', 'User deactivated successfully.');
 }
 
 /**
  * Activate a deactivated user account (NEW!)
  */
-function activateUser($db, $id)
+function activateUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) {
@@ -255,6 +336,7 @@ function activateUser($db, $id)
 
     // Activate the user
     $db->query("UPDATE users SET is_active = 1 WHERE id = ?", [$id]);
+    logAudit('user.activate', 'user', $id, ['username' => $user['username']]);
 
     redirect(
         BASE_URL . '/users',
@@ -266,7 +348,7 @@ function activateUser($db, $id)
 /**
  * Unlock a locked user account
  */
-function unlockUser($db, $id)
+function unlockUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
@@ -290,7 +372,7 @@ function unlockUser($db, $id)
 }
 
 // ── Validation helper ─────────────────────────────────────────
-function validateUserInput($data)
+function validateUserInput(mixed $data)
 {
     $errors = [];
 

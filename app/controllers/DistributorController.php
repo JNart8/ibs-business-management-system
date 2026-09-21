@@ -59,7 +59,7 @@ switch ($action) {
 /**
  * List direct distributor deliveries
  */
-function listDistributorDeliveries($db)
+function listDistributorDeliveries(Database $db)
 {
     // Pagination
     $page = max(1, intval($_GET['page'] ?? 1));
@@ -100,7 +100,7 @@ function listDistributorDeliveries($db)
 /**
  * Show Combined Entry Form
  */
-function showCreateDistributorDelivery($db)
+function showCreateDistributorDelivery(Database $db)
 {
     // Active suppliers
     $suppliers = $db->fetchAll("
@@ -120,19 +120,22 @@ function showCreateDistributorDelivery($db)
 
     // Quick products
     $quickProducts = $db->fetchAll("
-        SELECT id, name, sku, cost_price, average_cost, selling_price, current_stock, unit
-        FROM products
-        WHERE is_active = 1
-        ORDER BY name ASC
-    ");
+        SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, p.selling_price,
+               COALESCE(bs.quantity, 0) AS current_stock, p.unit
+        FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+        WHERE p.is_active = 1
+        ORDER BY p.name ASC
+    ", [activeBranchId()]);
 
     // Financial accounts
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1
+        WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY name ASC
-    ");
+    ", $acctScopeParams);
 
     $pageTitle = 'Direct Delivery Entry';
     include APP_PATH . '/views/distributor/create.php';
@@ -141,7 +144,7 @@ function showCreateDistributorDelivery($db)
 /**
  * Handle direct delivery submission
  */
-function completeDistributorDelivery($db)
+function completeDistributorDelivery(Database $db)
 {
     header('Content-Type: application/json');
 
@@ -186,6 +189,25 @@ function completeDistributorDelivery($db)
     if (!$supplier || !$customer) {
         echo json_encode(['success' => false, 'message' => 'Selected Supplier or Customer is invalid or inactive']);
         return;
+    }
+
+    // Validate the two payment accounts (if money is actually moving) — the
+    // picker feeding these is already branch-scoped, but a direct POST could
+    // still name another branch's account without this check.
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    if ($supplierAmountPaid > 0 && $supplierAccountId > 0) {
+        $supplierAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$supplierAccountId], $acctScopeParams));
+        if (!$supplierAccount) {
+            echo json_encode(['success' => false, 'message' => 'Selected supplier payment account is invalid or inactive']);
+            return;
+        }
+    }
+    if ($customerAmountPaid > 0 && $customerAccountId > 0) {
+        $customerAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$customerAccountId], $acctScopeParams));
+        if (!$customerAccount) {
+            echo json_encode(['success' => false, 'message' => 'Selected customer payment account is invalid or inactive']);
+            return;
+        }
     }
 
     try {
@@ -346,14 +368,19 @@ function completeDistributorDelivery($db)
                 $vi['sale_total']
             ]);
 
-            // Stock movements
-            $stockBefore = floatval($p['current_stock']);
+            // Stock movements — net-zero by design (goods arrive and leave
+            // immediately), so no actual branch_stock change is needed, just
+            // an accurate before/after pair for the audit trail. Using this
+            // branch's actual stock (not the company-wide total) so the
+            // ledger reads correctly for whoever looks at this branch later.
+            $branchIdForDistrib = activeBranchId();
+            $stockBefore = getBranchStock($p['id'], $branchIdForDistrib);
             
             // Movement IN from Purchase
             $db->query("
                 INSERT INTO stock_movements 
-                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
+                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?)
             ", [
                 $p['id'],
                 $qty,
@@ -361,14 +388,15 @@ function completeDistributorDelivery($db)
                 $stockBefore,
                 $stockBefore + $qty,
                 "Direct Delivery - Supplier purchase",
-                $userId
+                $userId,
+                $branchIdForDistrib
             ]);
 
             // Movement OUT to Sale
             $db->query("
                 INSERT INTO stock_movements 
-                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)
+                    (product_id, movement_type, quantity, reference_type, reference_id, previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?, ?)
             ", [
                 $p['id'],
                 $qty,
@@ -376,11 +404,14 @@ function completeDistributorDelivery($db)
                 $stockBefore + $qty,
                 $stockBefore, // Back to starting stock level
                 "Direct Delivery - Customer sale",
-                $userId
+                $userId,
+                $branchIdForDistrib
             ]);
 
-            // Since it's direct delivery, we do not modify current_stock in products table (net zero).
-            // But we do update cost_price and last_purchase_cost / last_purchase_date
+            // Since it's direct delivery, we do not modify branch_stock/
+            // products.current_stock (net zero — confirmed above via the
+            // matching in/out movement pair). But we do update cost_price
+            // and last_purchase_cost / last_purchase_date.
             $db->query("
                 UPDATE products 
                 SET cost_price = ?, last_purchase_cost = ?, last_purchase_date = NOW()
@@ -450,9 +481,9 @@ function completeDistributorDelivery($db)
         $netCustomerBalanceEffect = $customerAmountPaid - $customerTotalAmount;
 
         $db->query("
-            INSERT INTO customer_transactions 
-                (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id)
-            VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Sale', ?)
+            INSERT INTO customer_transactions
+                (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+            VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Sale', ?, ?)
         ", [
             $customerId,
             -$customerTotalAmount,
@@ -460,14 +491,15 @@ function completeDistributorDelivery($db)
             $custBalanceBefore - $customerTotalAmount,
             $saleId,
             $customerPaymentMethod,
-            $userId
+            $userId,
+            $branchIdForDistrib
         ]);
 
         if ($customerAmountPaid > 0) {
             $db->query("
-                INSERT INTO customer_transactions 
-                    (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Customer Payment', ?)
+                INSERT INTO customer_transactions
+                    (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, 'Direct Delivery Customer Payment', ?, ?)
             ", [
                 $customerId,
                 $customerAmountPaid,
@@ -475,7 +507,8 @@ function completeDistributorDelivery($db)
                 $custBalanceBefore - $customerTotalAmount + $customerAmountPaid,
                 $saleId,
                 $customerPaymentMethod,
-                $userId
+                $userId,
+                $branchIdForDistrib
             ]);
 
             // Record money inflow to financial account
@@ -513,7 +546,7 @@ function completeDistributorDelivery($db)
 /**
  * View distributor direct delivery details
  */
-function viewDistributorDelivery($db, $saleId)
+function viewDistributorDelivery(Database $db, mixed $saleId)
 {
     // Fetch Sale
     $sale = $db->fetchOne("
@@ -588,7 +621,7 @@ function viewDistributorDelivery($db, $saleId)
     include APP_PATH . '/views/distributor/view.php';
 }
 
-function distributorGeneratePurchaseNumber($db)
+function distributorGeneratePurchaseNumber(Database $db)
 {
     $prefix = 'PUR-DD-' . date('Ymd') . '-';
     $last   = $db->fetchOne("
@@ -601,7 +634,7 @@ function distributorGeneratePurchaseNumber($db)
     return $prefix . str_pad($num, 4, '0', STR_PAD_LEFT);
 }
 
-function distributorGenerateSaleNumber($db)
+function distributorGenerateSaleNumber(Database $db)
 {
     $prefix = 'SALE-DD-' . date('Ymd') . '-';
     $last   = $db->fetchOne("

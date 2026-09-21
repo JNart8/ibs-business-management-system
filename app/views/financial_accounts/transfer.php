@@ -13,10 +13,21 @@
     <!-- Flash Message -->
     <?= flashMessage() ?>
 
+    <?php $settlementType = $_GET['settlement_type'] ?? ''; ?>
+    <?php if ($settlementType === 'customer_credit_balancing'): ?>
+        <div class="bg-blue-50 border border-blue-200 text-blue-800 text-sm rounded-lg p-4 mb-4">
+            🔁 <strong>Recording a customer-credit branch settlement.</strong>
+            Pick the accounts this settlement actually moves money between, then confirm.
+        </div>
+    <?php endif; ?>
+
     <!-- Transfer Form -->
     <div class="bg-white rounded-lg shadow-sm p-6">
         <form action="<?= BASE_URL ?>/financial-accounts/transfer" method="POST" class="space-y-4">
             <?= csrfField() ?>
+            <?php if ($settlementType === 'customer_credit_balancing'): ?>
+                <input type="hidden" name="settlement_type" value="customer_credit_balancing">
+            <?php endif; ?>
 
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1">Source Account (From) *</label>
@@ -61,7 +72,7 @@
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1">Notes / Reference</label>
                 <textarea name="notes" placeholder="Reason for transfer, bank reference number, transaction ID, etc." rows="3"
-                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"></textarea>
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"><?= e($_GET['note'] ?? '') ?></textarea>
             </div>
 
             <div class="flex justify-end gap-2 pt-4">

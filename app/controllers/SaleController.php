@@ -85,7 +85,7 @@ switch ($action) {
 /**
  * Show POS Interface
  */
-function showPOS($db)
+function showPOS(Database $db)
 {
     // Load settings for receipt + POS behavior
     $settings = $db->fetchOne("SELECT * FROM settings LIMIT 1");
@@ -100,12 +100,14 @@ function showPOS($db)
 
     // Recent products for quick access (last 12 most sold)
     $quickProducts = $db->fetchAll("
-    SELECT p.id, p.name, p.sku, p.selling_price, p.current_stock, p.unit
+    SELECT p.id, p.name, p.sku, p.selling_price, p.unit,
+           COALESCE(bs.quantity, 0) AS current_stock
     FROM products p
-    WHERE p.is_active = 1 AND p.current_stock > 0
+    LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+    WHERE p.is_active = 1 AND COALESCE(bs.quantity, 0) > 0
     ORDER BY p.id DESC
     LIMIT 12
-    ");
+    ", [activeBranchId()]);
 
 
     // Most-sold products (top 12 by sales volume)
@@ -126,8 +128,10 @@ function showPOS($db)
     );
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     $pageTitle = 'Point of Sale';
@@ -137,7 +141,7 @@ function showPOS($db)
 /**
  * Complete a sale — the core transaction
  */
-function completeSale($db)
+function completeSale(Database $db)
 {
     header('Content-Type: application/json');
 
@@ -260,10 +264,11 @@ function completeSale($db)
             echo json_encode(['success' => false, 'message' => "Product ID $productId not found"]);
             return;
         }
-        if ($product['current_stock'] < $qty) {
+        $branchStockAvailable = getBranchStock($productId);
+        if ($branchStockAvailable < $qty) {
             echo json_encode([
                 'success' => false,
-                'message' => "Not enough stock for {$product['name']}. Available: {$product['current_stock']} {$product['unit']}"
+                'message' => "Not enough stock for {$product['name']} at " . activeBranchName() . ". Available: {$branchStockAvailable} {$product['unit']}"
             ]);
             return;
         }
@@ -363,9 +368,9 @@ function completeSale($db)
         INSERT INTO sales
             (sale_number, customer_id, subtotal, discount_type, discount_percent,
              discount_amount, total_amount, payment_status,
-             payment_method, amount_paid, amount_due, notes, user_id, 
+             payment_method, amount_paid, amount_due, notes, user_id, branch_id,
              sale_date, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ", [
                 $saleNumber,
                 $customerId,
@@ -380,6 +385,7 @@ function completeSale($db)
                 $amountDue,
                 $notes ?: null,
                 $userId,
+                activeBranchId(),
                 $saleDate,
                 $saleDate,
                 $saleDate
@@ -390,8 +396,8 @@ function completeSale($db)
         INSERT INTO sales
             (sale_number, customer_id, subtotal, discount_type, discount_percent,
              discount_amount, total_amount, payment_status,
-             payment_method, amount_paid, amount_due, notes, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             payment_method, amount_paid, amount_due, notes, user_id, branch_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ", [
                 $saleNumber,
                 $customerId,
@@ -405,7 +411,8 @@ function completeSale($db)
                 $amountPaid,
                 $amountDue,
                 $notes ?: null,
-                $userId
+                $userId,
+                activeBranchId()
             ]);
         }
 
@@ -433,28 +440,27 @@ function completeSale($db)
                 $vi['lineTotal']
             ]);
 
-            $prevStock = floatval($p['current_stock']);
+            $branchIdForSale = activeBranchId();
+            $prevStock = getBranchStock($p['id'], $branchIdForSale);
             $newStock  = $prevStock - $vi['qty'];
 
-            // Update stock
-            $db->query(
-                "UPDATE products SET current_stock = ? WHERE id = ?",
-                [$newStock, $p['id']]
-            );
+            // Update this branch's stock (also keeps products.current_stock,
+            // the company-wide total, in sync automatically)
+            adjustBranchStock($db, $p['id'], $branchIdForSale, -$vi['qty']);
 
             // Log movement
             if (!empty($saleDate)) {
                 $db->query("
         INSERT INTO stock_movements
             (product_id, movement_type, quantity, reference_type,
-             reference_id, previous_stock, new_stock, user_id, created_at)
-        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, $saleDate]);
+             reference_id, previous_stock, new_stock, user_id, branch_id, created_at)
+        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, $branchIdForSale, $saleDate]);
             } else {
                 $db->query("
         INSERT INTO stock_movements
             (product_id, movement_type, quantity, reference_type,
-             reference_id, previous_stock, new_stock, user_id)
-        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId]);
+             reference_id, previous_stock, new_stock, user_id, branch_id)
+        VALUES (?, 'out', ?, 'sale', ?, ?, ?, ?, ?)", [$p['id'], $vi['qty'], $saleId, $prevStock, $newStock, $userId, $branchIdForSale]);
             }
         }
 
@@ -470,7 +476,22 @@ function completeSale($db)
                 $db->query("
         INSERT INTO customer_transactions
             (customer_id, transaction_type, amount, balance_before,
-             balance_after, reference_type, reference_id, payment_method, user_id, created_at)
+             balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+        VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)", [
+                    $customerId,
+                    -$totalAmount,
+                    $balanceBefore,
+                    $balanceBefore - $totalAmount,
+                    $saleId,
+                    $userId,
+                    $saleDate,
+                    $branchIdForSale
+                ]);
+            } else {
+                $db->query("
+        INSERT INTO customer_transactions
+            (customer_id, transaction_type, amount, balance_before,
+             balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
         VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)", [
                     $customerId,
                     -$totalAmount,
@@ -478,20 +499,7 @@ function completeSale($db)
                     $balanceBefore - $totalAmount,
                     $saleId,
                     $userId,
-                    $saleDate
-                ]);
-            } else {
-                $db->query("
-        INSERT INTO customer_transactions
-            (customer_id, transaction_type, amount, balance_before,
-             balance_after, reference_type, reference_id, payment_method, user_id)
-        VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'deposit', ?)", [
-                    $customerId,
-                    -$totalAmount,
-                    $balanceBefore,
-                    $balanceBefore - $totalAmount,
-                    $saleId,
-                    $userId
+                    $branchIdForSale
                 ]);
             }
 
@@ -514,8 +522,8 @@ function completeSale($db)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)", [
                     $customerId,
                     -$totalAmount,
                     $balanceBefore,
@@ -523,14 +531,15 @@ function completeSale($db)
                     $saleId,
                     $paymentMethod,
                     $userId,
-                    $saleDate
+                    $saleDate,
+                    $branchIdForSale
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, ?, ?, ?)
             ", [
                     $customerId,
                     -$totalAmount,
@@ -538,7 +547,8 @@ function completeSale($db)
                     $balanceBefore - $totalAmount,
                     $saleId,
                     $paymentMethod,
-                    $userId
+                    $userId,
+                    $branchIdForSale
                 ]);
             }
             // Record payment (credit)
@@ -546,8 +556,8 @@ function completeSale($db)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)", [
                     $customerId,
                     $amountPaid,
                     $balanceBefore - $totalAmount,
@@ -555,14 +565,15 @@ function completeSale($db)
                     $saleId,
                     $paymentMethod,
                     $userId,
-                    $saleDate
+                    $saleDate,
+                    $branchIdForSale
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)
             ", [
                     $customerId,
                     $amountPaid,
@@ -570,7 +581,8 @@ function completeSale($db)
                     $balanceBefore - $totalAmount + $amountPaid,
                     $saleId,
                     $paymentMethod,
-                    $userId
+                    $userId,
+                    $branchIdForSale
                 ]);
             }
             // Update customer balance (net effect)
@@ -591,29 +603,31 @@ function completeSale($db)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?, ?, ?)", [
                     $customerId,
                     -$totalAmount,
                     $balanceBefore,
                     $balanceBefore - $totalAmount,
                     $saleId,
                     $userId,
-                    $saleDate
+                    $saleDate,
+                    $branchIdForSale
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'sale', ?, ?, ?, 'sale', ?, 'credit', ?, ?)
             ", [
                     $customerId,
                     -$totalAmount,
                     $balanceBefore,
                     $balanceBefore - $totalAmount,
                     $saleId,
-                    $userId
+                    $userId,
+                    $branchIdForSale
                 ]);
             }
 
@@ -634,9 +648,10 @@ function completeSale($db)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }
@@ -668,8 +683,10 @@ function completeSale($db)
         $saleDate = date('Y-m-d H:i:s');
 
         // Fetch updated financial accounts to update POS state
+        [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
         $financialAccounts = $db->fetchAll(
-            "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+            "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
+            $acctScopeParams
         );
 
         // Fetch updated customer details to update POS state
@@ -711,7 +728,7 @@ function completeSale($db)
 /**
  * List all sales - WITH DATE RANGE FILTERING
  */
-function listSales($db)
+function listSales(Database $db)
 {
     $search   = trim($_GET['search'] ?? '');
     $status   = $_GET['status']      ?? '';
@@ -723,6 +740,12 @@ function listSales($db)
 
     $params = [];
     $where  = "WHERE 1=1";
+
+    // Branch visibility — company-wide users (or single-branch installs)
+    // see everything; branch-scoped users only see their own branch(es).
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    $where .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
 
     // Search filter
     if (!empty($search)) {
@@ -780,7 +803,9 @@ function listSales($db)
         LIMIT ? OFFSET ?
     ", array_merge($params, [$limit, $offset]));
 
-    // Daily summary (always today, not affected by filters)
+    // Daily summary (always today, not affected by filters, but still
+    // branch-scoped — a branch admin shouldn't see company-wide totals)
+    [$dailyScopeSql, $dailyScopeParams] = branchScopeSql('');
     $todayStats = $db->fetchOne("
         SELECT
             COALESCE(SUM(total_amount), 0) AS total_sales,
@@ -794,7 +819,8 @@ function listSales($db)
         FROM sales
         WHERE DATE(sale_date) = CURDATE()
           AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')
-    ");
+          $dailyScopeSql
+    ", $dailyScopeParams);
 
     $pageTitle = 'Sales History';
     include APP_PATH . '/views/sales/index.php';
@@ -803,8 +829,9 @@ function listSales($db)
 /**
  * View single sale
  */
-function viewSale($db, $id)
+function viewSale(Database $db, mixed $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.full_name AS customer_name, c.phone AS customer_phone,
                c.customer_code, u.full_name AS cashier_name
@@ -812,7 +839,8 @@ function viewSale($db, $id)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u     ON s.user_id     = u.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -845,7 +873,7 @@ function viewSale($db, $id)
 /**
  * Show edit sale form
  */
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     // Check permissions - requires sales.edit permission
     if (!can('sales.edit')) {
@@ -854,6 +882,7 @@ function showEditForm($db, $id)
     }
 
     // Get sale details
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT 
             s.*,
@@ -866,7 +895,8 @@ function showEditForm($db, $id)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -900,7 +930,7 @@ function showEditForm($db, $id)
 /**
  * Update sale
  */
-function updateSale($db, $id)
+function updateSale(Database $db, mixed $id)
 {
     // CSRF check
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
@@ -915,6 +945,7 @@ function updateSale($db, $id)
     }
 
     // Get current sale
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT 
             s.*,
@@ -922,7 +953,8 @@ function updateSale($db, $id)
         FROM sales s
         LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -944,7 +976,7 @@ function updateSale($db, $id)
             redirect(BASE_URL . '/sales/edit/' . $id, 'error', 'Invalid sale date format');
             return;
         }
-        if ($dateObj > new DateTime('today')) {
+        if ($dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/sales/edit/' . $id, 'error', 'Sale date cannot be in the future');
             return;
         }
@@ -1100,8 +1132,8 @@ function updateSale($db, $id)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'adjustment', ?, ?, ?, 'sale', ?, ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'adjustment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)
             ", [
                 $customerId,
                 $paymentDifference,
@@ -1110,10 +1142,14 @@ function updateSale($db, $id)
                 $id,
                 $paymentMethod,
                 $txnNotes,
-                $userId
+                $userId,
+                $sale['branch_id'] ?? activeBranchId()
             ]);
 
-            // Adjust financial account balance
+            // Adjust financial account balance — resolve by the sale's own
+            // branch, not the editing admin's active branch, since cash
+            // accounts are branch-scoped (an admin editing a Kasoa sale
+            // while active at Main must still hit Kasoa's cash account).
             if ($paymentDifference > 0) {
                 recordAccountTransaction(
                     $db,
@@ -1122,7 +1158,9 @@ function updateSale($db, $id)
                     'deposit',
                     'sale',
                     $id,
-                    "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")"
+                    "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
+                    null,
+                    $sale['branch_id'] ?? null
                 );
             } else {
                 recordAccountTransaction(
@@ -1132,7 +1170,9 @@ function updateSale($db, $id)
                     'withdrawal',
                     'sale',
                     $id,
-                    "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")"
+                    "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
+                    null,
+                    $sale['branch_id'] ?? null
                 );
             }
         }
@@ -1147,6 +1187,16 @@ function updateSale($db, $id)
         } catch (Exception $e) {
             // Table might not exist, that's okay
         }
+
+        // Also log into the unified audit_log — audit_history above is an
+        // older, table-specific mechanism that predates it and was never
+        // wired into /audit, CSV export, archiving, or the security-alert
+        // banner. This is what actually makes a sale edit visible there.
+        logAudit('sale.edit', 'sale', $id, [
+            'sale_number' => $sale['sale_number'],
+            'changes'     => $changeLog,
+            'reason'      => $editReason,
+        ]);
 
         $db->commit();
 
@@ -1166,8 +1216,9 @@ function updateSale($db, $id)
 /**
  * Print-friendly receipt
  */
-function printReceipt($db, $id)
+function printReceipt(Database $db, mixed $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.full_name AS customer_name, c.phone AS customer_phone,
                c.customer_code, u.full_name AS cashier_name
@@ -1175,7 +1226,8 @@ function printReceipt($db, $id)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u     ON s.user_id     = u.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
@@ -1192,13 +1244,15 @@ function printReceipt($db, $id)
 /**
  * Show payment form for outstanding balance
  */
-function showPaymentForm($db, $id)
+function showPaymentForm(Database $db, mixed $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.full_name AS customer_name, c.current_balance, c.is_default
         FROM sales s LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = ? AND s.payment_status != 'paid'
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found or already paid');
@@ -1211,19 +1265,21 @@ function showPaymentForm($db, $id)
 /**
  * Process payment on outstanding sale - WITH DEPOSIT SUPPORT
  */
-function processPayment($db, $id)
+function processPayment(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/sales/pay/' . $id, 'error', 'Invalid form submission');
         return;
     }
 
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
     $sale = $db->fetchOne("
         SELECT s.*, c.current_balance, c.is_default 
         FROM sales s 
         LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$sale || $sale['payment_status'] === 'paid') {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found or already paid');
@@ -1297,29 +1353,31 @@ function processPayment($db, $id)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)", [
                     $sale['customer_id'],
                     -$payment, // Negative to reduce balance
                     $balanceBefore,
                     $balanceAfter,
                     $id,
                     $userId,
-                    $sale['sale_date']
+                    $sale['sale_date'],
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)
             ", [
                     $sale['customer_id'],
                     -$payment, // Negative to reduce balance
                     $balanceBefore,
                     $balanceAfter,
                     $id,
-                    $userId
+                    $userId,
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             }
             // Update customer balance - reduce deposit
@@ -1336,8 +1394,8 @@ function processPayment($db, $id)
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id, created_at)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)", [
+                     balance_after, reference_type, reference_id, payment_method, user_id, created_at, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)", [
                     $sale['customer_id'],
                     $payment,
                     $balanceBefore,
@@ -1345,14 +1403,15 @@ function processPayment($db, $id)
                     $id,
                     $paymentMethod,
                     $userId,
-                    $sale['sale_date']
+                    $sale['sale_date'],
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             } else {
                 $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, ?, ?, ?)
             ", [
                     $sale['customer_id'],
                     $payment,
@@ -1360,13 +1419,37 @@ function processPayment($db, $id)
                     $balanceAfter,
                     $id,
                     $paymentMethod,
-                    $userId
+                    $userId,
+                    $sale['branch_id'] ?? activeBranchId()
                 ]);
             }
             // Update customer balance
             $db->query(
                 "UPDATE customers SET current_balance = current_balance + ? WHERE id = ?",
                 [$payment, $sale['customer_id']]
+            );
+
+            // Post the actual cash/mobile/bank receipt to a financial
+            // account — this was missing entirely before (a payment taken
+            // here updated the sale and the customer's balance, but never
+            // touched any account, so the money never showed up anywhere
+            // it was actually received into). No account picker on this
+            // form, so resolve by type/branch the same way completeSale()
+            // does when no explicit account is chosen. Deliberately not
+            // done for the 'deposit' branch above — that money isn't new,
+            // it was already posted to an account when the customer
+            // originally deposited it; paying with it here just applies
+            // existing credit to this sale, no new account movement.
+            recordAccountTransaction(
+                $db,
+                $paymentMethod,
+                $payment,
+                'deposit',
+                'sale',
+                $id,
+                "Payment received for Sale #" . $sale['sale_number'],
+                null,
+                $sale['branch_id'] ?? null
             );
         }
 
@@ -1386,9 +1469,16 @@ function processPayment($db, $id)
 /**
  * Void/cancel a sale (reverses stock)
  */
-function voidSale($db, $id)
+function voidSale(Database $db, mixed $id)
 {
-    $sale = $db->fetchOne("SELECT * FROM sales WHERE id = ?", [$id]);
+    // Check permissions - requires sales.edit permission
+    if (!can('sales.edit')) {
+        redirect(BASE_URL . '/sales', 'error', 'You do not have permission to void sales');
+        return;
+    }
+
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $sale = $db->fetchOne("SELECT * FROM sales WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$sale) {
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
         return;
@@ -1401,18 +1491,18 @@ function voidSale($db, $id)
         $db->beginTransaction();
 
         // Reverse stock for each item
+        $voidBranchId = $sale['branch_id'] ?? activeBranchId();
         foreach ($items as $item) {
-            $product   = $db->fetchOne("SELECT current_stock FROM products WHERE id = ?", [$item['product_id']]);
-            $prevStock = floatval($product['current_stock']);
+            $prevStock = getBranchStock($item['product_id'], $voidBranchId);
             $newStock  = $prevStock + $item['quantity'];
 
-            $db->query("UPDATE products SET current_stock = ? WHERE id = ?", [$newStock, $item['product_id']]);
+            adjustBranchStock($db, $item['product_id'], $voidBranchId, $item['quantity']);
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'in', ?, 'return', ?, ?, ?, 'Sale voided', ?)
-            ", [$item['product_id'], $item['quantity'], $id, $prevStock, $newStock, $userId]);
+                     reference_id, previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'in', ?, 'return', ?, ?, ?, 'Sale voided', ?, ?)
+            ", [$item['product_id'], $item['quantity'], $id, $prevStock, $newStock, $userId, $voidBranchId]);
         }
 
         // Reverse customer balance & transactions
@@ -1444,8 +1534,8 @@ function voidSale($db, $id)
                 $db->query("
                     INSERT INTO customer_transactions
                         (customer_id, transaction_type, amount, balance_before,
-                         balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                    VALUES (?, 'refund', ?, ?, ?, 'sale', ?, ?, ?, ?)
+                         balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                    VALUES (?, 'refund', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)
                 ", [
                     $customer['id'],
                     $customerBalanceAdj,
@@ -1454,7 +1544,8 @@ function voidSale($db, $id)
                     $id,
                     $paymentMethod,
                     "Refund/Reversal for Voided Sale #" . $sale['sale_number'],
-                    $userId
+                    $userId,
+                    $voidBranchId
                 ]);
             } else {
                 // If no balance adjustment (fully paid cash/mobile/bank sale), just subtract total purchases
@@ -1466,27 +1557,41 @@ function voidSale($db, $id)
             }
         }
 
-        // Reverse financial account deposits for cash/mobile/bank payments
-        if (floatval($sale['amount_paid']) > 0 && !in_array($sale['payment_method'], ['credit', 'deposit'])) {
-            $acctTx = $db->fetchOne("
-                SELECT * FROM account_transactions 
-                WHERE reference_type = 'sale' AND reference_id = ? AND transaction_type = 'deposit' 
-                LIMIT 1
-            ", [$id]);
-            
-            if ($acctTx) {
-                // Log withdrawal refund
-                recordAccountTransaction(
-                    $db,
-                    $acctTx['payment_method'],
-                    $acctTx['amount'],
-                    'withdrawal',
-                    'sale',
-                    $id,
-                    "Refund for Voided Sale #" . $sale['sale_number'],
-                    $acctTx['account_id']
-                );
-            }
+        // Reverse financial account deposits for cash/mobile/bank payments.
+        // Reverses the NET already posted to account_transactions for this
+        // sale (deposits minus withdrawals, per account) rather than a
+        // single original deposit's amount — the old version always
+        // reversed the first deposit found, ignoring any withdrawal/deposit
+        // adjustment a prior edit had already posted (updateSale()'s
+        // payment-adjustment path). Confirmed live: complete a sale for
+        // 200, edit the paid amount down to 150 (posts a 50 withdrawal),
+        // then void — the old code reversed the original 200 instead of
+        // the correct 150, leaving a stray 50 discrepancy in the account.
+        // Grouping by account also covers the (rarer) case where an edit
+        // changed payment method and the adjustment landed in a different
+        // account than the original payment.
+        $netByAccount = $db->fetchAll("
+            SELECT account_id,
+                   SUM(CASE WHEN transaction_type = 'deposit' THEN amount
+                            WHEN transaction_type = 'withdrawal' THEN -amount
+                            ELSE 0 END) AS net_amount
+            FROM account_transactions
+            WHERE reference_type = 'sale' AND reference_id = ?
+            GROUP BY account_id
+            HAVING net_amount > 0.01
+        ", [$id]);
+
+        foreach ($netByAccount as $net) {
+            recordAccountTransaction(
+                $db,
+                $sale['payment_method'],
+                floatval($net['net_amount']),
+                'withdrawal',
+                'sale',
+                $id,
+                "Refund for Voided Sale #" . $sale['sale_number'],
+                $net['account_id']
+            );
         }
 
         // Mark sale as voided
@@ -1496,6 +1601,10 @@ function voidSale($db, $id)
         );
 
         $db->commit();
+        logAudit('sale.void', 'sale', $id, [
+            'sale_number' => $sale['sale_number'],
+            'total_amount' => $sale['total_amount'],
+        ]);
         redirect(BASE_URL . '/sales', 'success', 'Sale #' . $sale['sale_number'] . ' has been voided');
     } catch (Exception $e) {
         $db->rollback();
@@ -1507,7 +1616,7 @@ function voidSale($db, $id)
 // ============================================================
 // HELPERS
 // ============================================================
-function generateSaleNumber($db)
+function generateSaleNumber(Database $db)
 {
     $prefix = 'SALE-' . date('Ymd') . '-';
     $last   = $db->fetchOne("

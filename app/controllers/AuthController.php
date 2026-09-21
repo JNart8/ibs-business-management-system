@@ -9,8 +9,13 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
-/** @var string $path Request path provided by public/index.php */
-/** @var string $method HTTP method provided by public/index.php */
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
 
 $db = Database::getInstance();
 
@@ -51,7 +56,7 @@ function showLogin()
 /**
  * Process login form submission
  */
-function processLogin($db)
+function processLogin(Database $db)
 {
     if (isLoggedIn()) {
         redirect((currentUser()['role'] ?? '') === 'cashier' ? BASE_URL . '/pos' : BASE_URL . '/');

@@ -63,13 +63,11 @@ return [
             'expenses',
             'distributor',
             'advanced_permissions',
-            // 'multi_branch' intentionally NOT included yet.
-            // Multi-branch is a Phase 3 build (separate stock/sales/
-            // purchases per branch + transfers). The `branches` table
-            // and branch_id columns exist as scaffolding (Phase 1),
-            // but there is no UI yet to add a 2nd branch or scope
-            // records to it. Add 'multi_branch' here only once that
-            // feature actually ships.
+            // Multi-branch is NOT gated here — it's no longer purely a
+            // plan-tier feature. Every Enterprise client gets it
+            // automatically, but it can also be sold to a Growth client
+            // as a paid add-on. See hasMultiBranch() in functions.php,
+            // which checks `plan = 'enterprise' OR settings.addon_multi_branch`.
         ],
     ],
 

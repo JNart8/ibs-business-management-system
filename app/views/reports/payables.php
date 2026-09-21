@@ -20,6 +20,15 @@
     </div>
 </div>
 
+<?php if ($isPartialView ?? false): ?>
+<div class="bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-lg p-4 mb-6">
+    ⚠️ <strong>Partial view — showing <?= e(activeBranchName()) ?> only.</strong>
+    A supplier's total balance can include purchases from other branches too, since supplier
+    accounts are shared company-wide. The totals below reflect only what was purchased at
+    your branch(es) — not each supplier's full outstanding balance.
+</div>
+<?php endif; ?>
+
 <!-- Filters -->
 <div class="bg-white rounded-lg shadow p-4 mb-6 no-print">
     <form method="GET" action="<?= BASE_URL ?>/reports/payables">

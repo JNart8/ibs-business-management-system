@@ -672,4 +672,4 @@
     }
 </script>
 
-<?php include APP_PATH . '/views/layout/header.php'; ?>
+<?php include APP_PATH . '/views/layout/footer.php'; ?>

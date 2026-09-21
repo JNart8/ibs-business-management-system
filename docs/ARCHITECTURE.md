@@ -1,7 +1,8 @@
 # IBS Sales App — Multi-Plan / Multi-Branch Architecture
 
-**Status:** Phase 1 shipped. Phase 1b (schema scaffolding) shipped. Phase 2 & 3 not started.
-**Last updated:** 2026-08-02
+**Status:** Phase 1, 1b, 2, and 3 (3a–3d) all shipped — see §6 onward for what's actually
+built, and §8 for what's deliberately still open.
+**Last updated:** 2026-09-14
 
 ---
 
@@ -111,7 +112,9 @@ Design: `accounts.branch_id`, **nullable**:
   end-of-day cash to head office" — no new table needed for that, just branch-aware
   `from_account`/`to_account`.
 
-**Status:** schema scaffolding done (§6); branch-aware UI/reporting is Phase 3 work.
+**Status:** done — see §5.13. Auto-creation was originally believed built here but
+turned out never to have been wired up (§6r's correction); §5.13 both closes that
+and does the branch-aware query/UI work this section scoped as "Phase 3 work."
 
 ### 5.5 "Customers can deposit money and use it for a future purchase — what if that purchase happens at a different branch? We need to be able to transfer the money, and record any transfer charges (and decide whether the client or the business bears that cost)."
 
@@ -150,8 +153,9 @@ specific sale. It's significant engineering effort for a number nobody actually 
 that granularity — the business only cares about the net branch position, not the
 provenance of specific banknotes.
 
-**Status:** design only — not yet built. Small, low-risk addition once `accounts.branch_id`
-exists; fold into the Phase 3 build rather than treating it as a separate phase.
+**Status:** done — see §6r. **Decided (later):** `charged_to = 'customer'` will not be built at
+all — transfers are always charged to the business, full stop, not just "recommended away from"
+for branch-balancing specifically as originally scoped above. See §6r's addendum.
 
 ### 5.6 Granular permissions (Enterprise)
 
@@ -180,6 +184,115 @@ change for Core/Growth Cashier accounts: as of this migration, they can no longe
 impact should be limited to closing a URL-guessing gap, not to anyone's normal workflow).
 
 **Status:** done. See §6.
+
+### 5.12 Gap found via QA checklist: `/sales` and `/pos` had no permission of their own
+
+A QA pass on a fully locked-down custom role ("Inventory Clerk": `products.manage` +
+`stock.manage` only, nothing else) found that the role could still open `/sales`, ring up
+new sales from `/pos`, and void existing ones — none of Sales, Purchases, Customers, or
+Finance were supposed to be reachable. Purchases/Customers/Finance were correctly blocked
+(§5.10 and the Phase 2 seed already covered those); Sales was not. `header.php` even carried
+a comment stating this was deliberate ("`/sales` has no permission gate of its own... this
+always shows at least that") — true at the time of §8f6cd76, but never actually correct from
+a "restricted custom role" standpoint, since neither `public/index.php`'s
+`$permissionRestrictions` map nor the nav ever gated it.
+
+Separately, and worse: `SaleController.php`'s `voidSale()` had **no permission check at
+all**, for any role. §6b's table claims "both edit/void checks now `can('sales.edit')`" —
+true for `showEditForm()`/`updateSale()`, but `voidSale()` never actually had the check (or
+lost it at some point after Phase 2 shipped). This meant *any* logged-in user, not just a
+restricted custom role, could void a sale — reversing stock and customer/account balances —
+with zero authorization check.
+
+**Fix:**
+- Added `voidSale($db, $id) { if (!can('sales.edit')) { ...redirect...; return; } ... }`,
+  matching the existing pattern in `showEditForm()`/`updateSale()`.
+- Added a new `sales.access` permission ("Access Sales / POS") and included `/sales` and
+  `/pos` in `$permissionRestrictions` in `public/index.php`.
+- `header.php` (desktop + mobile): the Sales link is now wrapped in `can('sales.access')`
+  like every other Finance item, and the whole Finance dropdown/section is now hidden
+  entirely if the viewer has none of its permissions — same pattern §8f6cd76 already applied
+  to the People dropdown.
+- `sales.access` is granted to all three system roles (Admin/Staff/Cashier) by default, since
+  every existing account could already reach Sales/POS — this closes the gap for new custom
+  roles without changing behavior for any existing account. `sales.edit` grants are
+  unchanged (Admin only by default), so this fix also quietly restores the intended
+  restriction on who can void a sale — Staff/Cashier accounts can no longer void via direct
+  URL, matching what §6b already documented as the intended (but not actually enforced)
+  behavior.
+
+**Status:** done. See `database/migrations/2026_09_14_sales_access_permission.sql`.
+
+**Related gap closed afterward:** `ExportController.php`'s `$exportPermissionMap` explicitly
+exempted `sales` from a permission check, with a comment reasoning that `/sales` itself had
+none either — true when that map was written, no longer true once this section's fix shipped.
+A role with none of Sales' permissions could still hit `/export/sales` directly and download
+every sale as CSV. Added `'sales' => 'sales.access'` to the map, matching how every other
+export type already mirrors its source page's permission.
+
+### 5.13 Branch-scoped cash accounts, and auto-creation on branch create
+
+QA asked whether creating a second branch would give it its own cash account. It didn't —
+`accounts.branch_id` has existed since Phase 1b, but nothing ever read it: every branch has
+shared one global Cash Account this whole time, and §5.4's "each new branch gets a default
+cash account auto-created" was never actually built (confirmed as a real gap by §6r's
+correction — `BranchController::storeBranch()` only ever inserted into `branches`).
+
+**Scope, refined during review:** cash accounts are always branch-scoped and system-managed —
+`storeAccount()` already refuses to let anyone create a `cash` account manually, so every
+branch's cash account comes only from auto-creation, never a form. Mobile money and bank
+accounts stay manually created, but the person creating (or later editing) one now explicitly
+chooses whether it's company-wide (shared, `branch_id = NULL`) or scoped to one specific
+branch — this was corrected mid-review from an earlier draft that made mobile/bank
+company-wide unconditionally; per your correction, that's a client decision, not something
+the code should assume either way. The suspense account is the one deliberate exception:
+an internal reconciliation holding account, not a physical till, so it stays global with no
+branch picker anywhere — forcing a branch choice on money that is by definition not yet
+identified would work against its whole purpose.
+
+**Visibility rule:** a branch-scoped user sees their own branch's accounts plus every
+company-wide account (`branch_id IS NULL`); a company-wide user sees everything, unaffected.
+New helper `accountBranchScopeSql()` in `functions.php`, alongside `branchScopeSql()` — it
+can't reuse that one directly, since a plain `branch_id IN (...)` filter would wrongly hide
+every NULL-branch (company-wide) row from a branch-scoped user.
+
+**Migration** (`database/migrations/2026_09_14_branch_scoped_cash_accounts.sql`): collapses
+every existing non-cash account (suspense, the seeded bank account, the seeded MoMo account)
+to `branch_id = NULL`, preserving today's de-facto shared behavior on upgrade rather than
+silently cutting a branch off from an account it currently has; backfills a dedicated cash
+account for every existing branch that doesn't already have one (Kasoa Branch, live in
+`bms_db`, immediately got its own on migration). `BranchController::storeBranch()` now
+auto-creates a branch's cash account transactionally at creation time, closing the gap for
+every future branch too.
+
+**Defense-in-depth, not just the picker UI:** every query that lists accounts for a user to
+choose from (customer/supplier deposits, POS, purchase/sale payments, expenses, direct
+delivery, the suspense resolution modal, the Financial Accounts and transfer screens — 9
+controllers, ~20 call sites) got `accountBranchScopeSql()`, and so did every query that
+re-validates a POSTed `account_id` afterward — the same "hidden in the UI but still reachable
+by direct POST" bug class as §5.12, so the picker fix alone would have been cosmetic.
+Deliberately **not** scoped: places that resolve an account from an already-recorded
+`account_transactions`/`suspense_transactions` row to reverse it (`SaleController::voidSale()`,
+`SuspenseController`'s resolution-reversal paths) — a void or reversal must reach the
+*original* account regardless of the acting user's own branch scope, since undoing a
+transaction isn't the same as choosing one. `recordAccountTransaction()`'s type-based
+fallback (used only by `SaleController::editSale()`'s payment-adjustment path) now prefers a
+branch-specific default over a company-wide one, and that call site passes the sale's own
+`branch_id` rather than the editing admin's active branch.
+
+**Verified live against `bms_db`** with three temporary test admins (Kasoa-only,
+Main-only, company-wide) and a temporary third branch created through the actual UI: the
+new branch got a real cash account immediately (`balance = 0.00`, correctly named); a
+Kasoa-scoped user's deposit/POS/transfer pickers showed only Kasoa's cash account plus
+company-wide accounts, never Main's; POSTing Main's cash `account_id` directly as the Kasoa
+user was rejected (`Selected account not found or inactive`) with no balance change, while
+the same deposit through Kasoa's own account succeeded and updated the right balance; a
+Kasoa user could reassign their own mobile money account to company-wide but was blocked
+attempting to reassign it to Main's branch; a company-wide user could still see and transfer
+between every branch's cash account, the actual purpose of that screen. All test data was
+reverted afterward.
+
+**Status:** done.
 
 ### 5.7 Multi-branch build scope
 
@@ -313,7 +426,7 @@ because there is only one branch per install right now. That's intentional — s
 | `public/index.php` (updated) | `$roleRestrictions` replaced with a permission-based `$permissionRestrictions` map; `/roles` added to the dispatch table and gated by `roles.manage` + the `advanced_permissions` plan feature. |
 | `app/controllers/UserController.php` (updated) | Admin-only gate now `can('users.manage')`; create/edit now read/write `role_id` (validated against `assignableRoles()`), keeping the legacy `role` enum in sync for the few remaining cosmetic reads. |
 | `app/controllers/SettingsController.php` (updated) | Admin-only gate now `can('settings.manage')`. |
-| `app/controllers/SaleController.php` (updated) | Back-date check now `can('sales.backdate')`; both edit/void checks now `can('sales.edit')` (previously referenced a `'manager'` role that was never actually assignable). |
+| `app/controllers/SaleController.php` (updated) | Back-date check now `can('sales.backdate')`; both edit/void checks now `can('sales.edit')` (previously referenced a `'manager'` role that was never actually assignable). Void's check was later found missing entirely — see §5.12. |
 | `app/views/users/create.php`, `edit.php` (updated) | Role dropdown now built from `assignableRoles()` — shows custom roles too when the plan allows it — and posts `role_id` instead of a hardcoded string. |
 | `app/views/users/index.php`, `app/views/account/index.php` (updated) | Role badge now shows the real role name via `role_id` (so custom role names display correctly), not just the 3-value enum. |
 | `app/views/dashboard/index.php`, `sales/index.php`, `sales/pos.php` (updated) | UI conditionals converted from hardcoded role checks to `can()`. |
@@ -387,7 +500,10 @@ only catches a genuinely separate, newer login.
 | **1** ✅ | Plan tiers, feature gating, route/nav enforcement, user limits | Shipped |
 | **1b** ✅ | `accounts.branch_id`, `users.branch_id` scaffolding | Shipped |
 | **2** ✅ | `permissions` / `role_permissions` tables + Enterprise role editor | Shipped |
-| **3** | Multi-branch build: `branch_stock` replacing `products.current_stock`, branch-aware POS/reporting, inter-branch transfers, customer-credit branch settlement (§5.5) | Needs a real Enterprise client to design against; biggest single phase |
+| **3a** ✅ | Branches, user-branch assignment, branch-level vs. company-wide scoping, branch-scoped Sales/Purchases/Expenses history and reports | Shipped |
+| **3b** ✅ | `branch_stock` replacing `products.current_stock` as the source of truth for every stock read/write | Shipped |
+| **3c** ✅ | Inter-branch stock transfers | Shipped |
+| **3d** ✅ | Customer-credit cross-branch settlement (§5.5) | Shipped |
 
 ## 7b. Phase 2 testing checklist before rolling out to a real client
 
@@ -423,9 +539,1051 @@ only catches a genuinely separate, newer login.
 - [ ] Confirm opening two tabs in the *same* browser after one login does **not** log
       either tab out — only a genuinely separate login should trigger this.
 
+## 6e. What's actually been built (POS default-customer setting)
+
+**Investigation first:** POS already defaulted to Walk-in Customer, both internally
+(`showPOS()` loaded it and passed it to the page) and visibly (a blue "Walk-in Customer"
+chip shown by default, next to a search box hinting "Walk-in (default)"). No bug — this was
+already working as described.
+
+**The actual question: should this be a setting, and is that advisable?** Yes, and cheaply
+so. The reasoning: since walk-in customers are already blocked from credit and deposit
+payments at the code level (pre-existing checks in `SaleController`), defaulting to walk-in
+carries no data-integrity risk — the risky path (accidentally invoicing the wrong customer
+on credit) is already guarded regardless of this setting. So the choice is purely a workflow
+preference: a shop that's mostly walk-in retail wants the field pre-filled; a shop that's
+mostly registered/credit customers (e.g. B2B or wholesale-leaning installs using this same
+codebase) would rather the cashier be forced to actively choose every time, as a habit-forming
+safeguard against forgetting. That's a real, if narrow, use case worth the one column and one
+checkbox it costs to support — not something to build a bigger system around.
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_07_pos_default_customer_setting.sql` (new) | Adds `settings.pos_default_walkin` (default `1` — today's behavior, so this changes nothing until someone opts out). |
+| `app/controllers/SaleController.php` (updated) | `showPOS()` only loads the walk-in customer as the initial selection when the setting is on; otherwise passes `null`. |
+| `app/controllers/SettingsController.php`, `app/views/settings/index.php` (updated) | New toggle on the Settings page, alongside the existing discount-type setting. |
+| `app/views/sales/pos.php` (updated) | Search box placeholder text adapts to whichever mode is active. No JS changes were needed — the badge display already hides correctly for a `null` selection, and a "please select a customer" guard already existed before `completeSale()` reads `selectedCustomer.id`, so turning the default off can't crash the sale flow; it can only require an explicit pick first. |
+
+## 6f. Gap found and closed: the walk-in setting assumed a walk-in customer already exists
+
+**What you noticed:** turning "Pre-select Walk-in Customer" on didn't actually make a
+walk-in customer appear — because the setting only *reads* `customers.is_default = 1`, it
+never *creates* that row. `schema.sql` seeds it (`WALK-IN-001` / "Walk-in Customer") for a
+brand-new install, but any database that predates that seed line, or where the row was
+deleted, would have the setting silently do nothing.
+
+**Fix:** a new `ensureWalkInCustomerExists()` helper, called from two places so the fix
+doesn't depend on remembering to re-save Settings:
+- **`showPOS()`** — self-heals on the very next POS page load if the setting is on but no
+  `is_default = 1` row exists.
+- **Settings save handler** — also runs when you explicitly turn the setting on, so flipping
+  it is immediately effective even before anyone opens POS.
+
+Both call sites are idempotent (checks for an existing row first), and the auto-created row
+uses `is_default = 1` — meaning every existing protection already keyed off that column
+(can't delete it, can't take deposits on it, excluded from the customer list/reports)
+applies automatically with no further changes needed.
+
+Your plan to always seed "Walk-In-Customer" during implementation is still the right habit
+going forward — this fix is a safety net for databases that predate that habit, not a
+replacement for it.
+
+| File | Change |
+|---|---|
+| `app/helpers/functions.php` (updated) | New `ensureWalkInCustomerExists()`. |
+| `app/controllers/SaleController.php` (updated) | `showPOS()` calls it before loading the walk-in customer. |
+| `app/controllers/SettingsController.php` (updated) | Calls it when `pos_default_walkin` is saved as on. |
+
+## 6g. Header nav grouping: Users, Roles, Settings → "Administration"
+
+**Ask:** the header was growing (Dashboard, POS, Inventory▾, People▾, Finance▾, Reports▾,
+Users, Roles, Settings — nine slots when everything's unlocked), and Users/Roles/Settings
+were three flat top-level items with no grouping.
+
+**Recommendation: group all three, not just two.** Grouping only Users+Roles would leave
+Settings stranded as a lone top-level item with no real space saved, and it's exactly as
+admin-only as the other two — whoever can manage one of these three usually needs all of
+them. Bundled into one "Administration" dropdown, matching the exact pattern already used
+for Inventory/People/Finance/Reports (desktop), with a collapsible section on mobile
+matching the existing Reports pattern.
+
+| File | Change |
+|---|---|
+| `app/views/layout/header.php` (updated) | Users/Roles/Settings replaced with one "Administration" dropdown (desktop) / collapsible section (mobile, new `adminOpen` Alpine state). Visibility unchanged — each item still only shows if its own permission/plan check passes; the whole group hides if none do. |
+
+## 6h. Phase 3a: multi-branch foundation
+
+**Decisions confirmed before building:**
+- A user can be assigned to **multiple** branches (new `user_branches` pivot table), but POS
+  shows **no picker** — each user has one "active" branch (`users.branch_id`) that's used
+  automatically, changeable via a small switcher (header, desktop only for now) if they're
+  assigned to more than one.
+- Multi-branch is **not** purely an Enterprise feature — every Enterprise client gets it
+  automatically, but it can also be sold to a Growth client as a paid add-on
+  (`settings.addon_multi_branch`). See `hasMultiBranch()`.
+- **Branch-level vs. company-wide admins**, added mid-build: visibility scope is independent
+  of role. `users.branch_scope` (`'assigned'` or `'all'`) determines whether a user only
+  sees/manages data for their assigned branch(es), or everything regardless of assignment.
+  An Admin can be scoped to one branch ("branch admin" — full control of their location,
+  can't see others); a company-wide user (typically the owner or a head-office admin) sees
+  everything. Existing admins are migrated to `'all'` so nobody's visibility shrinks when
+  this ships.
+- **Sales history is branch-scoped end to end**, not just the list page — every single-sale
+  lookup (view, edit, receipt, payment, void) is scoped too, so a branch-restricted user
+  can't reach another branch's sale by guessing a URL. Fails closed: a user assigned to zero
+  branches sees nothing, not everything.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_08_phase3a_multi_branch_foundation.sql` (new) | `settings.addon_multi_branch`; `branches.manage` permission (admin by default); `user_branches` pivot table, backfilled so every existing active user is assigned to (and has active-branch set to) Main Branch. |
+| `database/migrations/2026_08_09_phase3a_branch_scope.sql` (new) | `users.branch_scope`, backfilled to `'all'` for existing admins (no visibility regression) and `'assigned'` for everyone else (no practical effect until a 2nd branch exists). |
+| `app/helpers/functions.php` (updated) | `hasMultiBranch()`, `userBranches()`, `activeBranchId()`, `activeBranchName()`, `branchName()`, `isCompanyWide()`, `visibleBranchIds()`, `branchScopeSql()`. |
+| `app/controllers/BranchController.php` (new) | Branch CRUD — create, edit (name/address/phone/active), no delete (matches accounts/roles — history would orphan). Guards against deactivating the last active branch. |
+| `app/views/branches/index.php`, `create.php`, `edit.php` (new) | The branch management screens. |
+| `public/index.php` (updated) | `/branches` added to the permission map and dispatch table; a dedicated `hasMultiBranch()` gate added alongside (not a plain plan-tier feature, so it doesn't fit the existing `$planFeatureMap` loop). |
+| `app/views/layout/header.php` (updated) | "Branches" added to the Administration dropdown/section; a branch switcher (desktop) next to the account menu, shown only for a user assigned to more than one branch. |
+| `app/controllers/UserController.php`, `app/views/users/create.php`, `edit.php`, `index.php` (updated) | Branch assignment checkboxes + "primary" radio + branch-scope toggle (Branch-level / Company-wide), shown only when `hasMultiBranch()`. New `saveUserBranches()` keeps `user_branches` and the active `users.branch_id` in sync. Users list shows a Branch column. |
+| `app/controllers/AccountController.php` (updated) | New `switch-branch` action — validates the requested branch is one the user is actually assigned to before changing their active branch. |
+| `app/controllers/SaleController.php` (updated) | Every sale write records `branch_id = activeBranchId()`. Sales history (`listSales`, the daily summary card, and every single-sale lookup — view/edit/update/receipt/pay/void) now applies `branchScopeSql()`. Void's stock-return movement is attributed to the *sale's own* branch, not the voiding user's current active branch, since it's reversing history that happened at a specific location. |
+| `app/controllers/PurchaseController.php`, `DistributorController.php`, `ImportController.php`, `ProductController.php`, `StockController.php` (updated) | Every `purchases`, `stock_movements`, and (via `ExpensesController.php`) `expenses` insert now records the actual `activeBranchId()` instead of relying on the column's default of `1`. |
+
+**Still to do for 3a:**
+- No report yet filters by branch (an admin viewing Reports today still sees everything
+  combined across branches — correct for a single-branch install, but not yet
+  branch-aware for a multi-branch one). Purchases history and Expenses history haven't had
+  the same view/edit-level scoping sales history just got, either — same pattern, just not
+  applied there yet.
+- Mobile branch switcher not built yet (desktop only for now).
+- Haven't yet tested the full loop end-to-end (create a 2nd branch, assign a user to both,
+  switch between them, confirm a sale lands on the right branch, confirm a branch-scoped
+  user can't see the other branch's history).
+
+**Deferred to later sub-phases**, per the original phased plan:
+- **3b** — replace `products.current_stock` with a `branch_stock` table (the schema-breaking
+  part; every stock read/write needs to change, not just a column).
+- **3c** — inter-branch stock transfers.
+- **3d** — the customer-credit cross-branch settlement design from §5.5.
+
+## 6j. Phase 3a continued: Purchases, Expenses, and mobile switcher
+
+Extended the same branch-scoping pattern from §6h to the two other places it was missing:
+
+| File | Change |
+|---|---|
+| `app/controllers/PurchaseController.php` (updated) | `listPurchases` (list, count, today's stats) and all 7 single-purchase lookups (view, edit, update, receipt, pay form, process payment, void) now apply `branchScopeSql()`, matching sales history exactly. |
+| `app/controllers/ExpensesController.php` (updated) | `listExpenses` and `deleteExpense` now branch-scoped. Note: had to use the **aliased** form (`branchScopeSql('e')`) here specifically, because `expenses` and `accounts` **both** have a `branch_id` column and this query joins them — an unaliased `branch_id IN (...)` would have been ambiguous SQL. |
+| `app/views/layout/header.php` (updated) | Mobile branch switcher added, matching the desktop one — a dropdown for 2+ assigned branches, a plain label for exactly 1, nothing shown otherwise. |
+
+## 6k. Before starting Reports: a conceptual wrinkle worth flagging
+
+Reports (`ReportsController.php`) is a large, separate body of work — 12 report functions,
+~1,450 lines — so I paused before diving in rather than rushing it. One thing worth deciding
+first: **receivables and payables reports don't branch-scope the same way sales/purchases
+do.**
+
+A customer's outstanding balance is a company-wide number by design (§5.3 — customers are
+shared across branches on purpose, so a credit limit can't be gamed by splitting purchases
+across locations). That means "receivables owed to us" isn't really a per-branch fact the
+way "sales made at Branch 2 today" is — a customer could owe money from purchases at three
+different branches, and the balance is one number, not three. Branch-scoping that report
+by *which branch's sales contributed* is possible (sum only the sales rows visible to this
+user), but it would show a different, smaller number than the customer's actual
+`current_balance` — which could be confusing rather than helpful for a branch admin trying
+to reconcile.
+
+**My suggestion when we get to it:** sales-report-style numbers (sales, top-selling, stock
+valuation, profit/loss, profit margin, dead stock, low stock) branch-scope cleanly the same
+way sales/purchases just did. Receivables/payables should probably stay company-wide
+regardless of viewer (or clearly labeled "company-wide" if shown to a branch-scoped user),
+since showing a partial balance as if it were the whole picture could cause a real
+bookkeeping mistake. Flagging now so this gets decided deliberately rather than by whichever
+way I happen to implement it first.
+
+**Decision made:** branch-scope with a partial-view label — see §6l for how this was built.
+
+## 6l. Receivables & payables: scoped and shown as partial, per your decision
+
+You chose to branch-scope these rather than leave them company-wide. Implementation:
+
+- **Screen and export both recompute `amount_owed` from branch-scoped invoices** (`SUM` of
+  unpaid `sales`/`purchases` rows visible to the viewer) instead of reading
+  `customers.current_balance` / `suppliers.current_balance` directly — those columns stay
+  company-wide by design (§5.3) and were never touched. This is the same principle as the
+  account-ledger export from earlier: the export recomputes the same way the screen does, so
+  the two can never show different numbers for the same view.
+- **A clear "partial view" banner/note** appears whenever the viewer is branch-scoped (not
+  company-wide) — on screen (`receivables.php`, `payables.php`) and in the CSV footer
+  (`exportReceivables`, `exportPayables`), explaining that a customer's/supplier's true
+  balance can include activity from other branches.
+- **`payablesReport()`/`exportPayables()` needed a real restructure**, not just a WHERE
+  clause addition — the original query read `ABS(suppliers.current_balance)` directly, which
+  has no branch dimension to filter by at all. Rewritten to sum `purchases.amount_due`
+  per-supplier instead (mirroring how `receivablesReport()` already worked), with the
+  `HAVING amount_owed > 0.01` filter replacing the old `WHERE current_balance < 0` — because
+  a supplier could have zero owed at *this* branch even with a nonzero company-wide balance
+  from purchases elsewhere, or vice versa.
+
+## 6m. Other reports: scoped where it's meaningful, left alone where it isn't
+
+Extended branch-scoping to every other **transaction-based** report (both the screen and its
+matching CSV export): `salesReport`/`exportSalesReport`, `topSellingReport`/`exportTopSelling`,
+`profitLossReport`/`exportProfitLoss`. These all derive their numbers from `sales`/`purchases`/
+`expenses` rows, which already carry `branch_id`, so scoping them is a direct application of
+the same `branchScopeSql()` pattern — no special "partial" caveat needed, since (unlike
+receivables/payables) there's no company-wide balance field being partially represented; a
+branch admin's sales report is simply, accurately, their branch's sales.
+
+**Deliberately left unscoped:** `stockValuationReport`, `lowStockReport`, `deadStockReport`,
+`profitMarginReport`. All four are fundamentally **product/stock-centric** — built from
+`products.current_stock`, which is still a single global number (Phase 3b, the `branch_stock`
+table, hasn't shipped yet). There's no branch dimension to filter these by yet without
+building 3b first. Scoping just the "last 30 days sold" correlated subqueries in
+`profitMarginReport` while leaving `stock_value`/`potential_profit` company-wide would create
+a report where the two halves don't relate to the same scope — worse than leaving it alone.
+These four become branch-scopable as a natural side effect once 3b ships.
+
+## 6i/6n. Audit trail — built
+
+**Scope decision, made up front per the earlier flag:** logging is deliberately limited to
+actions that change **money or access**, not routine data entry. A normal sale or purchase
+isn't logged here — that history already lives in, and is fully reconstructable from, the
+`sales`/`purchases` tables themselves. Logging everything would make the log useless for
+finding anything that actually matters; logging too little defeats the purpose. What's
+logged:
+
+| Action | Where |
+|---|---|
+| `sale.void` | `SaleController::voidSale()` |
+| `sale.edit` (payment amount/method/notes/date changes) | `SaleController::updateSale()` — added in §6v; previously only written to the older, separate `audit_history` table (§6v has the full story) |
+| `purchase.void` | `PurchaseController::voidPurchase()` — **worth knowing**: voiding a purchase deletes the row and its related records outright (pre-existing behavior, not something this phase changed) rather than marking it voided the way a sale is. The audit entry is the only remaining record that purchase ever existed. |
+| `user.create`, `user.update` (role/status before-after), `user.deactivate`, `user.activate` | `UserController.php` |
+| `role.create`, `role.permissions_changed` (**added/removed diff** — the single most security-relevant entry in the app), `role.delete` | `RoleController.php` |
+| `branch.create`, `branch.update` (active status before/after) | `BranchController.php` |
+| `account.create`, `account.update` (active status before/after) | `FinancialAccountsController.php` |
+| `settings.update` | `SettingsController.php` |
+| `user.switch_branch` | `AccountController::switchBranch()` |
+| `user.session_kicked` | `enforceSingleSession()` in `functions.php` — logged just before the older session is wiped, since the log write needs to happen while `$_SESSION` still has the user's identity in it |
+
+**Deliberately not logged separately:** account transfers (`FinancialAccountsController::executeTransfer()`).
+The `account_transfers` table already records amount, charges, notes, user, and timestamp for
+every transfer — it already *is* an audit-quality record for that specific action, so a
+duplicate `audit_log` entry would just be the same fact twice in two places.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_10_audit_trail.sql` (new) | `audit_log` table; `audit.view` permission (admin by default). |
+| `app/helpers/functions.php` (updated) | `logAudit($action, $entityType, $entityId, $details)` — never throws, so a logging failure can never block the real action it's describing. |
+| `app/controllers/AuditController.php` (new) | Read-only viewer. Filterable (user, action, entity type, date range), paginated. Branch-scoped via the same `branchScopeSql()` used everywhere else — and since system-wide entries (role/permission changes, settings) get `branch_id = NULL`, they're automatically excluded for branch-scoped viewers by ordinary SQL `NULL NOT IN (...)` semantics, with no extra logic needed for that distinction. |
+| `app/views/audit/index.php` (new) | The viewer screen. |
+| `public/index.php` (updated) | `/audit` added to the permission map and dispatch table. |
+| `app/views/layout/header.php` (updated) | "Audit Log" added to the Administration dropdown/section (desktop + mobile), gated by `can('audit.view')`. |
+| 8 controllers (`SaleController`, `PurchaseController`, `UserController`, `RoleController`, `BranchController`, `FinancialAccountsController`, `SettingsController`, `AccountController`) + `functions.php` | `logAudit()` calls added at each mutation point listed above. |
+
+**Not built at the time / all since closed:** retention/archiving and CSV export shipped in
+§6o; alerting on high-risk entries shipped in §6v — this note was never updated when §6o
+landed, so it kept claiming CSV export/archiving were still open long after they weren't.
+Correcting it here rather than leaving it to mislead the next read.
+
+## 7d. Phase 3a testing checklist
+
+- [ ] Run both new migrations against a **copy** of a client DB first.
+- [ ] Turn on `addon_multi_branch` (or set `plan = 'enterprise'`) and confirm "Branches" and
+      the switcher stay hidden until you do.
+- [ ] Create a second branch. Assign an existing staff user to both branches with Branch 2
+      as primary; confirm their next login (or `unset($_SESSION['user_data'])` moment) shows
+      Branch 2 as active, and the switcher appears with both options.
+- [ ] As that user, complete a sale; confirm it's recorded against Branch 2 (`sales.branch_id`).
+- [ ] Switch to Branch 1 via the header switcher; complete another sale; confirm it lands on
+      Branch 1.
+- [ ] Set a second user to branch-scoped + assigned only to Branch 1. Confirm they see only
+      Branch 1's sales in `/sales`, the daily summary card only reflects Branch 1, and
+      opening a Branch 2 sale's URL directly (view/edit/receipt/pay/void) returns "not found"
+      rather than the sale.
+- [ ] Set that same user's scope to "Company-wide" and confirm they now see both branches'
+      sales without changing their branch assignment.
+- [ ] Void a sale that was recorded at a non-active branch (e.g. an admin voiding a Branch 2
+      sale while their own active branch is Branch 1); confirm the stock-return movement is
+      attributed to Branch 2, not Branch 1.
+- [ ] Try to deactivate the only active branch — confirm it's blocked with a clear message.
+- [ ] As a branch-scoped user, open Receivables/Payables and confirm the partial-view banner
+      appears and the totals match what's actually visible (not the customer's/supplier's
+      full balance). Confirm the CSV export shows the same numbers and the same note.
+- [ ] As a company-wide user, confirm those same reports show full totals with no banner.
+- [ ] Compare Sales Report, Top Selling, and Profit & Loss on screen vs. their CSV exports
+      for a branch-scoped user — confirm the numbers match exactly in both places.
+- [ ] Confirm Stock Valuation, Low Stock, Dead Stock, and Profit Margin reports still show
+      the same (unscoped) figures regardless of viewer — this is expected until Phase 3b.
+
+## 7e. Audit trail testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first.
+- [ ] Void a sale and a purchase; confirm both appear in `/audit` with the right details, and
+      confirm the voided purchase's audit entry is genuinely the only remaining trace of it
+      (since the row itself gets deleted).
+- [ ] Edit a role's permissions (add one, remove one); confirm the entry shows exactly which
+      permission was added and which was removed, not just "role was changed."
+- [ ] Deactivate and reactivate a user; confirm both show up with correct before/after status.
+- [ ] As a branch-scoped user, confirm `/audit` shows only entries tied to their branch, and
+      that company-wide entries (role/permission changes, settings) are invisible to them.
+- [ ] As a company-wide user, confirm they see everything, including other branches' entries.
+- [ ] Log in from a second browser to trigger a forced kickout; confirm `user.session_kicked`
+      appears in the log.
+- [ ] Confirm a deliberately broken audit_log insert (e.g. temporarily rename the table) does
+      **not** prevent the underlying action (a sale void, a user update) from completing —
+      `logAudit()` should fail silently.
+- [ ] Run `cron/archive_audit_log.php` manually once via CLI (`php cron/archive_audit_log.php`)
+      against a copy of a client DB with some old test entries (backdate a few rows' `created_at`
+      past 365 days first) — confirm they move to `audit_log_archive` and disappear from `/audit`
+      by default.
+- [ ] Run the script a second time immediately after — confirm it reports "nothing to do" and
+      doesn't error or double-archive anything.
+- [ ] Check "Include archived" on `/audit` and confirm the backdated entries reappear.
+- [ ] Export the audit log both with and without "Include archived" checked; confirm the CSV
+      row counts match what's shown on screen in each case.
+- [ ] Set up the actual cPanel cron job once you're ready for this to run unattended, and
+      confirm it appears as expected in cPanel's cron job list.
+
+## 6o. Audit log: archiving, 1-year retention, CSV export
+
+**Archiving, not deleting.** A same-structure `audit_log_archive` table holds entries once
+they age out, so nothing is actually lost — just moved out of the table the app queries by
+default, keeping day-to-day filtering fast as the log grows indefinitely.
+
+**Retention mechanism:** `cron/archive_audit_log.php`, a standalone script (bootstraps only
+the DB connection, not the full app/session framework, since it runs outside a web request)
+that moves anything older than 365 days from `audit_log` into `audit_log_archive`, then
+deletes it from the live table. Idempotent — safe to run daily or however often, since
+`INSERT IGNORE` means a re-run can't double-archive a row.
+
+**This needs to actually be scheduled to do anything** — the script won't run itself. Set it
+up once via cPanel → Cron Jobs, as a **command**, not a URL:
+```
+php /home/YOURUSER/path/to/ibs-sales-app-v2/cron/archive_audit_log.php
+```
+This does *not* need SSH/Terminal access — cPanel's Cron Jobs feature runs the command
+directly; that's a separate permission from Terminal access. Daily is a reasonable schedule.
+If your specific host's cron only supports "visit a URL" rather than running a command
+directly, this script would need a small adaptation (a shared-secret query-parameter check)
+— flag it if that turns out to be the case for whichever host you end up on.
+
+**The archive is still reachable, not cold storage.** An "Include archived (1+ year old)"
+checkbox on `/audit` (and carried through to the export) UNIONs both tables when checked —
+the common case stays fast (live table only), but nothing requires a direct database query
+to look back further than a year.
+
+**CSV export:** `exportAuditLog()` in `ExportController.php`, filtered identically to the
+on-screen viewer (including the archive toggle), gated by the same `audit.view` permission
+as the viewer itself.
+
+**Decided:** audit-log export is exempted from the blanket `/export` → `imports_exports`
+(Growth+) plan gate. `/audit` itself was never plan-gated (only `audit.view`), so blocking
+just its export behind an upgrade was an inconsistency, not a deliberate restriction — and
+it's a compliance feature, not a "power user" one, unlike every other export this gate
+correctly still applies to. `public/index.php`'s `$planFeatureMap` loop now special-cases
+`/export/audit-log` to skip the `/export` prefix's `imports_exports` requirement, while
+leaving every other export (`products`, `sales`, `receivables`, etc.) gated exactly as
+before.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_11_audit_log_archive.sql` (new) | `audit_log_archive` table — same shape as `audit_log` plus `archived_at`; `id` is a plain (not auto-increment) primary key, since archived rows keep their original ID rather than getting a new one. |
+| `cron/archive_audit_log.php` (new) | The retention script described above. |
+| `app/controllers/AuditController.php` (updated) | `include_archived` toggle (UNIONs both tables when set); builds the export URL passed to the view. |
+| `app/views/audit/index.php` (updated) | Include-archived checkbox; Export CSV button. |
+| `app/controllers/ExportController.php` (updated) | New `audit-log` export type + `exportAuditLog()`, mirroring the viewer's exact filter logic. |
+
+## 6p. Phase 3b: branch_stock — the schema-breaking part
+
+This was the part flagged from the start as the biggest single piece of work in the whole
+engagement: `products.current_stock` had been a single global number referenced roughly 190
+times across 11 controllers and 15 views. Rewriting all 190 wasn't necessary — the design
+decision that made this tractable was confirmed with you before writing any code (see the
+scoping conversation): **`branch_stock` becomes the real per-branch source of truth,
+`products.current_stock` stays in the schema as an auto-maintained total across all
+branches**, kept in sync by application code (not a DB trigger — this app has never used
+triggers or stored procedures, and staying consistent with that all-PHP pattern was judged
+safer than introducing a new one, especially given variable trigger support across
+shared-hosting MySQL configurations).
+
+### Two-tier helper design
+
+Four functions in `functions.php` are now the *only* correct way to touch stock:
+- `getBranchStock($productId, $branchId = null)` — read a specific branch's quantity
+- `adjustBranchStock($db, $productId, $branchId, $delta)` — relative change (sales, purchases)
+- `setBranchStock($db, $productId, $branchId, $newQuantity)` — absolute set (manual adjustment, CSV import)
+- `recalcProductTotalStock($db, $productId)` — called automatically by the two above; never needs calling directly except for a one-off repair
+
+Nothing in the app should ever `UPDATE products SET current_stock = ...` or write to
+`branch_stock` directly again — every write path listed below now goes through these.
+
+### Which numbers stay company-wide, and why
+
+Not every stock-adjacent figure became branch-specific — some genuinely shouldn't:
+- **Weighted-average cost, cost price, selling price, margin** — cost accounting is a
+  company-wide concept; a product's cost basis doesn't differ by which shelf it's on. These
+  stayed on `products`, untouched, computed exactly as before.
+- **Reorder level** — per your decision earlier, stays global on the product rather than
+  per-branch.
+- **Catalog/reference pages** (Products list/detail, Categories, Suppliers) — these show a
+  company-wide stock total by design, the same way the product catalog itself is shared
+  across branches (§5.2). This is a different kind of page from the *operational* ones below.
+
+### Which pages became branch-specific, and at what scope
+
+Two different scoping rules were applied depending on what a page is for:
+
+- **Operational pages** (drive real stock actions) use the viewer's **active branch only**:
+  POS (product search, cart validation, sale completion), Stock Management dashboard,
+  stock-in/out/adjustment forms, Low Stock Alerts. This matches how these pages already
+  worked — write actions post to the active branch, so the numbers shown must be that same
+  branch's numbers, or someone could act on a quantity that isn't actually there.
+- **Read-only overview pages** use the viewer's **visible branches** (all of them for
+  company-wide, just their own for branch-scoped) — same rule as receivables/payables from
+  3a: Dashboard summary tiles, and all four reports below.
+
+### The four reports deferred from Phase 3a — now built
+
+`stockValuationReport`, `lowStockReport`, `deadStockReport`, `profitMarginReport` (and their
+matching CSV exports) were explicitly left undone in 3a because `branch_stock` didn't exist
+yet. All four are now branch-scoped, following the same principle used throughout: **the
+export always recomputes the same way the screen does**, never reusing a cached/passed-in
+number, so the two can never show different figures for the same filters.
+
+One real subtlety surfaced while doing this: filters like "low stock only" or "critical
+severity" had been simple `WHERE current_stock <= reorder_level` conditions — fine when
+stock was one column. Once stock became `SUM(branch_stock.quantity)` across potentially
+several visible branches, that condition **had to move from `WHERE` to `HAVING`**, or it
+would evaluate against individual per-branch rows *before* they're summed, giving wrong
+results for any viewer with more than one visible branch. This was fixed consistently
+across all four reports and their exports.
+
+### Bugs found and fixed along the way (not scope creep — found while touching this code)
+
+- **A real overselling risk**: POS's stock validation checked
+  `products.current_stock` (the company-wide total) instead of the branch's actual
+  quantity — a cashier at a branch with zero stock of something could still sell it, as long
+  as *another* branch had enough. Fixed in both sale creation and the equivalent
+  purchase-quantity-reduction validation.
+- **A pre-existing param-binding bug** in the stock valuation report's "Top 10 Most
+  Valuable Items" query — it referenced `$where` (which can contain `?` placeholders from
+  category/supplier filters) but never passed the matching `$params` array. Would have
+  thrown a param-count mismatch the moment someone filtered by category or supplier. Unrelated
+  to branch work, just found while rewriting the surrounding query.
+- **Two undefined-variable bugs**, same pattern, in `PurchaseController` and
+  `ImportController`'s cost-history logging — both were leftover references to a variable
+  name from before the "split company-wide cost from branch-specific quantity" refactor.
+  `php -l` can't catch these (valid syntax, just references an undefined variable at
+  runtime), so after finding the first one I went back and manually re-verified every other
+  place the same refactor pattern was applied (`updatePurchase`, `voidPurchase`) rather than
+  assuming they were fine — both of those checked out clean.
+
+### Built
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_12_phase3b_branch_stock.sql` (new) | `branch_stock` table; seeds every product's current total to Main Branch, zero elsewhere. **Read the warning in the migration file before running on a client already using a 2nd branch** — stock was never tracked per-branch before this, so that client needs a manual stock count per location after running it; there's no historical data to reconstruct it from. |
+| `app/helpers/functions.php` (updated) | The four helper functions above. |
+| `app/controllers/ProductController.php` (updated) | `searchProducts()` (the shared endpoint used by POS/stock forms/purchases/distributor) now branch-aware — one fix, cascades everywhere. Opening-stock creation now seeds `branch_stock` instead of setting the column directly. |
+| `app/controllers/SaleController.php` (updated) | Stock validation, sale completion, and void all branch-aware; void restores to the *sale's own* branch, not the voider's current one. Quick-products grid fixed too. |
+| `app/controllers/PurchaseController.php` (updated) | Purchase creation, update (quantity diffing), and void all branch-aware, with cost calculations correctly kept company-wide throughout. Item-listing/product-picker queries on the view/edit/create pages fixed too. |
+| `app/controllers/StockController.php` (updated) | Stock-in, stock-out, and adjustment all rewired to the branch_stock helpers; the Stock Management dashboard and Low Stock Alerts page both rebuilt to show the active branch's real numbers, with a "showing: [branch]" label. |
+| `app/controllers/DashboardController.php` (updated) | Stock value tile, out-of-stock/low-stock counts, and the top-10 low-stock list all now sum across visible branches. |
+| `app/controllers/ReportsController.php`, `app/controllers/ExportController.php` (updated) | All four deferred reports + their exports, as described above. |
+| `app/controllers/DistributorController.php` (updated) | Product picker branch-aware; stock-movement ledger entries now log the branch's actual before/after stock (the delivery itself stays net-zero by design — no actual quantity change). |
+| `app/controllers/ImportController.php` (updated) | Both CSV import types (product catalog, purchases) now go through the branch_stock helpers instead of writing to `products.current_stock` directly. |
+| 6 view files (`stock/index.php`, `stock/alerts.php`, `reports/stock_valuation.php`, `reports/low_stock.php`, `reports/dead_stock.php`, `reports/profit_margin.php`) | "Showing: [branch/scope]" labels added for clarity. |
+
+## 7f. Phase 3b testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first — and if that client already
+      has a 2nd branch in active use, walk through the manual stock recount warning with them
+      before running it.
+- [ ] At a single-branch install, confirm nothing looks different anywhere — this is the most
+      important check, since the vast majority of installs are single-branch and should see
+      zero behavior change.
+- [ ] Create a 2nd branch, add some stock to it via stock-in, and confirm POS at that branch
+      only shows/sells what's actually there — try to oversell past the branch's actual
+      quantity and confirm it's blocked, even if the *other* branch has plenty.
+- [ ] Complete a sale, then void it; confirm stock returns to the branch the sale actually
+      happened at (test this specifically as an admin whose *active* branch differs from the
+      sale's branch, to catch the exact bug this was designed to prevent).
+- [ ] Do the same void test for a purchase.
+- [ ] Run a purchase that adds stock to a product with existing stock elsewhere; confirm the
+      weighted-average cost updates correctly (company-wide) while only the purchasing
+      branch's quantity changes.
+- [ ] Check Stock Management, Low Stock Alerts, and all four reports (stock valuation, low
+      stock, dead stock, profit margin) as both a branch-scoped and a company-wide viewer;
+      confirm the numbers differ appropriately and that each report's CSV export matches its
+      on-screen numbers exactly.
+- [ ] Specifically test the "low stock only" / "critical severity" filter checkboxes on a
+      multi-branch-visible (company-wide) viewer — this is the filter that had to move from
+      WHERE to HAVING; confirm it's still returning the right set of products.
+- [ ] Import a product CSV with a `current_stock` column at a branch other than Main Branch;
+      confirm the stock lands on the importing branch, not Main Branch.
+- [ ] Import a purchase CSV; confirm both the stock quantity (branch-specific) and the
+      weighted-average cost (company-wide) update correctly.
+
+## 6q. Phase 3c: inter-branch stock transfers
+
+### Design decisions confirmed before building
+
+Two genuine forks were resolved with you before writing any code, since either would have
+shaped the whole build differently:
+
+1. **One-step (instant) vs. two-step (dispatch → in transit → receive).** Two-step is more
+   realistic — goods physically take time to move, and it can catch loss/damage in transit
+   by letting the receiving side confirm a different quantity than what was sent — but it
+   needs a pending state, a "receive" screen, and a decision about who's allowed to confirm
+   receipt. **You chose one-step**: recording a transfer updates both branches' stock
+   immediately. Simpler, and the right call unless discrepancy tracking becomes something
+   you actually need later. *(Revisited — see §6s: this later became two-step.)*
+2. **Who can dispatch stock out of a branch.** Rather than reuse the existing `stock.manage`
+   permission, **you asked for a dedicated `stock.transfer` permission**, seeded admin-only
+   by default (unlike `stock.manage`, which Staff gets automatically) — so moving stock
+   *between* branches is deliberately a step up from managing stock *within* one, and you
+   can grant it selectively via Enterprise custom roles to specific trusted staff rather than
+   handing it out with general stock access.
+
+### What "source branch" access actually means
+
+Even with `stock.transfer` granted, a user can only **dispatch from** a branch they're
+actually assigned to (`user_branches`) — company-wide users can dispatch from any branch.
+There's no equivalent restriction on the **destination** — you don't need to be assigned to
+a branch to receive stock there, since receiving doesn't require you to have been managing
+that location, just sending does. This mirrors the same reasoning already used for who can
+initiate a sale/purchase at a branch — write access requires assignment, read/receive does
+not.
+
+### The reusable piece: `branch_id` override on the shared product search
+
+Every other branch-aware feature so far (POS, stock-in/out, purchases) only ever needed to
+know about the *current user's own active branch*. Transfers broke that assumption — the
+form needs to show stock at an arbitrary **source** branch, which might not be the
+dispatcher's active branch at all (a company-wide admin could be actively "in" Branch A
+while dispatching stock from Branch B). Rather than build a second, transfer-specific
+product-search endpoint, `ProductController::searchProducts()` (the endpoint already shared
+by POS/stock forms/purchases/distributor) gained an optional `?branch_id=` override —
+access-checked against the requester's own assignments or company-wide status, so it can't
+be used to peek at another branch's stock levels by guessing IDs. This is a generically
+useful addition, not a transfer-only hack; any future feature needing "show me branch X's
+stock, not mine" gets it for free.
+
+### History, not just a ledger side-effect
+
+Two new tables (`stock_transfers`, `stock_transfer_items`) give a proper browsable transfer
+log — "Transfer #TRF-20260813-0001: 3 products, Branch A → Branch B, by John" — separate
+from the per-product `stock_movements` entries (which still get two rows per item, tagged
+with a new `transfer` reference_type: one `out` at the source, one `in` at the destination,
+both linked back to the transfer via `reference_id`). The transfer history itself follows
+the same branch-visibility rule as everywhere else, but adapted for a two-branch record: a
+branch-scoped user sees a transfer if it involves *either* of their branches as source or
+destination, not just a single-column `branchScopeSql()` check.
+
+### Validation, in order, before anything is touched
+
+Every item's requested quantity is checked against the *source branch's actual stock*
+(`getBranchStock()`, not the company-wide total — same overselling protection built for
+POS/purchases in 3b) for the entire cart before the database transaction begins, so a
+transfer either fully succeeds or fails cleanly with a specific, actionable message — never
+partially applies some items and not others.
+
+### Built
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_13_phase3c_stock_transfers.sql` (new) | `stock_transfers`, `stock_transfer_items`; `transfer` added to `stock_movements.reference_type`; `stock.transfer` permission, admin-only by default. |
+| `app/controllers/ProductController.php` (updated) | `searchProducts()` gains the access-checked `?branch_id=` override described above. |
+| `app/controllers/TransferController.php` (new) | List (branch-visibility-aware), create (full validation before any writes, wrapped in a DB transaction), view. Uses `getBranchStock()`/`adjustBranchStock()` from Phase 3b — no new stock-mutation logic, just a new caller of the existing helpers. |
+| `app/views/transfers/index.php`, `create.php`, `view.php` (new) | List, create (product-cart UI matching the POS/purchases pattern, branch pickers, live stock validation), and detail screens. |
+| `public/index.php` (updated) | `/transfers` added to the permission map, the `hasMultiBranch()` gate (alongside `/branches`), and the dispatch table. |
+| `app/views/layout/header.php` (updated) | "Stock Transfers" added to the Inventory dropdown/section (desktop + mobile), gated by `can('stock.transfer') && hasMultiBranch()`. |
+
+### Not built / deliberately deferred
+
+- ~~No dispatch/receive workflow~~ — **built, see §6s.** Transfers moved from one-step
+  (instant) to two-step (dispatch → in transit → receive), with per-item discrepancy
+  tracking (`quantity_received`), exactly along the lines flagged here.
+- ~~No transfer cancellation/reversal screen~~ — **partially built, see §6s.** A transfer
+  still `in_transit` (not yet received) can now be cancelled, which covers the common
+  "sent to the wrong branch" mistake. A *post-receipt* undo is still not built — see §6s
+  for why that's a separate, harder problem.
+- **No cost implications modeled.** A transfer moves quantity, not cost basis — the
+  weighted-average cost (company-wide, per §6p) is untouched by a transfer, which is
+  correct, since the goods haven't left the business, just moved locations.
+
+### Testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first.
+- [ ] As a company-wide user, transfer stock between two branches; confirm both branches'
+      `branch_stock` and `products.current_stock` (the maintained total) update correctly,
+      and that `stock_movements` shows both the `out` and `in` entries with the `transfer`
+      reference_type and matching `reference_id`.
+- [ ] As a branch-scoped user assigned only to Branch A, confirm the "From Branch" dropdown
+      only offers Branch A, and confirm you can still select *any* active branch as the
+      destination.
+- [ ] Try to submit a transfer with a quantity exceeding the source branch's actual stock;
+      confirm it's rejected with a specific message naming the product and the actual
+      available quantity, and that nothing was partially written.
+- [ ] Change the source branch after adding items to the cart; confirm the cart clears
+      (stock levels differ by branch, so stale cart entries validated against the old branch
+      must not survive).
+- [ ] Confirm a user without `stock.transfer` (even one with `stock.manage`) cannot reach
+      `/transfers` at all — this is the permission split from your decision.
+- [ ] Confirm `/transfers` 403s entirely on a single-branch (non-multi-branch) install, even
+      for an admin with `stock.transfer` granted.
+- [ ] As a branch-scoped user, confirm the transfer history only shows transfers touching
+      their own branch(es), and that a company-wide user sees everything.
+- [ ] Try the `?branch_id=` override on `/products/search` directly with a branch ID the
+      current user isn't assigned to (and isn't company-wide); confirm it silently falls
+      back to the user's own active branch rather than leaking the other branch's stock.
+
+## 6r. Phase 3d: customer-credit cross-branch settlement
+
+Built exactly to the §5.5 design: a net-position report, not a per-transaction auto-transfer,
+with settlement reusing the existing `account_transfers` mechanism rather than a new one.
+
+**One correction to §5.4, found while building this:** "each new branch gets a default cash
+account auto-created" was never actually implemented — `BranchController::storeBranch()` only
+inserts into `branches`, nothing in `accounts`. So there's no guaranteed 1:1 branch→account
+mapping. The settlement UI is built around that reality: it links into the existing transfer
+form with the settlement context pre-tagged, but doesn't try to preselect "the" account for a
+branch, since no such single account is guaranteed to exist.
+
+**A real gap closed along the way:** `customer_transactions` (where deposits are logged) had no
+`branch_id` at all — only `sales.branch_id` was reliable. Added `customer_transactions.branch_id`
+(nullable, backfilled to Main Branch for existing rows) and stamped it with `activeBranchId()` in
+`processDeposit()`, mirroring how `sales.branch_id` is stamped. Only the `deposit` transaction
+type is stamped going forward — `payment`/`sale`/`refund`/`adjustment` rows don't need it, since
+the report's redemption side reads `sales.branch_id` directly (already reliable).
+
+**Report definition, deliberately not FIFO/lot-traced (per §5.5):**
+- **Issuance per branch** — `SUM(customer_transactions.amount)` where `transaction_type='deposit'`,
+  grouped by the new `branch_id`, for the selected period.
+- **Redemption per branch** — `SUM(sales.amount_paid)` where `payment_method='deposit'`, grouped
+  by `sales.branch_id`. This payment method already means "paid out of the customer's existing
+  balance" — `SaleController` caps `amount_paid` at `current_balance` on that path — so it's
+  exactly the amount of pooled credit that branch let get redeemed, with no new column needed.
+- **Net = issued − redeemed** per branch. Positive means the branch has handed out more credit
+  than got redeemed there (other branches effectively owe it); negative is the reverse.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_14_phase3d_customer_credit_settlement.sql` (new) | `account_transfers.charged_to` (`'customer'`/`'business'`, default `business`) and `account_transfers.settlement_type` (`'routine'`/`'customer_credit_balancing'`, default `routine`) — both exactly as specified in §5.5. `customer_transactions.branch_id` (nullable, FK, backfilled to 1). |
+| `app/controllers/CustomerController.php` (updated) | `processDeposit()` stamps `branch_id = activeBranchId()` on the `customer_transactions` insert (both the dated and undated variants). |
+| `app/controllers/ReportsController.php` (updated) | New `customerCreditSettlementReport()`, dispatched via `case 'customer-credit':`, following the exact `receivablesReport()`/`payablesReport()` pattern — `branchScopeSql()` on both queries, `$isPartialView` banner flag, period/date-range filters via the existing `calculateDateRange()` helper. |
+| `app/views/reports/customer_credit_settlement.php` (new) | Branch | Issued | Redeemed | Net table, partial-view banner, a "Record Settlement →" link per branch with a nonzero net. |
+| `app/controllers/FinancialAccountsController.php` (updated) | `executeTransfer()` now reads/validates `settlement_type` and `charged_to` from POST (defaulting to `routine`/`business` — a normal transfer's behavior is unchanged) and writes both into the `account_transfers` insert. The existing charge-handling logic (charges always debit the source account) is untouched — `charged_to='customer'` has no wired behavior yet, deliberately, matching §5.5's own recommendation not to bill the customer for a branch-balancing transfer. |
+| `app/views/financial_accounts/transfer.php` (updated) | Shows a small "Recording a customer-credit branch settlement" banner and a hidden `settlement_type` field when arrived at via `?settlement_type=customer_credit_balancing`; pre-fills notes from `?note=`. No account preselection (see the §5.4 correction above). No changes to the ordinary transfer flow. |
+| `app/controllers/ExportController.php` (updated) | New `customer-credit-settlement` export type, recomputing the exact same two queries as the report (never a cached number) — same rule every other export in this app follows. |
+| `public/index.php` (updated) | `/reports/customer-credit` added to `$planFeatureMap` (`advanced_reports`, Growth+) and to the existing `hasMultiBranch()` gate block alongside `/branches` and `/transfers`. |
+| `app/views/layout/header.php` (updated) | "Customer Credit Settlement" added to the Reports dropdown/section (desktop + mobile), inside the `advanced_reports` block and additionally gated by `hasMultiBranch()` — the only report link needing both. |
+
+**Not built / deliberately deferred:** no separate `logAudit()` call for a settlement — like any
+other transfer, the `account_transfers` row itself (now flagged with `settlement_type`) is already
+the audit-quality record, matching the existing "transfers aren't separately audit-logged"
+convention (§6i/6n). No auto-provisioning of a "the branch's account" — see the §5.4
+correction above.
+
+**Decided:** `charged_to='customer'` will not be built — account transfers are always charged to
+the business, full stop. Not a "someday" feature at all; the column stays in the schema (default
+`'business'`) since it costs nothing to leave, but `executeTransfer()` should stop treating it as
+POST-configurable. No UI ever exposed it anyway (`transfer.php` has no `charged_to` field), so
+`$_POST['charged_to'] ?? 'business'` was already always resolving to `'business'` in practice —
+this closes the ambiguity in the code/docs, not a behavior change for any real transfer.
+
+## 7g. Phase 3d testing checklist
+
+- [ ] Run the migration against a **copy** of a client DB first; confirm `account_transfers`
+      gains both new columns with the right defaults and `customer_transactions.branch_id`
+      backfills to `1` for every existing row.
+- [ ] At a single-branch install (or with multi-branch off), confirm the "Customer Credit
+      Settlement" nav link and the `/reports/customer-credit` route are both hidden/403 even
+      with `advanced_reports` on the plan.
+- [ ] Enable multi-branch, create a 2nd branch. Deposit money for a customer while your active
+      branch is Branch A; confirm the new deposit's `customer_transactions.branch_id = A`.
+- [ ] Switch active branch to Branch B; complete a sale for that same customer using payment
+      method "deposit" (spending the balance); confirm `sales.branch_id = B`.
+- [ ] View the report as a company-wide user for a date range covering both actions; confirm
+      Branch A shows issued > 0, Branch B shows redeemed > 0, and the net figures roughly offset.
+- [ ] View the same report as a user scoped only to Branch B; confirm only Branch B's row shows
+      and the partial-view banner appears.
+- [ ] Click "Record Settlement" from a branch row; confirm the transfer form shows the
+      settlement banner and pre-filled note; complete it and confirm the resulting
+      `account_transfers` row has `settlement_type = 'customer_credit_balancing'` and
+      `charged_to = 'business'`.
+- [ ] Confirm an ordinary transfer via `/financial-accounts/transfer` (not arrived at via the
+      report) still behaves exactly as before, writing `settlement_type = 'routine'`.
+- [ ] Export the report's CSV as both a company-wide and a branch-scoped viewer; confirm the
+      figures match the on-screen table exactly in both cases, and the partial-view note appears
+      only for the branch-scoped export.
+
+## 6s. Two-step stock transfers (dispatch → in transit → receive)
+
+Revisits the one-step decision from §6q's design section: transfers now move through
+`in_transit` → `completed` (received) or `cancelled`, rather than completing instantly.
+This also gives cancellation "for free" for the common mistake case — a transfer still
+`in_transit` can be cancelled outright, since the stock hasn't gone anywhere the
+destination could have already used it. A *post-receipt* undo (voiding a `completed`
+transfer) is a genuinely different, harder problem — the stock may have already been
+sold or moved on again — and stays out of scope here, same as before.
+
+**Dispatch** (`storeTransfer()`, modified): unchanged validation and source-branch
+deduction, but no longer credits the destination — it only inserts the `'out'` stock
+movement and creates the transfer as `status = 'in_transit'`.
+
+**Receive** (new): the destination side confirms how much actually arrived, per item —
+defaults to the dispatched quantity, editable down to 0, never above what was
+dispatched. Only the *received* quantity is credited to the destination and logged as
+an `'in'` movement. Any shortfall is simply recorded and shown on the transfer detail
+page — not investigated or approved, matching this app's usual "make it visible, don't
+build a workflow around it" bar.
+
+**Cancel** (new, only while `in_transit`): returns the full dispatched quantity to the
+source branch. No stock-availability check is needed first — dispatched stock sits
+untouched until received, so it can never go negative on the way back.
+
+**A new access rule, symmetric with the existing dispatch-side one:** 3c's rule was "you
+can only dispatch *from* a branch you're assigned to; anyone can pick any destination" —
+about *choosing* a destination at dispatch time. Confirming receipt is a different,
+physical-location action, so:
+- **Receive** requires assignment to the **destination** branch (or company-wide).
+- **Cancel** requires assignment to the **source** branch (or company-wide) — the same
+  right as dispatching, since cancelling undoes a dispatch.
+
+Viewing keeps its existing broader rule (visible if involved in either branch, or
+company-wide) — only the two new mutating actions get the tighter check.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_08_15_phase3c_two_step_transfers.sql` (new) | `stock_transfers.status` (`in_transit`/`completed`/`cancelled`, defaults to `completed` so pre-existing transfers — which already completed instantly under the old model — read as finished), `received_at`, `received_by`; `stock_transfer_items.quantity_received` (nullable). |
+| `app/controllers/TransferController.php` (updated) | `storeTransfer()` no longer credits the destination at dispatch. New `showReceiveForm()`/`receiveTransfer()` (`case 'receive':`) and `cancelTransfer()` (`case 'cancel':`). New `userCanActOnBranch()` helper for the symmetric access rule above. `viewTransfer()`/`fetchVisibleTransfer()` refactored to share one query (previously duplicated) and now also join the receiving user's name. |
+| `app/views/transfers/receive.php` (new) | Per-item "Received Qty" form, defaulting to the dispatched quantity. |
+| `app/views/transfers/view.php` (updated) | Status badge; "Receive"/"Cancel" actions shown only to a user who can act on the relevant branch; per-item shortfall display once received. |
+| `app/views/transfers/index.php` (updated) | Status badge per row. |
+| `app/views/transfers/create.php` (updated) | Copy update explaining stock won't reach the destination until received; button relabeled "Dispatch Transfer". |
+
+**Not built / deliberately deferred:** post-receipt reversal (voiding a `completed`
+transfer) — a harder problem since the received stock may already have been sold or
+moved on; would need the same kind of pre-validated, all-or-nothing guard
+`voidPurchase()` uses, applied to whatever's left of the received quantity. No
+loss-investigation workflow around a shortfall beyond making it visible.
+
+## 7h. Two-step transfers testing checklist
+
+- [ ] Run the migration against a copy of a client DB; confirm existing transfer rows
+      read as `✅ Completed` and behave unchanged.
+- [ ] Dispatch a new transfer; confirm the source branch's stock drops immediately but
+      the destination's stock is **unchanged** until received, and the transfer shows
+      `⏳ In Transit`.
+- [ ] Receive it in full as a user assigned to the destination branch; confirm the
+      destination's stock increases by the received quantity, status becomes
+      `✅ Completed`, and `stock_transfer.receive` appears in `/audit`.
+- [ ] Dispatch another transfer and receive it with a partial quantity; confirm only
+      the partial amount lands at the destination and the shortfall is visible on the
+      view page.
+- [ ] As a user assigned only to the source branch, confirm the "Receive Transfer"
+      action is unavailable on an in-transit transfer they can otherwise see; confirm
+      the reverse (no "Cancel Transfer") for a destination-only user.
+- [ ] Cancel an in-transit transfer; confirm the source branch's stock is fully
+      restored, status becomes `🚫 Cancelled`, and neither action remains available.
+- [ ] Confirm a `completed` or `cancelled` transfer offers neither Receive nor Cancel,
+      and that re-hitting `/transfers/receive/{id}` or `/transfers/cancel/{id}` directly
+      on one redirects with a clear error rather than acting again.
+
+## 6t. Branch-scoped cash accounts + auto-creation on branch create
+
+Built exactly to the corrected §5.13 design.
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_09_14_branch_scoped_cash_accounts.sql` (new) | Collapses every non-cash account to `branch_id = NULL`; backfills a cash account for every existing branch that lacked one. |
+| `app/helpers/functions.php` (updated) | New `accountBranchScopeSql($alias)` (OR-NULL variant of `branchScopeSql()`) and `resolveAccountBranchChoice($db, $rawBranchId)` (validates a submitted branch for a manually-created/edited account). `recordAccountTransaction()` gains an optional `$branchId` param — its type-based fallback now prefers a branch-specific default over a company-wide one. |
+| `app/controllers/BranchController.php` (`storeBranch()`, updated) | Wrapped in a transaction; auto-inserts a `"<name> Cash Account"` row for the new branch right after it's created. |
+| `app/controllers/FinancialAccountsController.php` (updated) | `listAccounts()`, `showTransferForm()`, `executeTransfer()`, `showTransactions()`, `showEditForm()` scoped. `storeAccount()`/`updateAccount()` read/validate a `branch_id` field (mobile_money/bank only — cash stays locked, same bucket as `type`/`balance`). |
+| `app/views/financial_accounts/index.php`, `edit.php` (updated) | Branch badge on each account card (`branchName()`, already existed); a "Scope" `<select>` on the Add Account modal and Edit form, shown only when `hasMultiBranch()`. |
+| `app/controllers/CustomerController.php`, `PurchaseController.php`, `SaleController.php`, `SupplierController.php`, `SuspenseController.php`, `ExpensesController.php`, `DistributorController.php`, `ExportController.php` (updated) | Every account picker and every re-validation of a POSTed `account_id` scoped with `accountBranchScopeSql()` — ~20 call sites across 8 controllers, the same "picker UI + direct-POST validation" pairing as §5.12, including `DistributorController`'s two payment accounts and `ExportController::exportAccountLedger()`'s `?account_id=`, neither of which had *any* prior validation. |
+
+**Deliberately left unscoped:** reversal/reference lookups that resolve an account from an
+already-recorded transaction (`SaleController::voidSale()`'s `$acctTx['account_id']`,
+`SuspenseController`'s resolution-reversal paths, `ExpensesController::deleteExpense()`'s
+refund) — these must reach the *original* account regardless of the acting user's branch,
+since undoing isn't choosing. `recordAccountTransaction()`'s explicit-`$accountId` branch
+itself also stays unscoped for the same reason — it's the one function both paths share.
+
+**Status:** done. See §5.13 for the full writeup and live verification against `bms_db`.
+
+## 6u. Pre-existing gap closed: suspense account leaking into payment pickers
+
+While testing POS with a branch-scoped user (§6t), the suspense account (`type = 'bank'`,
+`is_suspense = 1`) showed up as a normal bank payment option. `CustomerController`'s deposit
+picker and `SuspenseController`'s own resolution picker already excluded it
+(`AND is_suspense = 0`), but every other payment/deposit picker — POS, purchase payment,
+supplier deposit, direct delivery, expense creation, and their matching POST-validation
+queries — never did. Not introduced by §6t's work (predates `accounts.branch_id` entirely),
+but the same files were already open, so fixed alongside it: `SaleController.php`,
+`PurchaseController.php`, `SupplierController.php`, `DistributorController.php`,
+`ExpensesController.php`.
+
+`FinancialAccountsController::executeTransfer()` and the admin account-management views
+deliberately keep showing the suspense account — Transfer is the legitimate way to move
+funds out of suspense outside the dedicated resolution flow.
+
+**Status:** done.
+
+## 6v. In-app alert for high-risk audit changes
+
+Closes the last item from §6i/6n's original deferred-features note (retention/archiving and
+CSV export had already shipped in §6o without that note being updated — corrected there too).
+No email infrastructure exists anywhere in this app (no `mail()`, no PHPMailer, no SMTP
+config), so building email alerts would mean standing up a whole new capability first —
+went with an in-app dashboard alert instead, reusing the existing `audit_log` table and
+`audit.view` permission.
+
+**What's flagged (deliberately narrow, to avoid alert fatigue):**
+- `role.permissions_changed` where the `removed` array (already logged — §6i/6n) contains
+  `users.manage` or `roles.manage` — the specific lockout-risk scenario this was originally
+  proposed for, not just any permission change.
+- `role.delete`.
+- `sale.void` and `sale.edit` — every one, no threshold. Both already require a reason
+  (`edit_reason` is a required field), so they're inherently deliberate, not routine.
+  `sale.edit` was **not previously logged to `audit_log` at all** — `updateSale()` only wrote
+  to a separate, older `audit_history` table that predates the unified system this feature
+  (and `/audit`, CSV export, archiving) is built on, and was never wired into any of it. Added
+  a real `logAudit('sale.edit', ...)` call alongside the existing `audit_history` insert
+  (left that one alone — harmless, not worth removing).
+- `product.price_change` — **only** a selling-price drop of 30%+ in one edit, and newly
+  logged (`ProductController::updateProduct()` had no `logAudit()` call before this). This one
+  needed a threshold or it would have been the fatigue case in practice: routine
+  repricing/promotions happen far more often than the other four action types combined.
+  Price *increases* and cost-price changes aren't flagged — not the "sold too cheap"
+  failure mode this guards against. The threshold is enforced at write time, so `audit_log`
+  itself doesn't fill with routine price edits either, not just the banner.
+
+**Seen/dismissal:** new `users.last_security_alert_seen_at` (nullable `TIMESTAMP`). Visiting
+`/audit` marks everything seen (`AuditController::listAuditLog()`), reusing the existing route
+— no new endpoint. `currentUser()` caches its row in `$_SESSION` for the whole session, so the
+visit also `unset()`s that cache, or the dashboard would keep showing the stale banner for the
+rest of the session. **Found live while testing:** both this column and `audit_log.created_at`
+are plain `TIMESTAMP` (1-second resolution, no fractional seconds) — an action taken
+immediately after visiting `/audit` can land in the exact same second as the seen-stamp, and a
+strict `created_at > last_seen` silently drops it from ever alerting. Confirmed by voiding a
+test sale right after visiting `/audit` and getting identical timestamps down to the second.
+Fixed by comparing `>=` instead — the trade-off (a genuinely concurrent request landing in the
+same second as the stamp could be marked pre-seen) is far narrower than the bug it fixes.
+
+**Visibility:** gated by `can('audit.view')`, same as the log itself. The two role-related
+alerts are always company-wide (`branch_id = NULL`, per `logAudit()`'s `$companyWide` flag on
+that call site) and use `branchScopeSql()` like `AuditController.php` already does, so they're
+naturally invisible to branch-scoped viewers — consistent with those viewers already not
+being able to see the entries in `/audit` either. The other three stay normally branch-scoped.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_09_14_security_alert_seen.sql` (new) | `users.last_security_alert_seen_at`. |
+| `app/controllers/SaleController.php` (`updateSale()`) | New `logAudit('sale.edit', ...)` call. |
+| `app/controllers/ProductController.php` (`updateProduct()`) | New `logAudit('product.price_change', ...)` call, 30%+ selling-price-drop threshold. |
+| `app/controllers/DashboardController.php` | New `$securityAlerts` query block, gated by `can('audit.view')`, branch-scoped, filters `role.permissions_changed` rows in PHP for the two sensitive permissions. |
+| `app/views/dashboard/index.php` | New banner (amber, visually distinct from the existing red critical-alerts banner), linking to `/audit`. |
+| `app/controllers/AuditController.php` (`listAuditLog()`) | Stamps the seen-timestamp and invalidates the cached session user row. |
+
+**Verified live against `bms_db`** with temporary company-wide, branch-scoped, and
+no-`audit.view` test admins, a test role, a test product, and a test sale taken through the
+real POS/edit/void flow: each of the five action types correctly triggered the banner with
+accurate details (including the 30%+ threshold's edge — a 10% drop and a price increase both
+correctly produced no alert); a non-sensitive permission change correctly produced no alert;
+the branch-scoping split worked (a branch-scoped admin saw the business events but not the
+role events); the `audit.view`-less user saw nothing. All test data reverted afterward,
+including manually correcting a stray GHS 50 discrepancy in the real Cash Account balance —
+see the note below.
+
+**Unrelated bug found during cleanup, fixed separately:** voiding a sale that was previously
+*edited* reversed the account balance using the sale's **original** payment amount, not its
+current one — `SaleController::voidSale()` looked up the first `account_transactions` row
+where `reference_type = 'sale' AND transaction_type = 'deposit'`, which is always the original
+completion transaction, ignoring any deposit/withdrawal adjustment `updateSale()` made since.
+Reproduced live: complete a sale for 200, edit its paid amount down to 150 (withdraws 50),
+then void it — reversed the original 200 instead of the correct 150, a 50 overcorrection
+confirmed against a real account balance.
+
+**Fix:** rewrote the reversal to sum the *net* already posted to `account_transactions` for
+this sale (deposits minus withdrawals, grouped by `account_id`) instead of trusting a single
+original row. Self-correcting regardless of how many edits touched the sale, and also covers
+the rarer case where an edit changed payment method and the adjustment landed in a different
+account than the original payment. Verified live: the exact repro above (complete 200 → edit
+to 150 → void) now nets the account back to *exactly* its pre-sale balance, and a plain
+unedited complete-then-void still works as before (regression-checked).
+
+**Separate gap noticed while designing the fix, fixed too:**
+`SaleController::processPayment()` (the "pay remaining balance" flow, distinct from
+`updateSale()`'s payment-adjustment path) updated `sales.amount_paid`/`customer_transactions`
+for a cash/mobile/bank payment but **never called `recordAccountTransaction()`** — a payment
+taken through `/sales/pay/{id}` never posted to any financial account at all. Didn't show up
+in the void-fix testing itself (the net-based reversal above works correctly regardless of
+this gap, since it only reverses what's *actually* in `account_transactions`), but it's a
+real, separate money-tracking hole: cash physically received to settle a balance was never
+recorded as having arrived anywhere.
+
+**Fix:** added the missing `recordAccountTransaction()` call to the cash/mobile/bank branch,
+mirroring `completeSale()`'s pattern — no account picker on this form, so it resolves by
+type/branch the same way `completeSale()` does when no explicit account is chosen, and passes
+the sale's own `branch_id` (not the paying admin's active branch) for the same reason
+`updateSale()`'s fix earlier in this section does. Deliberately **not** added to the
+`payment_method === 'deposit'` branch just above it — that money isn't new; it was already
+posted to an account when the customer originally deposited it, so paying with it here just
+applies existing credit to this sale, no new account movement.
+
+Verified live against `bms_db`: a credit sale paid off later via `/sales/pay` now correctly
+deposits into the Cash Account (confirmed the exact amount landed, with the right
+`reference_type`/`reference_id`); voiding that same sale afterward correctly reverses it via
+the net-based fix above, netting back to the original balance; paying via "Pay from Deposit"
+still correctly leaves the financial account untouched, confirming the fix didn't
+over-correct the one branch that's supposed to stay account-neutral.
+
+**Status:** done.
+
+## 6w. Gap closed: `/import` had no permission gate
+
+`/import` was only plan-gated (`imports_exports`, Growth+) in `public/index.php`'s
+`$planFeatureMap` — never permission-gated. Any logged-in user on that plan could
+bulk-import categories/products/suppliers/customers/purchases regardless of whether they
+could reach the corresponding module page at all, the same "hidden in the UI but still
+reachable directly" bug class as `/sales`/`/export/sales` earlier (§5.12/§6v). `/export`
+already got a proper `$exportPermissionMap`; `/import` never did.
+
+**Fix:** added an `$importPermissionMap` to `ImportController.php`, mirroring
+`ExportController.php`'s pattern exactly — each import type requires the same permission its
+module page does (`categories`→`categories.manage`, `products`→`products.manage`,
+`suppliers`→`suppliers.manage`, `customers`→`customers.manage`,
+`purchases`→`purchases.manage`). Checked once, up front, before the template-download branch
+and the GET/POST dispatch, so it covers all three entry points (`showImportForm()`,
+`previewImport()`, `processImport()`) and the template download in one place.
+
+Verified live against `bms_db`: a role with only `suppliers.manage` could still reach
+`/import/suppliers` but was blocked from `/import/products` (and its template download),
+both as a direct URL hit, not just a hidden nav link.
+
+**Status:** done.
+
+## 6x. Enforced: one branch per user
+
+Closes the §8 note below. You'd already decided a staff member should belong to exactly
+one branch, while explicitly preserving two capabilities that already exist: a
+company-wide admin with full overview, and a branch-level admin restricted to only
+their own branch. That distinction is the existing `branch_scope` column (`'assigned'`
+vs `'all'`, `isCompanyWide()`) — nothing new needed there. What wasn't enforced was the
+"one branch" part: `views/users/create.php`/`edit.php` let an admin check *multiple*
+branches for any user via `branch_ids[]` checkboxes, and one real user in `bms_db`
+(`ksafo`, `branch_scope='assigned'`) was assigned to 2 branches.
+
+**Scope:** the one-branch cap applies to *every* user, not just `branch_scope='assigned'`
+ones. Checked the header branch-switcher (`views/layout/header.php` ~379) before deciding
+this — it only offers a dropdown when a user has more than one assigned branch, which was
+only ever meaningful for `'assigned'`-scope users (a company-wide user's access isn't
+gated by branch count at all, and none had more than one in `bms_db` anyway). Capping
+everyone at one also simplifies the form considerably: no more separate "which one is
+primary" picker, since there's only ever one branch to begin with.
+
+**Built:**
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_09_14_single_branch_per_user.sql` (new) | For any user assigned to more than one branch, keeps only their primary-marked one (falling back to `users.branch_id`, then the lowest `branch_id`, if none marked primary) and re-syncs `is_primary`/`users.branch_id` afterward. Generic, not a one-off fix for `ksafo`. |
+| `app/controllers/UserController.php` (`saveUserBranches()`) | Signature simplified from `($db, $userId, $branchIds, $primaryBranchId)` to `($db, $userId, $branchId)` — single value in, single `user_branches` row out (`is_primary = 1`), `users.branch_id` synced. Only caller is this file (3 call sites, all here), so the signature change was safe. `storeUser()`/`updateUser()` now read `$_POST['branch_id']` instead of `branch_ids[]`/`primary_branch_id`. |
+| `app/views/users/create.php`, `edit.php` (updated) | Branch checkbox list + separate "primary" radio column replaced with a single radio-button list, `name="branch_id"`. |
+
+**Not touched:** `views/layout/header.php`'s branch switcher — it only renders its dropdown
+when `count($myBranches) > 1`, which will simply never be true again going forward. No
+code changes needed there; it degrades gracefully to the existing single-branch display.
+
+Verified live against `bms_db`: the migration left `ksafo` with exactly their primary
+branch (Kasoa); creating a new branch-level user through the actual form produced one
+consistent `user_branches` row; editing a user's branch *replaced* the assignment rather
+than adding to it (confirmed exactly one row survives); a branch-scoped user's data
+isolation (`financial-accounts` showing only their own branch's cash account) was
+unaffected by the change.
+
+**Status:** done.
+
+## 6y. Gap closed: "last active account" check was global, not per-branch
+
+Flagged during §6t's plan review and deliberately left out of scope at the time:
+`FinancialAccountsController::updateAccount()`'s "can't deactivate the last active
+account" check counted active accounts globally. Since §6t made cash accounts
+branch-scoped, this let someone deactivate a specific branch's only cash account as
+long as *some other* branch still had one active — that branch would then have zero
+accounts to post sales/purchases to, with nothing stopping it.
+
+**Fix:** the check is now per-branch. An account is only "covering" a branch if it's
+that branch's own (`branch_id` matches) or company-wide (`branch_id IS NULL`) — the
+same visibility rule `accountBranchScopeSql()` already applies everywhere else. For a
+branch-scoped account being deactivated, only its own branch is checked; for a
+company-wide account, every active branch is checked (removing shared coverage could
+strand more than one). Works unchanged for single-branch installs too, since
+`branches` always has exactly one row there. Excludes the suspense account from
+"coverage" — it's an internal reconciliation account, not a valid posting target, the
+same reason every payment/deposit picker already excludes it (§6u).
+
+Verified live against `bms_db` (temporarily toggling the two company-wide accounts off
+and back on via the real UI, fully reversible): with no company-wide accounts active,
+deactivating Main Branch's cash account was correctly **blocked** — "Main Branch would
+be left with no active account to post sales/purchases to" — reproducing the exact gap
+described. Reactivating one company-wide account made the same deactivation succeed
+immediately after, confirming the check isn't overly restrictive once real coverage
+exists.
+
+**Status:** done.
+
+## 6z. Bug found via the IDE, not testing: undefined `$updatedProduct` silently corrupted cost history
+
+Surfaced by the IDE's "undefined variable" flag, not by testing — a genuine
+silent-corruption bug, not just static-analysis noise like most of §6x/§6y's cleanup.
+
+**`PurchaseController::updatePurchase()` — undefined `$updatedProduct`.** Editing a
+purchase logs `product_cost_history` using `floatval($updatedProduct['average_cost'])`
+for `new_cost`, but `$updatedProduct` was never assigned anywhere in the function — a
+leftover from an incomplete implementation. `floatval(null)` silently evaluates to `0`,
+so **every purchase edit recorded `new_cost` as `0` and `change_percent` as a flat
+`-100%`** in `product_cost_history`, regardless of the real new cost. The correct value
+was being computed two loops earlier (`$newAverageCost`, written to
+`products.average_cost`) but never carried forward to where cost history gets logged.
+
+**Fix:** capture each product's computed average cost into a `$newAverageCostByProduct`
+map in the first loop, keyed by product id, and read from that map in the second loop
+instead of the undefined variable.
+
+Verified live against `bms_db`: created a test purchase (10 units @ GHS 40, average
+cost → 40), edited it to GHS 60/unit, and confirmed `product_cost_history` now records
+`new_cost = 60.00` and `change_percent = 50.00` (matching `products.average_cost`),
+instead of the old `0.00`/`-100.00`.
+
+**Status:** done.
+
+## 6za. Bug found via the IDE: `end(explode(...))` in `generateSupplierCode()`
+
+`end()` requires a by-reference argument; passing a function's return value directly
+(`end(explode('-', ...))`) triggers "Only variables should be passed by reference".
+Fixed to match the exact pattern `CustomerController::generateCustomerCode()` already
+uses correctly — explode into a `$parts` variable first, then `end($parts)`.
+
+Verified live against `bms_db`: created a new supplier and confirmed the code correctly
+incremented (`SUP-2026-0003` → `SUP-2026-0004`) with no warning.
+
+**Status:** done.
+
 ## 8. Open decisions for later (not blocking anything now)
 
 - Self-service plan upgrade UI — revisit if clients start asking for it.
 - `branch_product_prices` override table — only if a client needs per-branch pricing.
-- Whether staff can belong to more than one branch (would need a pivot table instead of
-  a single `users.branch_id`) — decide when designing the Phase 3 login/POS flow.
+- ~~Whether staff can belong to more than one branch~~ — **decided and built, see §6x.**

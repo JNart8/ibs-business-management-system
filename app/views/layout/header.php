@@ -175,7 +175,7 @@
                         <!-- Inventory Dropdown -->
                         <div class="relative dropdown">
                             <button
-                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/products', '/categories', '/stock'], $currentPath) ?>">
+                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/products', '/categories', '/stock', '/transfers'], $currentPath) ?>">
                                 Inventory
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -191,9 +191,15 @@
                                 <a href="<?= BASE_URL ?>/stock" class="dropdown-item">
                                     📊 Stock Management
                                 </a>
+                                <?php if (can('stock.transfer') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/transfers" class="dropdown-item">
+                                    🔄 Stock Transfers
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
 
+                        <?php if (can('customers.manage') || can('suppliers.manage')): ?>
                         <!-- People Dropdown -->
                         <div class="relative dropdown">
                             <button
@@ -204,16 +210,24 @@
                                 </svg>
                             </button>
                             <div class="dropdown-content">
+                                <?php if (can('customers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/customers" class="dropdown-item">
                                     👥 Customers
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('suppliers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suppliers" class="dropdown-item">
                                     🚚 Suppliers
                                 </a>
+                                <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
-                        <!-- Finance Dropdown -->
+                        <?php if (can('sales.access') || can('purchases.manage') || (planAllows('distributor') && can('distributor.manage')) || can('transactions.manage') || can('financial_accounts.access') || (planAllows('expenses') && can('expenses.manage')) || (planAllows('suspense') && can('suspense.manage'))): ?>
+                        <!-- Finance Dropdown — every item (Sales included) is hidden
+                             unless can() actually allows the route it links to, so
+                             there's never a dead-end link here. -->
                         <div class="relative dropdown">
                             <button
                                 class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/sales', '/purchases', '/transactions', '/financial-accounts', '/expenses', '/distributor', '/suspense'], $currentPath) ?>">
@@ -223,35 +237,44 @@
                                 </svg>
                             </button>
                             <div class="dropdown-content">
+                                <?php if (can('sales.access')): ?>
                                 <a href="<?= BASE_URL ?>/sales" class="dropdown-item">
                                     💰 Sales
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('purchases.manage')): ?>
                                 <a href="<?= BASE_URL ?>/purchases" class="dropdown-item">
                                     🛍️ Purchases
                                 </a>
-                                <?php if (planAllows('distributor')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('distributor') && can('distributor.manage')): ?>
                                 <a href="<?= BASE_URL ?>/distributor" class="dropdown-item">
                                     🚚 Direct Deliveries
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('transactions.manage')): ?>
                                 <a href="<?= BASE_URL ?>/transactions" class="dropdown-item">
                                     💳 Customer Transactions
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('financial_accounts.access')): ?>
                                 <a href="<?= BASE_URL ?>/financial-accounts" class="dropdown-item">
                                     💳 Financial Accounts
                                 </a>
-                                <?php if (planAllows('expenses')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('expenses') && can('expenses.manage')): ?>
                                 <a href="<?= BASE_URL ?>/expenses" class="dropdown-item">
                                     💸 Expenses
                                 </a>
                                 <?php endif; ?>
-                                <?php if (planAllows('suspense')): ?>
+                                <?php if (planAllows('suspense') && can('suspense.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suspense" class="dropdown-item">
                                     🕵️ Suspense Account
                                 </a>
                                 <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
                         <!-- Reports Dropdown -->
                         <div class="relative dropdown">
@@ -293,6 +316,16 @@
                                 <a href="<?= BASE_URL ?>/reports/profit-margin" class="dropdown-item">
                                     📈 Profit Margins
                                 </a>
+                                <?php if (hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/reports/customer-credit" class="dropdown-item">
+                                    🔁 Customer Credit Settlement
+                                </a>
+                                <?php endif; ?>
+                                <?php if (hasMultiBranch() && isCompanyWide()): ?>
+                                <a href="<?= BASE_URL ?>/reports/branch-performance" class="dropdown-item">
+                                    🏢 Branch Performance
+                                </a>
+                                <?php endif; ?>
                                 <?php else: ?>
                                 <div class="border-t my-1"></div>
                                 <span class="dropdown-item text-gray-400 cursor-not-allowed" title="Upgrade to unlock">
@@ -304,11 +337,11 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage')): ?>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch()) || can('audit.view')): ?>
                         <!-- Administration Dropdown -->
                         <div class="relative dropdown">
                             <button
-                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings'], $currentPath) ?>">
+                                class="nav-link inline-flex items-center gap-1 <?= isGroupActive(['/users', '/roles', '/settings', '/license', '/branches', '/audit'], $currentPath) ?>">
                                 Administration
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -320,14 +353,29 @@
                                     👤 Users
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('branches.manage') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/branches" class="dropdown-item">
+                                    🏢 Branches
+                                </a>
+                                <?php endif; ?>
                                 <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
                                 <a href="<?= BASE_URL ?>/roles" class="dropdown-item">
                                     🔑 Roles
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('audit.view')): ?>
+                                <a href="<?= BASE_URL ?>/audit" class="dropdown-item">
+                                    📋 Audit Log
+                                </a>
+                                <?php endif; ?>
                                 <?php if (can('settings.manage')): ?>
                                 <a href="<?= BASE_URL ?>/settings" class="dropdown-item">
                                     ⚙️ Settings
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('settings.manage')): ?>
+                                <a href="<?= BASE_URL ?>/license" class="dropdown-item">
+                                    🔑 Subscription
                                 </a>
                                 <?php endif; ?>
                             </div>
@@ -338,6 +386,26 @@
                 <!-- Right Side: User + Mobile Button -->
                 <div class="flex items-center space-x-3">
                     <?php if (isLoggedIn()): ?>
+                        <?php if (hasMultiBranch()): $myBranches = userBranches($_SESSION['user_id']); ?>
+                            <?php if (count($myBranches) > 1): ?>
+                            <form action="<?= BASE_URL ?>/account/switch-branch" method="POST"
+                                class="hidden md:block" onchange="this.submit()">
+                                <?= csrfField() ?>
+                                <select name="branch_id"
+                                    class="text-sm bg-blue-700 hover:bg-blue-800 text-white border-0 rounded-full px-3 py-1 focus:ring-2 focus:ring-white">
+                                    <?php foreach ($myBranches as $mb): ?>
+                                        <option value="<?= $mb['id'] ?>" <?= activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
+                                            🏢 <?= e($mb['name']) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </form>
+                            <?php elseif (count($myBranches) === 1): ?>
+                            <span class="hidden md:block text-sm text-blue-100 px-2" title="Your assigned branch">
+                                🏢 <?= e($myBranches[0]['name']) ?>
+                            </span>
+                            <?php endif; ?>
+                        <?php endif; ?>
                         <a href="<?= BASE_URL ?>/account"
                             class="hidden md:block text-sm bg-blue-700 hover:bg-blue-800 px-3 py-1 rounded-full transition">
                             <svg class="w-4 h-4 text-white inline-block align-text-bottom mr-1" fill="currentColor" viewBox="0 0 20 20">
@@ -414,9 +482,17 @@
                                     @click="mobileOpen = false">
                                     📊 Stock Management
                                 </a>
+                                <?php if (can('stock.transfer') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/transfers"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    🔄 Stock Transfers
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
 
+                        <?php if (can('customers.manage') || can('suppliers.manage')): ?>
                         <!-- People Section (Mobile) -->
                         <div class="flex flex-col">
                             <button @click="peopleOpen = !peopleOpen"
@@ -429,20 +505,27 @@
                                 </svg>
                             </button>
                             <div x-show="peopleOpen" x-cloak class="pl-4 mt-1 space-y-1">
+                                <?php if (can('customers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/customers"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     👥 Customers
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('suppliers.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suppliers"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     🚚 Suppliers
                                 </a>
+                                <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
-                        <!-- Finance Section (Mobile) -->
+                        <?php if (can('sales.access') || can('purchases.manage') || (planAllows('distributor') && can('distributor.manage')) || can('transactions.manage') || can('financial_accounts.access') || (planAllows('expenses') && can('expenses.manage')) || (planAllows('suspense') && can('suspense.manage'))): ?>
+                        <!-- Finance Section (Mobile) — every item (Sales included) is
+                             hidden unless can() actually allows the route it links to. -->
                         <div class="flex flex-col">
                             <button @click="financeOpen = !financeOpen"
                                 class="nav-link flex items-center justify-between w-full text-left">
@@ -454,41 +537,49 @@
                                 </svg>
                             </button>
                             <div x-show="financeOpen" x-cloak class="pl-4 mt-1 space-y-1">
+                                <?php if (can('sales.access')): ?>
                                 <a href="<?= BASE_URL ?>/sales"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💰 Sales
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('purchases.manage')): ?>
                                 <a href="<?= BASE_URL ?>/purchases"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     🛍️ Purchases
                                 </a>
-                                <?php if (planAllows('distributor')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('distributor') && can('distributor.manage')): ?>
                                 <a href="<?= BASE_URL ?>/distributor"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     🚚 Direct Deliveries
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('transactions.manage')): ?>
                                 <a href="<?= BASE_URL ?>/transactions"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💳 Customer Transactions
                                 </a>
+                                <?php endif; ?>
+                                <?php if (can('financial_accounts.access')): ?>
                                 <a href="<?= BASE_URL ?>/financial-accounts"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💳 Financial Accounts
                                 </a>
-                                <?php if (planAllows('expenses')): ?>
+                                <?php endif; ?>
+                                <?php if (planAllows('expenses') && can('expenses.manage')): ?>
                                 <a href="<?= BASE_URL ?>/expenses"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
                                     💸 Expenses
                                 </a>
                                 <?php endif; ?>
-                                <?php if (planAllows('suspense')): ?>
+                                <?php if (planAllows('suspense') && can('suspense.manage')): ?>
                                 <a href="<?= BASE_URL ?>/suspense"
                                     class="nav-link block"
                                     @click="mobileOpen = false">
@@ -497,6 +588,7 @@
                                 <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
 
                         <!-- Reports Section (Mobile) -->
                         <div class="flex flex-col">
@@ -556,6 +648,20 @@
                                     @click="mobileOpen = false">
                                     📈 Profit Margins
                                 </a>
+                                <?php if (hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/reports/customer-credit"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    🔁 Customer Credit Settlement
+                                </a>
+                                <?php endif; ?>
+                                <?php if (hasMultiBranch() && isCompanyWide()): ?>
+                                <a href="<?= BASE_URL ?>/reports/branch-performance"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    🏢 Branch Performance
+                                </a>
+                                <?php endif; ?>
                                 <?php else: ?>
                                 <span class="nav-link block text-gray-400">🔒 Advanced reports (upgrade)</span>
                                 <?php endif; ?>
@@ -564,7 +670,7 @@
 
                     <?php endif; ?>
 
-                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage')): ?>
+                    <?php if (can('users.manage') || (can('roles.manage') && planAllows('advanced_permissions')) || can('settings.manage') || (can('branches.manage') && hasMultiBranch()) || can('audit.view')): ?>
                         <!-- Administration Section (Mobile) -->
                         <div class="flex flex-col">
                             <button @click="adminOpen = !adminOpen"
@@ -584,11 +690,25 @@
                                     👤 Users
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('branches.manage') && hasMultiBranch()): ?>
+                                <a href="<?= BASE_URL ?>/branches"
+                                    class="nav-link block <?= isActive('/branches', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    🏢 Branches
+                                </a>
+                                <?php endif; ?>
                                 <?php if (can('roles.manage') && planAllows('advanced_permissions')): ?>
                                 <a href="<?= BASE_URL ?>/roles"
                                     class="nav-link block <?= isActive('/roles', $currentPath) ?>"
                                     @click="mobileOpen = false">
                                     🔑 Roles
+                                </a>
+                                <?php endif; ?>
+                                <?php if (can('audit.view')): ?>
+                                <a href="<?= BASE_URL ?>/audit"
+                                    class="nav-link block <?= isActive('/audit', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    📋 Audit Log
                                 </a>
                                 <?php endif; ?>
                                 <?php if (can('settings.manage')): ?>
@@ -598,11 +718,40 @@
                                     ⚙️ Settings
                                 </a>
                                 <?php endif; ?>
+                                <?php if (can('settings.manage')): ?>
+                                <a href="<?= BASE_URL ?>/license"
+                                    class="nav-link block <?= isActive('/license', $currentPath) ?>"
+                                    @click="mobileOpen = false">
+                                    🔑 Subscription
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endif; ?>
 
                     <?php if (isLoggedIn()): ?>
+                        <?php if (hasMultiBranch()): $myBranchesMobile = userBranches($_SESSION['user_id']); ?>
+                            <?php if (count($myBranchesMobile) > 1): ?>
+                            <div class="pt-2 border-t border-blue-500">
+                                <p class="text-xs text-blue-200 px-1 mb-1">Active branch</p>
+                                <form action="<?= BASE_URL ?>/account/switch-branch" method="POST" onchange="this.submit()">
+                                    <?= csrfField() ?>
+                                    <select name="branch_id"
+                                        class="w-full text-sm bg-blue-700 text-white border border-blue-400 rounded-lg px-3 py-2">
+                                        <?php foreach ($myBranchesMobile as $mb): ?>
+                                            <option value="<?= $mb['id'] ?>" <?= activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
+                                                🏢 <?= e($mb['name']) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </form>
+                            </div>
+                            <?php elseif (count($myBranchesMobile) === 1): ?>
+                            <div class="pt-2 border-t border-blue-500">
+                                <p class="text-xs text-blue-200 px-1">🏢 <?= e($myBranchesMobile[0]['name']) ?></p>
+                            </div>
+                            <?php endif; ?>
+                        <?php endif; ?>
                         <div class="pt-2 border-t border-blue-500">
                             <a href="<?= BASE_URL ?>/account"
                                 class="nav-link <?= isActive('/account', $currentPath) ?>"
@@ -618,3 +767,15 @@
 
     <!-- Main Content -->
     <main class="flex-1 container mx-auto px-4 py-6">
+        <?php if (isLoggedIn() && licenseState() === 'warning'): $licenseDaysRemaining = licenseDaysRemaining(); ?>
+        <div class="bg-yellow-50 border border-yellow-300 text-yellow-800 px-4 py-3 rounded-lg mb-4 flex flex-wrap items-center justify-between gap-3">
+            <span class="text-sm">
+                <?php if ($licenseDaysRemaining >= 0): ?>
+                    Your subscription expires in <?= $licenseDaysRemaining ?> day<?= $licenseDaysRemaining === 1 ? '' : 's' ?>.
+                <?php else: ?>
+                    Your subscription expired <?= abs($licenseDaysRemaining) ?> day<?= abs($licenseDaysRemaining) === 1 ? '' : 's' ?> ago — renew before the grace period ends to avoid being locked out.
+                <?php endif; ?>
+            </span>
+            <a href="<?= BASE_URL ?>/license" class="whitespace-nowrap text-sm font-semibold underline">Renew now</a>
+        </div>
+        <?php endif; ?>

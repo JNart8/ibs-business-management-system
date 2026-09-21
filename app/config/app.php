@@ -29,7 +29,7 @@ if (getenv('APP_ENV') === 'production') {
 }
 
 // Timezone (adjust to your location)
-date_default_timezone_set('Africa/Blantyre');
+date_default_timezone_set('Africa/Accra');
 
 // Session configuration
 ini_set('session.cookie_httponly', 1); // Prevent JavaScript access to session cookie
@@ -78,7 +78,8 @@ define('LOGIN_TIMEOUT_MINUTES', 15);
 $helpers = [
     'functions.php',
     'validation.php',
-    'response.php'
+    'response.php',
+    'LicenseCode.php'
 ];
 
 foreach ($helpers as $helper) {

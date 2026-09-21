@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse segments
@@ -48,12 +56,24 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listAccounts($db)
+function listAccounts(Database $db)
 {
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("
-        SELECT * FROM accounts 
+        SELECT * FROM accounts
+        WHERE 1=1 $scopeSql
         ORDER BY type ASC, is_active DESC, name ASC
-    ");
+    ", $scopeParams);
+
+    // For the Add Account modal's branch picker — restricted to the
+    // creating user's own branches unless they're company-wide, matching
+    // resolveAccountBranchChoice()'s own rule.
+    $branches = [];
+    if (hasMultiBranch()) {
+        $branches = isCompanyWide()
+            ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+            : userBranches(currentUser()['id']);
+    }
 
     $recentTransfers = $db->fetchAll("
         SELECT t.*, f.name as from_account_name, to_acc.name as to_account_name, u.full_name as user_name
@@ -69,7 +89,7 @@ function listAccounts($db)
     include APP_PATH . '/views/financial_accounts/index.php';
 }
 
-function storeAccount($db)
+function storeAccount(Database $db)
 {
     $name = trim($_POST['name'] ?? '');
     $type = $_POST['type'] ?? '';
@@ -85,13 +105,24 @@ function storeAccount($db)
         redirect(BASE_URL . '/financial-accounts', 'error', 'Invalid account type selected. Cash accounts cannot be created manually.');
     }
 
+    // Company-wide (shared) by default — a specific branch is only ever
+    // set when the client deliberately chooses one, and only among their
+    // own branches unless they're company-wide.
+    $branchId = null;
+    if (hasMultiBranch()) {
+        [$branchId, $branchError] = resolveAccountBranchChoice($db, $_POST['branch_id'] ?? '');
+        if ($branchError) {
+            redirect(BASE_URL . '/financial-accounts', 'error', $branchError);
+        }
+    }
+
     try {
         $db->beginTransaction();
 
         $db->query("
-            INSERT INTO accounts (name, type, provider, account_number, balance, is_default, is_active)
-            VALUES (?, ?, ?, ?, ?, 0, 1)
-        ", [$name, $type, $provider, $accountNumber, $initialBalance]);
+            INSERT INTO accounts (branch_id, name, type, provider, account_number, balance, is_default, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 1)
+        ", [$branchId, $name, $type, $provider, $accountNumber, $initialBalance]);
 
         $accountId = $db->lastInsertId();
 
@@ -104,6 +135,7 @@ function storeAccount($db)
         }
 
         $db->commit();
+        logAudit('account.create', 'account', $accountId, ['name' => $name, 'type' => $type, 'initial_balance' => $initialBalance, 'branch' => branchName($branchId)]);
         redirect(BASE_URL . '/financial-accounts', 'success', 'Account created successfully.');
     } catch (Exception $e) {
         $db->rollback();
@@ -111,20 +143,32 @@ function storeAccount($db)
     }
 }
 
-function showTransferForm($db)
+function showTransferForm(Database $db)
 {
-    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 ORDER BY name ASC");
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 $scopeSql ORDER BY name ASC", $scopeParams);
     $pageTitle = 'Transfer Funds';
     include APP_PATH . '/views/financial_accounts/transfer.php';
 }
 
-function executeTransfer($db)
+function executeTransfer(Database $db)
 {
     $fromAccountId = safeInt($_POST['from_account_id'] ?? 0);
     $toAccountId   = safeInt($_POST['to_account_id'] ?? 0);
     $amount        = safeFloat($_POST['amount'] ?? 0.00);
     $charges       = safeFloat($_POST['charges'] ?? 0.00);
     $notes         = trim($_POST['notes'] ?? '');
+
+    // Transfers are always charged to the business, never the customer — a
+    // deliberate decision, not a placeholder. `charged_to` stays in the schema
+    // (and the INSERT below) since account_transfers already has the column,
+    // but it's no longer POST-configurable — no UI ever exposed a choice here,
+    // so this was always resolving to 'business' in practice anyway.
+    $chargedTo = 'business';
+    $settlementType = $_POST['settlement_type'] ?? 'routine';
+    if (!in_array($settlementType, ['routine', 'customer_credit_balancing'], true)) {
+        $settlementType = 'routine';
+    }
 
     if ($fromAccountId === $toAccountId) {
         redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Source and destination accounts must be different.');
@@ -138,8 +182,9 @@ function executeTransfer($db)
         redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Charges cannot be negative.');
     }
 
-    $fromAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$fromAccountId]);
-    $toAccount   = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$toAccountId]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $fromAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $scopeSql", array_merge([$fromAccountId], $scopeParams));
+    $toAccount   = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $scopeSql", array_merge([$toAccountId], $scopeParams));
 
     if (!$fromAccount || !$toAccount) {
         redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'One or both selected accounts are invalid or inactive.');
@@ -167,9 +212,9 @@ function executeTransfer($db)
 
         // 3. Record transfer log
         $db->query("
-            INSERT INTO account_transfers (from_account_id, to_account_id, amount, charges, notes, user_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ", [$fromAccountId, $toAccountId, $amount, $charges, $notes, $_SESSION['user_id']]);
+            INSERT INTO account_transfers (from_account_id, to_account_id, amount, charges, charged_to, settlement_type, notes, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ", [$fromAccountId, $toAccountId, $amount, $charges, $chargedTo, $settlementType, $notes, $_SESSION['user_id']]);
         
         $transferId = $db->lastInsertId();
 
@@ -206,9 +251,10 @@ function executeTransfer($db)
     }
 }
 
-function showTransactions($db, $id)
+function showTransactions(Database $db, mixed $id)
 {
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$account) {
         redirect(BASE_URL . '/financial-accounts', 'error', 'Account not found.');
     }
@@ -228,20 +274,29 @@ function showTransactions($db, $id)
     include APP_PATH . '/views/financial_accounts/transactions.php';
 }
 
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$account) {
         redirect(BASE_URL . '/financial-accounts', 'error', 'Account not found.');
+    }
+
+    $branches = [];
+    if (hasMultiBranch() && $account['type'] !== 'cash') {
+        $branches = isCompanyWide()
+            ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+            : userBranches(currentUser()['id']);
     }
 
     $pageTitle = 'Edit Account: ' . $account['name'];
     include APP_PATH . '/views/financial_accounts/edit.php';
 }
 
-function updateAccount($db, $id)
+function updateAccount(Database $db, mixed $id)
 {
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$account) {
         redirect(BASE_URL . '/financial-accounts', 'error', 'Account not found.');
     }
@@ -256,10 +311,51 @@ function updateAccount($db, $id)
     }
 
     if ($isActive === 0 && $account['is_active'] == 1) {
-        $otherActive = $db->fetchOne("SELECT COUNT(*) as c FROM accounts WHERE is_active = 1 AND id != ?", [$id]);
-        if (intval($otherActive['c'] ?? 0) === 0) {
+        // Per-branch, not global: a branch's cash account is only "covered"
+        // by an active account that's either its own (branch_id matches) or
+        // company-wide (branch_id IS NULL) — the same visibility rule
+        // accountBranchScopeSql() already applies everywhere else. The old
+        // check just counted active accounts anywhere, so deactivating a
+        // branch's only cash account was allowed as long as some OTHER
+        // branch still had one active — that branch would then have zero
+        // accounts to post sales/purchases to. For a company-wide account
+        // being deactivated, every branch is potentially affected, not
+        // just one — the query below checks all of them either way: when
+        // $account['branch_id'] is a specific branch it only checks that
+        // one (via the `? IS NULL OR` short-circuit), when it's NULL
+        // (company-wide) it checks every branch. Works unchanged for
+        // single-branch installs too, since `branches` always has exactly
+        // one row there. Excludes the suspense account from "coverage" —
+        // it's an internal reconciliation account, not a valid posting
+        // target, the same reason every payment/deposit picker in the app
+        // already excludes it (§6u).
+        $strandedBranches = $db->fetchAll("
+            SELECT b.id, b.name
+            FROM branches b
+            WHERE b.is_active = 1
+              AND (? IS NULL OR b.id = ?)
+              AND NOT EXISTS (
+                  SELECT 1 FROM accounts a
+                  WHERE a.is_active = 1 AND a.is_suspense = 0 AND a.id != ?
+                    AND (a.branch_id = b.id OR a.branch_id IS NULL)
+              )
+        ", [$account['branch_id'], $account['branch_id'], $id]);
+
+        if (!empty($strandedBranches)) {
+            $names = implode(', ', array_column($strandedBranches, 'name'));
             redirect(BASE_URL . '/financial-accounts/edit/' . $id, 'error',
-                'You cannot deactivate the last active account — sales and purchases need at least one to post to.');
+                'You cannot deactivate this account — ' . e($names) . ' would be left with no active account to post sales/purchases to.');
+        }
+    }
+
+    // Branch scope: editable for mobile_money/bank (a client's own choice —
+    // see resolveAccountBranchChoice()); cash accounts are system-managed
+    // and always stay pinned to the branch they were created for.
+    $branchId = $account['branch_id'];
+    if (hasMultiBranch() && $account['type'] !== 'cash') {
+        [$branchId, $branchError] = resolveAccountBranchChoice($db, $_POST['branch_id'] ?? '');
+        if ($branchError) {
+            redirect(BASE_URL . '/financial-accounts/edit/' . $id, 'error', $branchError);
         }
     }
 
@@ -273,9 +369,17 @@ function updateAccount($db, $id)
     // one-off data fix via phpMyAdmin, not something exposed in the UI.
     $db->query("
         UPDATE accounts
-        SET name = ?, provider = ?, account_number = ?, is_active = ?
+        SET name = ?, provider = ?, account_number = ?, is_active = ?, branch_id = ?
         WHERE id = ?
-    ", [$name, $provider ?: null, $accountNumber ?: null, $isActive, $id]);
+    ", [$name, $provider ?: null, $accountNumber ?: null, $isActive, $branchId, $id]);
+
+    logAudit('account.update', 'account', $id, [
+        'name'          => $name,
+        'active_before' => (bool) $account['is_active'],
+        'active_after'  => (bool) $isActive,
+        'branch_before' => branchName($account['branch_id']),
+        'branch_after'  => branchName($branchId),
+    ]);
 
     redirect(BASE_URL . '/financial-accounts', 'success', 'Account updated successfully.');
 }

@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse segments
@@ -36,7 +44,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listExpenses($db)
+function listExpenses(Database $db)
 {
     // Filter parameters
     $dateFrom = $_GET['date_from'] ?? date('Y-m-01');
@@ -44,16 +52,27 @@ function listExpenses($db)
     $category = $_GET['category']  ?? '';
     $accountId = $_GET['account_id'] ?? '';
 
-    $where = ["expense_date BETWEEN ? AND ?"];
+    $where = ["e.expense_date BETWEEN ? AND ?"];
     $params = [$dateFrom, $dateTo];
 
+    // Branch visibility — use the 'e.' alias since accounts also has a
+    // branch_id column and this query joins both tables. branchScopeSql()
+    // returns a " AND ..." fragment meant to be appended directly to a
+    // WHERE clause; strip that leading " AND " here since this function
+    // builds its WHERE from an array joined with " AND " instead.
+    [$scopeSql, $scopeParams] = branchScopeSql('e');
+    if ($scopeSql !== '') {
+        $where[] = substr($scopeSql, strlen(' AND '));
+        $params = array_merge($params, $scopeParams);
+    }
+
     if (!empty($category)) {
-        $where[] = "category = ?";
+        $where[] = "e.category = ?";
         $params[] = $category;
     }
 
     if (!empty($accountId)) {
-        $where[] = "account_id = ?";
+        $where[] = "e.account_id = ?";
         $params[] = safeInt($accountId);
     }
 
@@ -68,12 +87,13 @@ function listExpenses($db)
     ", $params);
 
     $categories = $db->fetchAll("SELECT DISTINCT category FROM expenses ORDER BY category ASC");
-    $accounts   = $db->fetchAll("SELECT id, name FROM accounts WHERE is_active = 1 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts   = $db->fetchAll("SELECT id, name FROM accounts WHERE is_active = 1 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
 
     // Calculate totals
     $totals = $db->fetchOne("
         SELECT SUM(amount) as total_amount, SUM(charges) as total_charges
-        FROM expenses
+        FROM expenses e
         WHERE {$whereClause}
     ", $params);
 
@@ -84,15 +104,16 @@ function listExpenses($db)
     include APP_PATH . '/views/expenses/index.php';
 }
 
-function showExpenseForm($db)
+function showExpenseForm(Database $db)
 {
-    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
     $categories = $db->fetchAll("SELECT DISTINCT category FROM expenses ORDER BY category ASC");
     $pageTitle = 'Record Expense';
     include APP_PATH . '/views/expenses/create.php';
 }
 
-function storeExpense($db)
+function storeExpense(Database $db)
 {
     $expenseDate = $_POST['expense_date'] ?? date('Y-m-d');
     $category    = trim($_POST['category'] ?? '');
@@ -118,7 +139,8 @@ function storeExpense($db)
         redirect(BASE_URL . '/expenses/create', 'error', 'Please select a payment account.');
     }
 
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$accountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$account) {
         redirect(BASE_URL . '/expenses/create', 'error', 'Selected account is invalid or inactive.');
     }
@@ -141,9 +163,9 @@ function storeExpense($db)
 
         // 1. Insert into expenses table
         $db->query("
-            INSERT INTO expenses (expense_date, category, description, amount, account_id, charges, payment_method, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ", [$expenseDate, $finalCategory, $description, $amount, $accountId, $charges, $paymentMethod, $notes]);
+            INSERT INTO expenses (expense_date, category, description, amount, account_id, charges, payment_method, notes, branch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ", [$expenseDate, $finalCategory, $description, $amount, $accountId, $charges, $paymentMethod, $notes, activeBranchId()]);
 
         $expenseId = $db->lastInsertId();
 
@@ -174,9 +196,10 @@ function storeExpense($db)
     }
 }
 
-function deleteExpense($db, $id)
+function deleteExpense(Database $db, mixed $id)
 {
-    $expense = $db->fetchOne("SELECT * FROM expenses WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $expense = $db->fetchOne("SELECT * FROM expenses WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$expense) {
         redirect(BASE_URL . '/expenses', 'error', 'Expense not found.');
     }

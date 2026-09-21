@@ -6,6 +6,9 @@
         <h1 class="text-2xl font-bold text-gray-800">📦 Stock Valuation Report</h1>
         <p class="text-gray-500 text-sm mt-1">
             Current inventory value and analysis
+            <?php if ($viewingScopeLabel ?? null): ?>
+                — showing <strong><?= e($viewingScopeLabel) ?></strong>
+            <?php endif; ?>
         </p>
     </div>
     <div class="flex gap-2">

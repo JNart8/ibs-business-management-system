@@ -20,6 +20,9 @@
                 <th class="px-5 py-3 text-left   text-xs font-medium text-gray-500 uppercase">User</th>
                 <th class="px-5 py-3 text-left   text-xs font-medium text-gray-500 uppercase">Username</th>
                 <th class="px-5 py-3 text-center text-xs font-medium text-gray-500 uppercase">Role</th>
+                <?php if (hasMultiBranch()): ?>
+                <th class="px-5 py-3 text-center text-xs font-medium text-gray-500 uppercase">Branch</th>
+                <?php endif; ?>
                 <th class="px-5 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
                 <th class="px-5 py-3 text-center text-xs font-medium text-gray-500 uppercase">Last Login</th>
                 <th class="px-5 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
@@ -81,6 +84,17 @@
                                 <?= e($roleDisplayName) ?>
                             </span>
                         </td>
+
+                        <?php if (hasMultiBranch()): ?>
+                        <!-- Branch -->
+                        <td class="px-5 py-4 text-center text-xs">
+                            <?php if (($u['branch_scope'] ?? 'assigned') === 'all'): ?>
+                                <span class="px-2.5 py-1 rounded-full font-semibold bg-indigo-100 text-indigo-700">🌐 Company-wide</span>
+                            <?php else: ?>
+                                <?= e(branchName($u['branch_id'])) ?>
+                            <?php endif; ?>
+                        </td>
+                        <?php endif; ?>
 
                         <!-- Status — shows locked if applicable, else active/inactive -->
                         <td class="px-5 py-4 text-center">

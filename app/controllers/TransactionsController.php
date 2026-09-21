@@ -14,6 +14,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse URL
@@ -31,7 +39,7 @@ switch ($action) {
 /**
  * List all customer transactions
  */
-function listTransactions($db)
+function listTransactions(Database $db)
 {
     // Get filter parameters
     $customerId = $_GET['customer'] ?? null;
@@ -72,6 +80,13 @@ function listTransactions($db)
     }
 
     $whereClause = implode(' AND ', $where);
+
+    // Branch visibility — the list, its count and the summary cards all
+    // reuse $whereClause/$params, so one scope covers all three. Customers
+    // stay shared across branches; it's the transaction's branch that's scoped.
+    [$scopeSql, $scopeParams] = branchScopeSql('ct');
+    $whereClause .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
 
     // Get transactions with pagination
     $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;

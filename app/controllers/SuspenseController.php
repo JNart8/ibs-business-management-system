@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse segments
@@ -56,7 +64,7 @@ switch ($action) {
 /**
  * List suspense transactions and show account overview
  */
-function listSuspense($db)
+function listSuspense(Database $db)
 {
     // Retrieve default suspense account details
     $suspenseAccount = $db->fetchOne("SELECT * FROM accounts WHERE is_suspense = 1 AND is_active = 1 LIMIT 1");
@@ -91,7 +99,8 @@ function listSuspense($db)
 
     // Fetch customers & active non-suspense accounts for the resolution modal
     $customers = $db->fetchAll("SELECT id, full_name, customer_code FROM customers WHERE is_active = 1 AND is_default = 0 ORDER BY full_name ASC");
-    $accounts = $db->fetchAll("SELECT id, name, type, provider FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
 
     $pageTitle = 'Suspense Account Manager';
     include APP_PATH . '/views/suspense/index.php';
@@ -100,7 +109,7 @@ function listSuspense($db)
 /**
  * Record a new unknown deposit in suspense
  */
-function storeSuspense($db)
+function storeSuspense(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suspense', 'error', 'Invalid form submission');
@@ -122,7 +131,8 @@ function storeSuspense($db)
         return;
     }
 
-    $financialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$accountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $financialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$financialAccount) {
         redirect(BASE_URL . '/suspense', 'error', 'Selected financial account not found or inactive.');
         return;
@@ -182,7 +192,7 @@ function storeSuspense($db)
 /**
  * Resolve a suspense transaction and allocate to customer and destination financial account
  */
-function resolveSuspense($db)
+function resolveSuspense(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suspense', 'error', 'Invalid form submission');
@@ -260,8 +270,8 @@ function resolveSuspense($db)
         $db->query("
             INSERT INTO customer_transactions
                 (customer_id, transaction_type, amount, balance_before,
-                 balance_after, reference_type, reference_id, payment_method, notes, user_id)
-            VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?)
+                 balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+            VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?, ?)
         ", [
             $customerId,
             $amount,
@@ -270,7 +280,8 @@ function resolveSuspense($db)
             $txId,
             $financialMethod,
             "Resolved suspense deposit (Ref: " . ($suspenseTx['reference_no'] ?: 'N/A') . ")",
-            $userId
+            $userId,
+            activeBranchId()
         ]);
 
         $db->query("UPDATE customers SET current_balance = current_balance + ? WHERE id = ?", [$amount, $customerId]);
@@ -278,7 +289,7 @@ function resolveSuspense($db)
         // D. Auto-apply deposit to outstanding sales (oldest first - FIFO)
         $remainingDeposit = $amount;
         $outstandingSales = $db->fetchAll("
-            SELECT id, sale_number, amount_due, amount_paid, total_amount
+            SELECT id, sale_number, amount_due, amount_paid, total_amount, branch_id
             FROM sales
             WHERE customer_id = ?
               AND payment_status IN ('unpaid', 'partial')
@@ -308,8 +319,8 @@ function resolveSuspense($db)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)
             ", [
                 $customerId,
                 -$paymentAmount,
@@ -317,7 +328,8 @@ function resolveSuspense($db)
                 $currentCustBalance,
                 $sale['id'],
                 "Auto-applied payment from resolved suspense deposit for sale " . $sale['sale_number'],
-                $userId
+                $userId,
+                $sale['branch_id'] ?? activeBranchId()
             ]);
 
             $remainingDeposit -= $paymentAmount;
@@ -334,7 +346,7 @@ function resolveSuspense($db)
 /**
  * Delete a suspense transaction and reverse all financial/customer impact
  */
-function deleteSuspense($db, $txId)
+function deleteSuspense(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM suspense_transactions WHERE id = ?", [$txId]);
     if (!$tx) {
@@ -397,7 +409,7 @@ function deleteSuspense($db, $txId)
 /**
  * Show edit suspense form
  */
-function showEditSuspenseForm($db, $txId)
+function showEditSuspenseForm(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM suspense_transactions WHERE id = ?", [$txId]);
     if (!$tx) {
@@ -405,7 +417,8 @@ function showEditSuspenseForm($db, $txId)
         return;
     }
 
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
     $pageTitle = 'Edit Suspense Transaction';
     include APP_PATH . '/views/suspense/edit.php';
 }
@@ -413,7 +426,7 @@ function showEditSuspenseForm($db, $txId)
 /**
  * Process updating a suspense transaction
  */
-function updateSuspense($db, $txId)
+function updateSuspense(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suspense', 'error', 'Invalid form submission');
@@ -436,7 +449,8 @@ function updateSuspense($db, $txId)
         return;
     }
 
-    $newFinancialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$newAccountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $newFinancialAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$newAccountId], $acctScopeParams));
     if (!$newFinancialAccount) {
         redirect(BASE_URL . '/suspense/edit/' . $txId, 'error', 'Selected financial account not found.');
         return;
@@ -536,8 +550,8 @@ function updateSuspense($db, $txId)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'deposit', ?, ?, ?, 'manual', ?, ?, ?, ?, ?)
             ", [
                 $customerId,
                 $newAmount,
@@ -546,7 +560,8 @@ function updateSuspense($db, $txId)
                 $txId,
                 $paymentMethod,
                 "Resolved suspense deposit (Ref: " . ($newReferenceNo ?: 'N/A') . ")",
-                $userId
+                $userId,
+                activeBranchId()
             ]);
 
             // Re-debit Suspense (withdrawing)

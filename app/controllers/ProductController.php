@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // ── Use $path already parsed by the router ────────────────────
@@ -39,6 +47,11 @@ switch ($action) {
         deleteProduct($db, $id);
         break;
 
+    case 'activate':
+        if (!$id) redirect(BASE_URL . '/products', 'error', 'Product ID required');
+        activateProduct($db, $id);
+        break;
+
     case 'search':
         searchProducts($db);
         break;
@@ -61,15 +74,23 @@ switch ($action) {
 /**
  * List all products with search and pagination
  */
-function listProducts($db)
+function listProducts(Database $db)
 {
     $search   = $_GET['search'] ?? '';
     $page     = max(1, (int)($_GET['page'] ?? 1));
     $perPage  = ITEMS_PER_PAGE;
     $offset   = ($page - 1) * $perPage;
+    $status   = $_GET['status'] ?? 'active';
+    if (!in_array($status, ['active', 'inactive', 'all'], true)) {
+        $status = 'active';
+    }
 
     $params = [];
-    $where  = "WHERE p.is_active = 1";
+    $where  = match ($status) {
+        'inactive' => "WHERE p.is_active = 0",
+        'all'      => "WHERE 1 = 1",
+        default    => "WHERE p.is_active = 1",
+    };
 
     if (!empty($search)) {
         $where   .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)";
@@ -99,7 +120,7 @@ function listProducts($db)
         SELECT
             p.id, p.sku, p.barcode, p.name,
             p.selling_price, p.cost_price, p.average_cost,
-            p.current_stock, p.reorder_level, p.unit,
+            p.current_stock, p.reorder_level, p.unit, p.is_active,
             c.name AS category_name,
             CASE
                 WHEN p.current_stock = 0              THEN 'out-of-stock'
@@ -130,7 +151,7 @@ function listProducts($db)
 /**
  * Show create product form
  */
-function showCreateForm($db)
+function showCreateForm(Database $db)
 {
     $categories = $db->fetchAll(
         "SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name ASC"
@@ -146,7 +167,7 @@ function showCreateForm($db)
 /**
  * Create a new product
  */
-function createProduct($db)
+function createProduct(Database $db)
 {
     // CSRF check
     if (($_POST['csrf_token'] ?? '') !== ($_SESSION['csrf_token'] ?? '')) {
@@ -187,7 +208,7 @@ function createProduct($db)
             INSERT INTO products
                 (sku, barcode, name, description, category_id, supplier_id,
                  cost_price, average_cost, selling_price, current_stock, reorder_level, unit)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
         ", [
             $sku,
             $barcode ?: null,
@@ -198,7 +219,6 @@ function createProduct($db)
             $cost_price,
             $cost_price,
             $selling_price,
-            $current_stock,
             $reorder_level,
             $unit
         ]);
@@ -206,12 +226,17 @@ function createProduct($db)
         $productId = $db->lastInsertId();
 
         if ($current_stock > 0) {
+            $branchId = activeBranchId();
+            // Seeds this branch's stock and keeps products.current_stock
+            // (the maintained total) in sync automatically.
+            setBranchStock($db, $productId, $branchId, $current_stock);
+
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     previous_stock, new_stock, notes, user_id)
-                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?)
-            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null]);
+                     previous_stock, new_stock, notes, user_id, branch_id)
+                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?, ?)
+            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null, $branchId]);
         }
 
         redirect(BASE_URL . '/products', 'success', 'Product created successfully');
@@ -224,7 +249,7 @@ function createProduct($db)
 /**
  * Show edit product form
  */
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$id]);
     if (!$product) redirect(BASE_URL . '/products', 'error', 'Product not found');
@@ -243,7 +268,7 @@ function showEditForm($db, $id)
 /**
  * Update a product
  */
-function updateProduct($db, $id)
+function updateProduct(Database $db, mixed $id)
 {
     if (($_POST['csrf_token'] ?? '') !== ($_SESSION['csrf_token'] ?? '')) {
         redirect(BASE_URL . '/products/edit/' . $id, 'error', 'Invalid form submission');
@@ -304,6 +329,25 @@ function updateProduct($db, $id)
             $id
         ]);
 
+        // High-risk alert: only a big selling-price *drop* in one edit —
+        // routine repricing/promotions happen far too often to flag every
+        // change without burying the signal, but a 30%+ drop is big enough
+        // to filter those out while still catching a fat-fingered price or
+        // someone deliberately undercharging. Increases and cost-price
+        // changes aren't flagged — they're not that failure mode.
+        $oldSellingPrice = floatval($product['selling_price']);
+        if ($oldSellingPrice > 0 && $selling_price < $oldSellingPrice) {
+            $dropPct = (($oldSellingPrice - $selling_price) / $oldSellingPrice) * 100;
+            if ($dropPct >= 30) {
+                logAudit('product.price_change', 'product', $id, [
+                    'name'      => $name,
+                    'old_price' => $oldSellingPrice,
+                    'new_price' => $selling_price,
+                    'drop_pct'  => round($dropPct, 1),
+                ]);
+            }
+        }
+
         redirect(BASE_URL . '/products', 'success', 'Product updated successfully');
     } catch (Exception $e) {
         error_log('Error updating product: ' . $e->getMessage());
@@ -314,7 +358,7 @@ function updateProduct($db, $id)
 /**
  * Delete or deactivate a product
  */
-function deleteProduct($db, $id)
+function deleteProduct(Database $db, mixed $id)
 {
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$id]);
     if (!$product) redirect(BASE_URL . '/products', 'error', 'Product not found');
@@ -336,9 +380,30 @@ function deleteProduct($db, $id)
 }
 
 /**
+ * Restore a product that was deactivated because it has sales history.
+ */
+function activateProduct(Database $db, mixed $id)
+{
+    if (($_POST['csrf_token'] ?? '') !== ($_SESSION['csrf_token'] ?? '')) {
+        redirect(BASE_URL . '/products?status=inactive', 'error', 'Invalid form submission');
+    }
+
+    $product = $db->fetchOne("SELECT id, name, is_active FROM products WHERE id = ?", [$id]);
+    if (!$product) redirect(BASE_URL . '/products?status=inactive', 'error', 'Product not found');
+
+    if ($product['is_active']) {
+        redirect(BASE_URL . '/products', 'success', 'Product is already active');
+    }
+
+    $db->query("UPDATE products SET is_active = 1 WHERE id = ?", [$id]);
+    logAudit('product.activate', 'product', $id, ['name' => $product['name']]);
+    redirect(BASE_URL . '/products', 'success', 'Product reactivated successfully');
+}
+
+/**
  * Show product details
  */
-function viewProduct($db, $id)
+function viewProduct(Database $db, mixed $id)
 {
     // Get product details with category and supplier
     $product = $db->fetchOne("
@@ -364,12 +429,15 @@ function viewProduct($db, $id)
         ? (($product['selling_price'] - $product['average_cost']) / $product['selling_price']) * 100
         : 0;
 
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
     // Get sales summary
     $salesSummary = $db->fetchOne("
         SELECT 
             COUNT(DISTINCT si.sale_id) as total_sales,
             COALESCE(SUM(si.quantity), 0) as units_sold,
-            COALESCE(SUM(si.line_total), 0) as revenue_generated,
+            COALESCE(SUM({$netLine}), 0) as revenue_generated,
             MAX(s.sale_date) as last_sale
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
@@ -440,7 +508,7 @@ function viewProduct($db, $id)
 /**
  * Search products — JSON endpoint used by POS
  */
-function searchProducts($db)
+function searchProducts(Database $db)
 {
     header('Content-Type: application/json');
 
@@ -451,13 +519,31 @@ function searchProducts($db)
     // Default (POS) only returns products that actually have stock to sell
     $includeEmpty = isset($_GET['all']) && $_GET['all'] == '1';
 
-    $params = [];
-    $where  = $includeEmpty
-        ? "WHERE is_active = 1"
-        : "WHERE is_active = 1 AND current_stock > 0";
+    // current_stock here means "at the target branch", not the company-wide
+    // total — a cashier at Branch 2 must only see/sell what's actually on
+    // Branch 2's shelf. The alias keeps the JSON key name unchanged, so
+    // every existing consumer of this endpoint (POS, stock-in/out,
+    // purchases, distributor) needs no changes on the JS side.
+    //
+    // Normally this is just the requester's active branch, but transfers
+    // need to see stock at an arbitrary *source* branch that isn't
+    // necessarily their active one — ?branch_id= allows that override,
+    // restricted to branches the requester can actually access (company-wide,
+    // or one they're assigned to), so this can't be used to snoop another
+    // branch's stock levels.
+    $requestedBranchId = isset($_GET['branch_id']) ? (int) $_GET['branch_id'] : null;
+    if ($requestedBranchId && (isCompanyWide() || in_array($requestedBranchId, array_column(userBranches($_SESSION['user_id']), 'id'), true))) {
+        $branchId = $requestedBranchId;
+    } else {
+        $branchId = activeBranchId();
+    }
+    $params   = [$branchId];
+    $where    = $includeEmpty
+        ? "WHERE p.is_active = 1"
+        : "WHERE p.is_active = 1 AND COALESCE(bs.quantity, 0) > 0";
 
     if (!empty($query)) {
-        $where   .= " AND (sku LIKE ? OR barcode = ? OR name LIKE ?)";
+        $where   .= " AND (p.sku LIKE ? OR p.barcode = ? OR p.name LIKE ?)";
         $t        = "%{$query}%";
         $params[] = $t;
         $params[] = $query;
@@ -465,15 +551,17 @@ function searchProducts($db)
     }
 
     if ($catId > 0) {
-        $where   .= " AND category_id = ?";
+        $where   .= " AND p.category_id = ?";
         $params[] = $catId;
     }
 
     $products = $db->fetchAll("
-        SELECT id, sku, barcode, name, selling_price, current_stock, unit, cost_price
-        FROM products
+        SELECT p.id, p.sku, p.barcode, p.name, p.selling_price, p.unit, p.cost_price,
+               COALESCE(bs.quantity, 0) AS current_stock
+        FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where
-        ORDER BY name ASC
+        ORDER BY p.name ASC
         LIMIT 20
     ", $params);
 

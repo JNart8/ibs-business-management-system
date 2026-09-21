@@ -9,6 +9,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse URL
@@ -24,10 +32,12 @@ if (!in_array($type, [
     'sales',
     'transactions',
     'account-ledger',
+    'audit-log',
     'stocks',
     'stock-valuation',
     'receivables',
     'payables',
+    'customer-credit-settlement',
     'sales-report',
     'profit-loss',
     'top-selling',
@@ -47,10 +57,13 @@ if (!in_array($type, [
 // reach the ledger through the UI but could previously still hit
 // /export/account-ledger directly. Report exports (sales-report,
 // stock-valuation, receivables, payables, profit-loss, top-selling,
-// low-stock, dead-stock, profit-margin) and 'sales' intentionally have
-// no entry here — their source pages (/reports/*, /sales) have never
-// required a permission either, so this preserves that behavior rather
-// than introducing a new restriction nobody asked for.
+// low-stock, dead-stock, profit-margin) intentionally have no entry
+// here — their source pages (/reports/*) have never required a
+// permission, so this preserves that behavior rather than introducing
+// a new restriction nobody asked for. 'sales' used to be in the same
+// boat (/sales had no permission of its own), but ARCHITECTURE.md
+// §5.11 closed that gap by gating /sales behind sales.access — this
+// map was out of sync with that until now.
 $exportPermissionMap = [
     'categories'      => 'categories.manage',
     'products'        => 'products.manage',
@@ -59,6 +72,8 @@ $exportPermissionMap = [
     'transactions'    => 'transactions.manage',
     'account-ledger'  => 'financial_accounts.access',
     'stocks'          => 'stock.manage',
+    'audit-log'       => 'audit.view',
+    'sales'           => 'sales.access',
 ];
 
 if (isset($exportPermissionMap[$type]) && !can($exportPermissionMap[$type])) {
@@ -72,7 +87,7 @@ exportData($db, $type);
 /**
  * Export data to CSV
  */
-function exportData($db, $type)
+function exportData(Database $db, mixed $type)
 {
     // Set headers for download
     $filename = $type . '_export_' . date('Y-m-d_His') . '.csv';
@@ -109,6 +124,9 @@ function exportData($db, $type)
         case 'account-ledger':
             exportAccountLedger($db, $output);
             break;
+        case 'audit-log':
+            exportAuditLog($db, $output);
+            break;
         case 'stocks':
             exportStocks($db, $output);
             break;
@@ -120,6 +138,9 @@ function exportData($db, $type)
             break;
         case 'payables':
             exportPayables($db, $output);
+            break;
+        case 'customer-credit-settlement':
+            exportCustomerCreditSettlement($db, $output);
             break;
         case 'sales-report':
             exportSalesReport($db, $output);
@@ -149,7 +170,7 @@ function exportData($db, $type)
 /**
  * Export categories
  */
-function exportCategories($db, $output)
+function exportCategories(Database $db, mixed $output)
 {
     // Write headers (same as import template)
     fputcsv($output, ['name']);
@@ -173,7 +194,7 @@ function exportCategories($db, $output)
 /**
  * Export products
  */
-function exportProducts($db, $output)
+function exportProducts(Database $db, mixed $output)
 {
     // Write headers (same as import template)
     fputcsv($output, [
@@ -229,7 +250,7 @@ function exportProducts($db, $output)
 /**
  * Export suppliers
  */
-function exportSuppliers($db, $output)
+function exportSuppliers(Database $db, mixed $output)
 {
     // Write headers (same as import template)
     fputcsv($output, [
@@ -268,7 +289,7 @@ function exportSuppliers($db, $output)
 /**
  * Export customers
  */
-function exportCustomers($db, $output)
+function exportCustomers(Database $db, mixed $output)
 {
     // Write headers
     fputcsv($output, [
@@ -332,7 +353,7 @@ function exportCustomers($db, $output)
 /**
  * Export sales with line items - WITH FILTER SUPPORT
  */
-function exportSales($db, $output)
+function exportSales(Database $db, mixed $output)
 {
     // Get filters from URL (same as sales list page)
     $search   = trim($_GET['search'] ?? '');
@@ -343,6 +364,11 @@ function exportSales($db, $output)
     // Build WHERE clause
     $params = [];
     $where  = "WHERE 1=1";
+
+    // Branch visibility — same rule as the on-screen sales list this mirrors.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    $where .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
 
     // Search filter
     if (!empty($search)) {
@@ -395,12 +421,18 @@ function exportSales($db, $output)
         'payment_method',
         'payment_status',
         'notes',
-        'sold_by'
+        'sold_by',
+        'net_line_total'
     ]);
+
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
 
     // Fetch sales with items (FILTERED)
     $salesItems = $db->fetchAll("
-        SELECT 
+        SELECT
+            s.id AS sale_id,
+            {$netLine} AS net_line_total,
             s.sale_number,
             s.sale_date,
             c.full_name as customer_name,
@@ -432,8 +464,22 @@ function exportSales($db, $output)
         ORDER BY s.sale_date DESC, s.id, si.id
     ", $params);
 
-    // Write data rows
+    // Write data rows. One row per line item, so the sale-level MONEY columns
+    // (subtotal, discount, total, paid, due) are written on a sale's first row
+    // only — repeating them would multiply the sale by its number of lines
+    // when the column is summed. Descriptive columns still repeat on every row
+    // so the file stays filterable by customer, payment method, etc.
+    $seenSales = [];
+    $netRevenue = 0.0;
     foreach ($salesItems as $item) {
+        $first = !isset($seenSales[$item['sale_id']]);
+        $seenSales[$item['sale_id']] = true;
+        $isVoided = str_contains($item['notes'] ?? '', '[VOIDED]');
+        if ($first && !$isVoided) {
+            $netRevenue += (float)$item['sale_total'];
+        }
+        $money = fn($v) => $first ? number_format($v, 2, '.', '') : '';
+
         fputcsv($output, [
             $item['sale_number'],
             $item['sale_date'],
@@ -446,17 +492,18 @@ function exportSales($db, $output)
             $item['discount_percent'],
             number_format($item['item_discount_amount'], 2, '.', ''),
             number_format($item['line_total'], 2, '.', ''),
-            number_format($item['sale_subtotal'], 2, '.', ''),
+            $money($item['sale_subtotal']),
             $item['sale_discount_type'],
             $item['sale_discount_percent'],
-            number_format($item['sale_discount_amount'], 2, '.', ''),
-            number_format($item['sale_total'], 2, '.', ''),
-            number_format($item['amount_paid'], 2, '.', ''),
-            number_format($item['amount_due'], 2, '.', ''),
+            $money($item['sale_discount_amount']),
+            $money($item['sale_total']),
+            $money($item['amount_paid']),
+            $money($item['amount_due']),
             $item['payment_method'],
             $item['payment_status'],
             $item['notes'] ?? '',
-            $item['sold_by']
+            $item['sold_by'],
+            number_format($item['net_line_total'], 2, '.', '')
         ]);
     }
 
@@ -465,6 +512,8 @@ function exportSales($db, $output)
     fputcsv($output, ['=== EXPORT SUMMARY ===']);
     fputcsv($output, ['Export Date:', date('Y-m-d H:i:s')]);
     fputcsv($output, ['Total Records:', count($salesItems)]);
+    fputcsv($output, ['Total Sales:', count($seenSales)]);
+    fputcsv($output, ['Net Revenue (excl. voided):', number_format($netRevenue, 2, '.', '')]);
 
     // Add filter info if filters were applied
     if (!empty($search) || !empty($status) || !empty($dateFrom) || !empty($dateTo)) {
@@ -488,7 +537,7 @@ function exportSales($db, $output)
 /**
  * Export customer transactions (deposits/payments/credits)
  */
-function exportTransactions($db, $output)
+function exportTransactions(Database $db, mixed $output)
 {
     // Get all filter parameters from URL (same as index page)
     $search     = trim($_GET['search'] ?? '');
@@ -534,6 +583,11 @@ function exportTransactions($db, $output)
         $whereClause .= " AND DATE(ct.created_at) <= ?";
         $params[] = $dateTo;
     }
+
+    // Branch visibility — same rule as the on-screen transactions list.
+    [$scopeSql, $scopeParams] = branchScopeSql('ct');
+    $whereClause .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
 
     // Write headers
     fputcsv($output, [
@@ -626,10 +680,11 @@ function exportTransactions($db, $output)
  * using the same shared buildLedgerWhere() helper, so the export can
  * never drift from what the user is actually looking at.
  */
-function exportAccountLedger($db, $output)
+function exportAccountLedger(Database $db, mixed $output)
 {
     $accountId = intval($_GET['account_id'] ?? 0);
-    $account = $accountId ? $db->fetchOne("SELECT * FROM accounts WHERE id = ?", [$accountId]) : null;
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $account = $accountId ? $db->fetchOne("SELECT * FROM accounts WHERE id = ? $acctScopeSql", array_merge([$accountId], $acctScopeParams)) : null;
 
     if (!$account) {
         fputcsv($output, ['Error: account not found or account_id missing.']);
@@ -701,9 +756,92 @@ function exportAccountLedger($db, $output)
 }
 
 /**
+ * Export the audit log — filtered the same way the on-screen viewer
+ * is (same query shape as AuditController::listAuditLog()), including
+ * the same optional UNION with audit_log_archive.
+ */
+function exportAuditLog(Database $db, mixed $output)
+{
+    $userId          = $_GET['user_id'] ?? '';
+    $action          = $_GET['action'] ?? '';
+    $entityType      = $_GET['entity_type'] ?? '';
+    $dateFrom        = $_GET['date_from'] ?? '';
+    $dateTo          = $_GET['date_to'] ?? '';
+    $includeArchived = isset($_GET['include_archived']);
+
+    $source = $includeArchived
+        ? "FROM (
+              SELECT id, user_id, username, action, entity_type, entity_id, branch_id, details, ip_address, created_at FROM audit_log
+              UNION ALL
+              SELECT id, user_id, username, action, entity_type, entity_id, branch_id, details, ip_address, created_at FROM audit_log_archive
+           ) combined"
+        : "FROM audit_log";
+
+    $where  = "WHERE 1=1";
+    $params = [];
+
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $where .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
+    if (!empty($userId)) {
+        $where .= " AND user_id = ?";
+        $params[] = $userId;
+    }
+    if (!empty($action)) {
+        $where .= " AND action = ?";
+        $params[] = $action;
+    }
+    if (!empty($entityType)) {
+        $where .= " AND entity_type = ?";
+        $params[] = $entityType;
+    }
+    if (!empty($dateFrom)) {
+        $where .= " AND DATE(created_at) >= ?";
+        $params[] = $dateFrom;
+    }
+    if (!empty($dateTo)) {
+        $where .= " AND DATE(created_at) <= ?";
+        $params[] = $dateTo;
+    }
+
+    $entries = $db->fetchAll("
+        SELECT *
+        $source
+        $where
+        ORDER BY created_at DESC
+    ", $params);
+
+    fputcsv($output, ['date_time', 'user', 'action', 'entity_type', 'entity_id', 'branch', 'details', 'ip_address']);
+
+    foreach ($entries as $entry) {
+        $details = $entry['details'] ? json_decode($entry['details'], true) : null;
+        fputcsv($output, [
+            $entry['created_at'],
+            $entry['username'] ?? 'System',
+            $entry['action'],
+            $entry['entity_type'] ?? '',
+            $entry['entity_id'] ?? '',
+            $entry['branch_id'] ? branchName($entry['branch_id']) : 'Company-wide',
+            $details ? json_encode($details) : '',
+            $entry['ip_address'] ?? '',
+        ]);
+    }
+
+    fputcsv($output, []);
+    fputcsv($output, ['=== EXPORT SUMMARY ===']);
+    fputcsv($output, ['Total Records:', count($entries)]);
+    fputcsv($output, ['Includes Archived:', $includeArchived ? 'Yes' : 'No']);
+    fputcsv($output, ['Export Date:', date('Y-m-d H:i:s')]);
+    if (hasMultiBranch() && !isCompanyWide()) {
+        fputcsv($output, ['Note:', 'Partial view — showing ' . activeBranchName() . ' only.']);
+    }
+}
+
+/**
  * Export Stock Valuation Report
  */
-function exportStockValuation($db, $output)
+function exportStockValuation(Database $db, mixed $output)
 {
     // Get filters from URL
     $category = $_GET['category'] ?? '';
@@ -723,15 +861,21 @@ function exportStockValuation($db, $output)
         $where .= " AND p.supplier_id = ?";
         $params[] = $supplier;
     }
-    if ($lowStock === '1') {
-        $where .= " AND p.current_stock <= p.reorder_level";
-    }
+
+    // Same as the on-screen report: this must be HAVING (post-aggregation),
+    // not WHERE, since stock is now summed across potentially several
+    // visible branches per product.
+    $havingLowStock = ($lowStock === '1') ? "HAVING COALESCE(SUM(bs.quantity), 0) <= p.reorder_level" : "";
 
     $orderBy = match ($sortBy) {
         'value_asc' => 'stock_value ASC',
         'name' => 'p.name ASC',
         default => 'stock_value DESC'
     };
+
+    // Branch visibility — matches the on-screen report exactly (all
+    // branches for company-wide, just their own for branch-scoped).
+    [$scopeSql, $scopeParams] = branchScopeSql('bs');
 
     // Fetch data
     $products = $db->fetchAll("
@@ -741,11 +885,11 @@ function exportStockValuation($db, $output)
             p.unit,
             c.name AS category_name,
             s.company_name AS supplier_name,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.average_cost,
-            (p.current_stock * p.average_cost) AS stock_value,
+            (COALESCE(SUM(bs.quantity), 0) * p.average_cost) AS stock_value,
             p.selling_price,
-            ((p.selling_price - p.average_cost) * p.current_stock) AS potential_profit,
+            ((p.selling_price - p.average_cost) * COALESCE(SUM(bs.quantity), 0)) AS potential_profit,
             CASE WHEN p.average_cost > 0 
                 THEN ROUND(((p.selling_price - p.average_cost) / p.average_cost) * 100, 2)
                 ELSE 0 
@@ -755,9 +899,13 @@ function exportStockValuation($db, $output)
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN suppliers s ON p.supplier_id = s.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
+        GROUP BY p.id, p.name, p.sku, p.unit, c.name, s.company_name,
+                 p.average_cost, p.selling_price, p.reorder_level, p.last_purchase_date
+        $havingLowStock
         ORDER BY $orderBy
-    ", $params);
+    ", array_merge($scopeParams, $params));
 
     // Calculate totals
     $totalValue = array_sum(array_column($products, 'stock_value'));
@@ -826,6 +974,11 @@ function exportStockValuation($db, $output)
         ''
     ]);
 
+    if (hasMultiBranch()) {
+        fputcsv($output, []);
+        fputcsv($output, ['Scope:', isCompanyWide() ? 'All Branches' : activeBranchName()]);
+    }
+
     // Summary info
     fputcsv($output, []);
     fputcsv($output, ['Report Generated:', date('Y-m-d H:i:s')]);
@@ -836,29 +989,35 @@ function exportStockValuation($db, $output)
 /**
  * Export Outstanding Receivables Report
  */
-function exportReceivables($db, $output)
+function exportReceivables(Database $db, mixed $output)
 {
     // Get filters
     $aging = $_GET['aging'] ?? '';
     $sortBy = $_GET['sort_by'] ?? 'amount_desc';
 
-    // Build query
-    $where = "WHERE c.is_active = 1 AND c.is_default = 0 AND c.current_balance < 0";
+    // amount_owed is summed from branch-scoped unpaid sales, not read from
+    // customers.current_balance — same reasoning as receivablesReport()
+    // in ReportsController.php: customers are shared company-wide, so a
+    // branch-scoped user's export must show the same partial figure the
+    // screen shows them, not the full company-wide balance.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+
+    $where = "WHERE c.is_active = 1 AND c.is_default = 0";
     $params = [];
 
     if (!empty($aging)) {
         switch ($aging) {
             case 'current':
-                $where .= " AND DATEDIFF(CURDATE(), s.oldest_debt_date) <= 30";
+                $where .= " AND DATEDIFF(CURDATE(), agg.oldest_debt_date) <= 30";
                 break;
             case 'overdue_30':
-                $where .= " AND DATEDIFF(CURDATE(), s.oldest_debt_date) BETWEEN 31 AND 60";
+                $where .= " AND DATEDIFF(CURDATE(), agg.oldest_debt_date) BETWEEN 31 AND 60";
                 break;
             case 'overdue_60':
-                $where .= " AND DATEDIFF(CURDATE(), s.oldest_debt_date) BETWEEN 61 AND 90";
+                $where .= " AND DATEDIFF(CURDATE(), agg.oldest_debt_date) BETWEEN 61 AND 90";
                 break;
             case 'overdue_90':
-                $where .= " AND DATEDIFF(CURDATE(), s.oldest_debt_date) > 90";
+                $where .= " AND DATEDIFF(CURDATE(), agg.oldest_debt_date) > 90";
                 break;
         }
     }
@@ -876,21 +1035,28 @@ function exportReceivables($db, $output)
             c.full_name,
             c.phone,
             c.email,
-            ABS(c.current_balance) AS amount_owed,
+            COALESCE(agg.amount_owed, 0) AS amount_owed,
             c.credit_limit,
-            (SELECT COUNT(*) FROM sales WHERE customer_id = c.id AND payment_status IN ('unpaid', 'partial')) AS unpaid_invoices,
-            (SELECT MIN(DATE(sale_date)) FROM sales WHERE customer_id = c.id AND payment_status IN ('unpaid', 'partial')) AS oldest_debt_date,
-            DATEDIFF(CURDATE(), (SELECT MIN(DATE(sale_date)) FROM sales WHERE customer_id = c.id AND payment_status IN ('unpaid', 'partial'))) AS days_outstanding
+            COALESCE(agg.unpaid_invoices, 0) AS unpaid_invoices,
+            agg.oldest_debt_date,
+            DATEDIFF(CURDATE(), agg.oldest_debt_date) AS days_outstanding
         FROM customers c
-        LEFT JOIN (
-            SELECT customer_id, MIN(sale_date) AS oldest_debt_date
-            FROM sales
-            WHERE payment_status IN ('unpaid', 'partial')
-            GROUP BY customer_id
-        ) s ON c.id = s.customer_id
+        INNER JOIN (
+            SELECT
+                s.customer_id,
+                SUM(s.total_amount - COALESCE(s.amount_paid, 0)) AS amount_owed,
+                COUNT(*) AS unpaid_invoices,
+                MIN(s.sale_date) AS oldest_debt_date
+            FROM sales s
+            WHERE s.payment_status IN ('unpaid', 'partial')
+              AND (s.total_amount - COALESCE(s.amount_paid, 0)) > 0.01
+              AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+              $scopeSql
+            GROUP BY s.customer_id
+        ) agg ON c.id = agg.customer_id
         $where
         ORDER BY $orderBy
-    ", $params);
+    ", array_merge($scopeParams, $params));
 
     // Calculate total
     $totalOwed = array_sum(array_column($customers, 'amount_owed'));
@@ -963,6 +1129,12 @@ function exportReceivables($db, $output)
         ''
     ]);
 
+    if (hasMultiBranch() && !isCompanyWide()) {
+        fputcsv($output, []);
+        fputcsv($output, ['Note: partial view — showing ' . activeBranchName() . ' only.']);
+        fputcsv($output, ['Customer balances are shared company-wide; these totals reflect only what was invoiced at this branch.']);
+    }
+
     // Summary
     fputcsv($output, []);
     fputcsv($output, ['Report Generated:', date('Y-m-d H:i:s')]);
@@ -973,7 +1145,7 @@ function exportReceivables($db, $output)
 /**
  * Export Outstanding Payables Report
  */
-function exportPayables($db, $output)
+function exportPayables(Database $db, mixed $output)
 {
     // Get filters
     $sortBy = $_GET['sort_by'] ?? 'amount_desc';
@@ -985,6 +1157,11 @@ function exportPayables($db, $output)
         default => 'amount_owed DESC'
     };
 
+    // amount_owed is summed from branch-scoped unpaid purchases, not read
+    // from suppliers.current_balance — matches payablesReport() and the
+    // same reasoning as exportReceivables() above.
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+
     // Fetch suppliers
     $suppliers = $db->fetchAll("
         SELECT
@@ -992,14 +1169,27 @@ function exportPayables($db, $output)
             s.contact_name,
             s.phone,
             s.email,
-            ABS(s.current_balance) AS amount_owed,
-            (SELECT COUNT(*) FROM purchases WHERE supplier_id = s.id AND payment_status IN ('unpaid', 'partial')) AS unpaid_invoices,
-            (SELECT MIN(DATE(purchase_date)) FROM purchases WHERE supplier_id = s.id AND payment_status IN ('unpaid', 'partial')) AS oldest_debt_date,
-            DATEDIFF(CURDATE(), (SELECT MIN(DATE(purchase_date)) FROM purchases WHERE supplier_id = s.id AND payment_status IN ('unpaid', 'partial'))) AS days_outstanding
+            (
+                SELECT COALESCE(SUM(amount_due), 0) FROM purchases
+                WHERE supplier_id = s.id AND payment_status IN ('unpaid', 'partial') $scopeSql
+            ) AS amount_owed,
+            (
+                SELECT COUNT(*) FROM purchases
+                WHERE supplier_id = s.id AND payment_status IN ('unpaid', 'partial') $scopeSql
+            ) AS unpaid_invoices,
+            (
+                SELECT MIN(DATE(purchase_date)) FROM purchases
+                WHERE supplier_id = s.id AND payment_status IN ('unpaid', 'partial') $scopeSql
+            ) AS oldest_debt_date,
+            DATEDIFF(CURDATE(), (
+                SELECT MIN(DATE(purchase_date)) FROM purchases
+                WHERE supplier_id = s.id AND payment_status IN ('unpaid', 'partial') $scopeSql
+            )) AS days_outstanding
         FROM suppliers s
-        WHERE s.is_active = 1 AND s.current_balance < 0
+        WHERE s.is_active = 1
+        HAVING amount_owed > 0.01
         ORDER BY $orderBy
-    ");
+    ", array_merge($scopeParams, $scopeParams, $scopeParams, $scopeParams));
 
     // Total
     $totalOwed = array_sum(array_column($suppliers, 'amount_owed'));
@@ -1067,6 +1257,12 @@ function exportPayables($db, $output)
         ''
     ]);
 
+    if (hasMultiBranch() && !isCompanyWide()) {
+        fputcsv($output, []);
+        fputcsv($output, ['Note: partial view — showing ' . activeBranchName() . ' only.']);
+        fputcsv($output, ['Supplier balances are shared company-wide; these totals reflect only what was purchased at this branch.']);
+    }
+
     // Summary
     fputcsv($output, []);
     fputcsv($output, ['Report Generated:', date('Y-m-d H:i:s')]);
@@ -1075,9 +1271,102 @@ function exportPayables($db, $output)
 }
 
 /**
+ * Export Customer Credit Settlement Report (Phase 3d) — recomputes
+ * the exact same two queries as customerCreditSettlementReport() in
+ * ReportsController.php, so the export can never drift from the screen.
+ */
+function exportCustomerCreditSettlement(Database $db, mixed $output)
+{
+    $period   = $_GET['period']    ?? 'this_month';
+    $dateFrom = $_GET['date_from'] ?? '';
+    $dateTo   = $_GET['date_to']   ?? '';
+
+    $dates    = calculateDateRangeForExport($period, $dateFrom, $dateTo);
+    $dateFrom = $dates['from'];
+    $dateTo   = $dates['to'];
+
+    [$issuedScopeSql, $issuedScopeParams] = branchScopeSql('ct');
+    $issuedRows = $db->fetchAll("
+        SELECT ct.branch_id, SUM(ct.amount) AS issued
+        FROM customer_transactions ct
+        WHERE ct.transaction_type = 'deposit'
+            AND ct.branch_id IS NOT NULL
+            AND DATE(ct.created_at) BETWEEN ? AND ?
+            $issuedScopeSql
+        GROUP BY ct.branch_id
+    ", array_merge([$dateFrom, $dateTo], $issuedScopeParams));
+
+    [$redeemedScopeSql, $redeemedScopeParams] = branchScopeSql('s');
+    $redeemedRows = $db->fetchAll("
+        SELECT s.branch_id, SUM(s.amount_paid) AS redeemed
+        FROM sales s
+        WHERE s.payment_method = 'deposit'
+            AND DATE(s.sale_date) BETWEEN ? AND ?
+            AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+            $redeemedScopeSql
+        GROUP BY s.branch_id
+    ", array_merge([$dateFrom, $dateTo], $redeemedScopeParams));
+
+    $branches = [];
+    foreach ($issuedRows as $row) {
+        $branches[$row['branch_id']]['issued'] = (float) $row['issued'];
+    }
+    foreach ($redeemedRows as $row) {
+        $branches[$row['branch_id']]['redeemed'] = (float) $row['redeemed'];
+    }
+
+    $rows = [];
+    foreach ($branches as $branchId => $amounts) {
+        $issued   = $amounts['issued']   ?? 0.0;
+        $redeemed = $amounts['redeemed'] ?? 0.0;
+        $rows[] = [
+            'branch_name' => branchName($branchId),
+            'issued'      => $issued,
+            'redeemed'    => $redeemed,
+            'net'         => $issued - $redeemed,
+        ];
+    }
+    usort($rows, fn($a, $b) => strcmp($a['branch_name'], $b['branch_name']));
+
+    fputcsv($output, [
+        'Branch',
+        'Deposits Issued (' . CURRENCY_HOLDER . ')',
+        'Credit Redeemed (' . CURRENCY_HOLDER . ')',
+        'Net Position (' . CURRENCY_HOLDER . ')',
+    ]);
+
+    foreach ($rows as $row) {
+        fputcsv($output, [
+            $row['branch_name'],
+            number_format($row['issued'], 2, '.', ''),
+            number_format($row['redeemed'], 2, '.', ''),
+            number_format($row['net'], 2, '.', ''),
+        ]);
+    }
+
+    fputcsv($output, [
+        'TOTAL',
+        number_format(array_sum(array_column($rows, 'issued')), 2, '.', ''),
+        number_format(array_sum(array_column($rows, 'redeemed')), 2, '.', ''),
+        number_format(array_sum(array_column($rows, 'net')), 2, '.', ''),
+    ]);
+
+    if (hasMultiBranch() && !isCompanyWide()) {
+        fputcsv($output, []);
+        fputcsv($output, ['Note: partial view — showing ' . activeBranchName() . ' only.']);
+        fputcsv($output, ['This report is inherently about cross-branch imbalance; a branch-scoped export can only show this branch\'s side of it.']);
+    }
+
+    fputcsv($output, []);
+    fputcsv($output, ['Report Period:', $dateFrom . ' to ' . $dateTo]);
+    fputcsv($output, ['Report Generated:', date('Y-m-d H:i:s')]);
+    fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
+}
+
+/**
  * Export Sales Report
  */
-function exportSalesReport($db, $output)
+function exportSalesReport(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1090,9 +1379,13 @@ function exportSalesReport($db, $output)
     $dateTo = $dates['to'];
 
     // Fetch one row per sold item. Sale fields intentionally repeat for Excel analysis.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
     $salesItems = $db->fetchAll("
         SELECT
             s.id AS sale_id,
+            {$netLine} AS net_line_total,
             s.sale_number,
             s.sale_date,
             c.full_name AS customer_name,
@@ -1121,8 +1414,10 @@ function exportSalesReport($db, $output)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        $scopeSql
         ORDER BY s.sale_date DESC, s.id, si.id
-    ", [$dateFrom, $dateTo]);
+    ", array_merge([$dateFrom, $dateTo], $scopeParams));
 
     // Headers
     fputcsv($output, [
@@ -1148,16 +1443,23 @@ function exportSalesReport($db, $output)
         'Status',
         'Paid (' . CURRENCY_HOLDER . ')',
         'Due (' . CURRENCY_HOLDER . ')',
-        'Notes'
+        'Notes',
+        'Net Line Total (' . CURRENCY_HOLDER . ')'
     ]);
 
-    // Data
+    // Data. One row per line item: the sale-level MONEY columns (subtotal,
+    // discount, total, paid, due) go on a sale's first row only, so summing a
+    // column never multiplies a sale by its line count. Descriptive columns
+    // repeat so the file stays filterable.
     $total = 0;
     $totalPaid = 0;
     $totalDue = 0;
+    $totalNetLines = 0;
 
     $uniqueSales = [];
     foreach ($salesItems as $sale) {
+        $first = !isset($uniqueSales[$sale['sale_id']]);
+        $money = fn($v) => $first ? number_format($v, 2, '.', '') : '';
         $datetime = new DateTime($sale['sale_date']);
         fputcsv($output, [
             $sale['sale_number'],
@@ -1173,20 +1475,23 @@ function exportSalesReport($db, $output)
             $sale['item_discount_percent'],
             number_format($sale['item_discount_amount'], 2, '.', ''),
             number_format($sale['line_total'], 2, '.', ''),
-            number_format($sale['subtotal'], 2, '.', ''),
+            $money($sale['subtotal']),
             $sale['sale_discount_type'],
             $sale['sale_discount_percent'],
-            number_format($sale['discount_amount'], 2, '.', ''),
-            number_format($sale['total_amount'], 2, '.', ''),
+            $money($sale['discount_amount']),
+            $money($sale['total_amount']),
             ucfirst($sale['payment_method']),
             ucfirst($sale['payment_status']),
-            number_format($sale['amount_paid'], 2, '.', ''),
-            number_format($sale['amount_due'], 2, '.', ''),
-            $sale['notes'] ?? ''
+            $money($sale['amount_paid']),
+            $money($sale['amount_due']),
+            $sale['notes'] ?? '',
+            number_format($sale['net_line_total'], 2, '.', '')
         ]);
 
+        $totalNetLines += (float)$sale['net_line_total'];
+
         // Repeated item rows must not multiply sale-level totals.
-        if (!isset($uniqueSales[$sale['sale_id']])) {
+        if ($first) {
             $uniqueSales[$sale['sale_id']] = true;
             $total += $sale['total_amount'];
             $totalPaid += $sale['amount_paid'];
@@ -1195,11 +1500,12 @@ function exportSalesReport($db, $output)
     }
 
     // Totals
-    $totalsRow = array_fill(0, 23, '');
+    $totalsRow = array_fill(0, 24, '');
     $totalsRow[0] = 'TOTAL';
     $totalsRow[17] = number_format($total, 2, '.', '');
     $totalsRow[20] = number_format($totalPaid, 2, '.', '');
     $totalsRow[21] = number_format($totalDue, 2, '.', '');
+    $totalsRow[23] = number_format($totalNetLines, 2, '.', '');
     fputcsv($output, $totalsRow);
 
     // Summary
@@ -1216,7 +1522,7 @@ function exportSalesReport($db, $output)
 /**
  * Export Profit & Loss Statement
  */
-function exportProfitLoss($db, $output)
+function exportProfitLoss(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1229,16 +1535,20 @@ function exportProfitLoss($db, $output)
     $dateTo = $dates['to'];
 
     // ── Revenue ─────────────────────────────────────────────
+    [$scopeSql, $scopeParams] = branchScopeSql('');
     $revenue = $db->fetchOne("
         SELECT
-            COALESCE(SUM(total_amount), 0) AS total_sales,
+            COALESCE(SUM(subtotal), 0) AS total_sales,
             COALESCE(SUM(discount_amount), 0) AS total_discounts,
-            COALESCE(SUM(total_amount - discount_amount), 0) AS net_sales
+            COALESCE(SUM(subtotal - discount_amount), 0) AS net_sales
         FROM sales
         WHERE DATE(sale_date) BETWEEN ? AND ?
-    ", [$dateFrom, $dateTo]);
+          AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')
+        $scopeSql
+    ", array_merge([$dateFrom, $dateTo], $scopeParams));
 
     // ── COGS ────────────────────────────────────────────────
+    [$scopeSqlS, $scopeParamsS] = branchScopeSql('s');
     $cogs = $db->fetchOne("
         SELECT
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs
@@ -1246,7 +1556,9 @@ function exportProfitLoss($db, $output)
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
-    ", [$dateFrom, $dateTo]);
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        $scopeSqlS
+    ", array_merge([$dateFrom, $dateTo], $scopeParamsS));
 
     // ── Calculations ────────────────────────────────────────
     $grossProfit = $revenue['net_sales'] - $cogs['total_cogs'];
@@ -1257,31 +1569,39 @@ function exportProfitLoss($db, $output)
         SELECT COALESCE(SUM(amount), 0) AS total_expenses
         FROM expenses
         WHERE DATE(expense_date) BETWEEN ? AND ?
-    ", [$dateFrom, $dateTo]) ?? ['total_expenses' => 0];
+        $scopeSql
+    ", array_merge([$dateFrom, $dateTo], $scopeParams)) ?? ['total_expenses' => 0];
 
     $netProfit = $grossProfit - $expenses['total_expenses'];
     $netMargin = $revenue['net_sales'] > 0 ? ($netProfit / $revenue['net_sales']) * 100 : 0;
 
     // ── Sales by Category ───────────────────────────────────
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
     $salesByCategory = $db->fetchAll("
         SELECT
             COALESCE(c.name, 'Uncategorized') AS category_name,
-            COALESCE(SUM(si.line_total), 0) AS revenue,
+            COALESCE(SUM({$netLine}), 0) AS revenue,
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS cogs,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS profit
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS profit
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         LEFT JOIN categories c ON p.category_id = c.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+        $scopeSqlS
         GROUP BY p.category_id, c.name
         ORDER BY revenue DESC
-    ", [$dateFrom, $dateTo]);
+    ", array_merge([$dateFrom, $dateTo], $scopeParamsS));
 
     // ── Write CSV ───────────────────────────────────────────
     fputcsv($output, ['PROFIT & LOSS STATEMENT']);
     fputcsv($output, ['Period:', $dateFrom . ' to ' . $dateTo]);
     fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
+    if (hasMultiBranch() && !isCompanyWide()) {
+        fputcsv($output, ['Branch:', activeBranchName()]);
+    }
     fputcsv($output, []);
 
     // Revenue Section
@@ -1330,7 +1650,7 @@ function exportProfitLoss($db, $output)
 /**
  * Export Top Selling Products
  */
-function exportTopSelling($db, $output)
+function exportTopSelling(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 'this_month';
@@ -1352,6 +1672,14 @@ function exportTopSelling($db, $output)
         $params[] = $category;
     }
 
+    // Branch visibility — same rule as the on-screen report.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    $whereCategory .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
+
     // Fetch top products by quantity
     $topProducts = $db->fetchAll("
         SELECT
@@ -1360,11 +1688,11 @@ function exportTopSelling($db, $output)
             c.name AS category_name,
             SUM(si.quantity) AS total_quantity,
             COUNT(DISTINCT si.sale_id) AS order_count,
-            COALESCE(SUM(si.line_total), 0) AS total_revenue,
+            COALESCE(SUM({$netLine}), 0) AS total_revenue,
             COALESCE(SUM(si.quantity * p.average_cost), 0) AS total_cogs,
-            COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
+            COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) AS total_profit,
             CASE WHEN SUM(si.quantity * p.average_cost) > 0 
-                THEN ((SUM(si.line_total) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
+                THEN ((SUM({$netLine}) - SUM(si.quantity * p.average_cost)) / SUM(si.quantity * p.average_cost)) * 100
                 ELSE 0 
             END AS profit_margin_pct
         FROM sale_items si
@@ -1372,6 +1700,7 @@ function exportTopSelling($db, $output)
         INNER JOIN products p ON si.product_id = p.id
         LEFT JOIN categories c ON p.category_id = c.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
         $whereCategory
         GROUP BY si.product_id, p.name, p.sku, c.name
         ORDER BY total_quantity DESC
@@ -1436,7 +1765,7 @@ function exportTopSelling($db, $output)
 /**
  * Export Low Stock Alert
  */
-function exportLowStock($db, $output)
+function exportLowStock(Database $db, mixed $output)
 {
     // Get filters
     $category = $_GET['category'] ?? '';
@@ -1451,13 +1780,19 @@ function exportLowStock($db, $output)
         $params[] = $category;
     }
 
+    // Same as the on-screen report: severity is evaluated post-aggregation
+    // (HAVING), since stock is summed across potentially several visible
+    // branches per product.
     if ($severity === 'critical') {
-        $where .= " AND p.current_stock = 0";
+        $having = "HAVING COALESCE(SUM(bs.quantity), 0) = 0";
     } elseif ($severity === 'warning') {
-        $where .= " AND p.current_stock > 0 AND p.current_stock <= p.reorder_level";
+        $having = "HAVING COALESCE(SUM(bs.quantity), 0) > 0 AND COALESCE(SUM(bs.quantity), 0) <= p.reorder_level";
     } else {
-        $where .= " AND p.current_stock <= p.reorder_level";
+        $having = "HAVING COALESCE(SUM(bs.quantity), 0) <= p.reorder_level";
     }
+
+    // Branch visibility — matches the on-screen report exactly.
+    [$scopeSql, $scopeParams] = branchScopeSql('bs');
 
     // Fetch products
     $products = $db->fetchAll("
@@ -1465,26 +1800,33 @@ function exportLowStock($db, $output)
             p.name,
             p.sku,
             c.name AS category_name,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.reorder_level,
             p.average_cost,
             p.selling_price,
             s.company_name AS supplier_name,
             s.phone AS supplier_phone,
-            GREATEST((p.reorder_level * 2) - p.current_stock, p.reorder_level) AS suggested_order_qty,
-            (GREATEST((p.reorder_level * 2) - p.current_stock, p.reorder_level) * p.average_cost) AS order_cost
+            GREATEST((p.reorder_level * 2) - COALESCE(SUM(bs.quantity), 0), p.reorder_level) AS suggested_order_qty,
+            (GREATEST((p.reorder_level * 2) - COALESCE(SUM(bs.quantity), 0), p.reorder_level) * p.average_cost) AS order_cost
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN suppliers s ON p.supplier_id = s.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
+        GROUP BY p.id, p.name, p.sku, c.name, p.reorder_level, p.average_cost,
+                 p.selling_price, s.company_name, s.phone
+        $having
         ORDER BY 
-            CASE WHEN p.current_stock = 0 THEN 0 ELSE 1 END,
-            p.current_stock ASC
-    ", $params);
+            CASE WHEN COALESCE(SUM(bs.quantity), 0) = 0 THEN 0 ELSE 1 END,
+            current_stock ASC
+    ", array_merge($scopeParams, $params));
 
     // Headers
     fputcsv($output, ['LOW STOCK ALERT']);
     fputcsv($output, ['Report Date:', date('Y-m-d H:i:s')]);
+    if (hasMultiBranch()) {
+        fputcsv($output, ['Scope:', isCompanyWide() ? 'All Branches' : activeBranchName()]);
+    }
     fputcsv($output, ['Total Items:', count($products)]);
     fputcsv($output, []);
 
@@ -1530,19 +1872,24 @@ function exportLowStock($db, $output)
 /**
  * Export Dead Stock Report
  */
-function exportDeadStock($db, $output)
+function exportDeadStock(Database $db, mixed $output)
 {
     // Get filters
     $period = $_GET['period'] ?? 90;
     $category = $_GET['category'] ?? '';
     $minValue = $_GET['min_value'] ?? 0;
 
-    // Build WHERE
-    $params = [(int)$period, (float)$minValue];
+    // Branch visibility — matches deadStockReport() exactly: both the
+    // stock figure and the sales-history subqueries must agree on the
+    // same branch scope.
+    [$stockScopeSql, $stockScopeParams] = branchScopeSql('bs');
+    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+
     $whereCategory = '';
+    $categoryParams = [];
     if (!empty($category)) {
         $whereCategory = " AND p.category_id = ?";
-        $params[] = $category;
+        $categoryParams[] = $category;
     }
 
     // Fetch dead stock
@@ -1551,17 +1898,19 @@ function exportDeadStock($db, $output)
             p.name,
             p.sku,
             c.name AS category_name,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.average_cost,
             p.selling_price,
-            (p.current_stock * p.average_cost) AS stock_value,
-            (p.current_stock * p.selling_price) AS potential_revenue,
-            ((p.selling_price - p.average_cost) * p.current_stock) AS potential_profit,
+            (COALESCE(SUM(bs.quantity), 0) * p.average_cost) AS stock_value,
+            (COALESCE(SUM(bs.quantity), 0) * p.selling_price) AS potential_revenue,
+            ((p.selling_price - p.average_cost) * COALESCE(SUM(bs.quantity), 0)) AS potential_profit,
             (
                 SELECT MAX(DATE(s.sale_date))
                 FROM sale_items si
                 INNER JOIN sales s ON si.sale_id = s.id
                 WHERE si.product_id = p.id
+                AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+                $salesScopeSql
             ) AS last_sale_date,
             DATEDIFF(
                 CURDATE(),
@@ -1570,39 +1919,33 @@ function exportDeadStock($db, $output)
                     FROM sale_items si
                     INNER JOIN sales s ON si.sale_id = s.id
                     WHERE si.product_id = p.id
+                    AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+                    $salesScopeSql
                 )
             ) AS days_since_last_sale
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $stockScopeSql
         WHERE p.is_active = 1
-        AND p.current_stock > 0
-        AND (
-            (
-                SELECT MAX(DATE(s.sale_date))
-                FROM sale_items si
-                INNER JOIN sales s ON si.sale_id = s.id
-                WHERE si.product_id = p.id
-            ) IS NULL
-            OR
-            DATEDIFF(
-                CURDATE(),
-                (
-                    SELECT MAX(DATE(s.sale_date))
-                    FROM sale_items si
-                    INNER JOIN sales s ON si.sale_id = s.id
-                    WHERE si.product_id = p.id
-                )
-            ) >= ?
-        )
-        AND (p.current_stock * p.average_cost) >= ?
         $whereCategory
-        ORDER BY (p.current_stock * p.average_cost) DESC
-    ", $params);
+        GROUP BY p.id, p.name, p.sku, c.name, p.average_cost, p.selling_price
+        HAVING current_stock > 0
+           AND (last_sale_date IS NULL OR days_since_last_sale >= ?)
+           AND stock_value >= ?
+        ORDER BY stock_value DESC
+    ", array_merge(
+        $salesScopeParams, $salesScopeParams,
+        $stockScopeParams, $categoryParams,
+        [(int)$period, (float)$minValue]
+    ));
 
     // Headers
     fputcsv($output, ['DEAD STOCK REPORT']);
     fputcsv($output, ['No Sales In:', $period . ' days']);
     fputcsv($output, ['Report Date:', date('Y-m-d H:i:s')]);
+    if (hasMultiBranch()) {
+        fputcsv($output, ['Scope:', isCompanyWide() ? 'All Branches' : activeBranchName()]);
+    }
     fputcsv($output, []);
 
     fputcsv($output, [
@@ -1658,15 +2001,15 @@ function exportDeadStock($db, $output)
 /**
  * Export Profit Margin Analysis
  */
-function exportProfitMargin($db, $output)
+function exportProfitMargin(Database $db, mixed $output)
 {
     // Get filters
     $category = $_GET['category'] ?? '';
     $sortBy = $_GET['sort_by'] ?? 'margin_desc';
 
-    // Build WHERE
+    // Build WHERE (stock-derived "has stock" condition moves to HAVING)
     $params = [];
-    $where = "WHERE p.is_active = 1 AND p.current_stock > 0";
+    $where = "WHERE p.is_active = 1";
 
     if (!empty($category)) {
         $where .= " AND p.category_id = ?";
@@ -1678,9 +2021,14 @@ function exportProfitMargin($db, $output)
         'margin_asc' => 'profit_margin_pct ASC',
         'profit_desc' => 'profit_per_unit DESC',
         'revenue_desc' => 'potential_revenue DESC',
-        'stock_desc' => 'p.current_stock DESC',
+        'stock_desc' => 'current_stock DESC',
         default => 'profit_margin_pct DESC'
     };
+
+    // Margin stays company-wide (correct — cost accounting doesn't differ
+    // per branch); only stock quantity is branch-scoped, matching the
+    // on-screen report exactly.
+    [$scopeSql, $scopeParams] = branchScopeSql('bs');
 
     // Fetch products
     $products = $db->fetchAll("
@@ -1688,7 +2036,7 @@ function exportProfitMargin($db, $output)
             p.name,
             p.sku,
             c.name AS category_name,
-            p.current_stock,
+            COALESCE(SUM(bs.quantity), 0) AS current_stock,
             p.average_cost,
             p.selling_price,
             (p.selling_price - p.average_cost) AS profit_per_unit,
@@ -1696,18 +2044,24 @@ function exportProfitMargin($db, $output)
                 THEN ((p.selling_price - p.average_cost) / p.average_cost) * 100
                 ELSE 0 
             END AS profit_margin_pct,
-            (p.current_stock * p.average_cost) AS stock_value,
-            (p.current_stock * p.selling_price) AS potential_revenue,
-            ((p.selling_price - p.average_cost) * p.current_stock) AS potential_profit
+            (COALESCE(SUM(bs.quantity), 0) * p.average_cost) AS stock_value,
+            (COALESCE(SUM(bs.quantity), 0) * p.selling_price) AS potential_revenue,
+            ((p.selling_price - p.average_cost) * COALESCE(SUM(bs.quantity), 0)) AS potential_profit
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id $scopeSql
         $where
+        GROUP BY p.id, p.name, p.sku, c.name, p.average_cost, p.selling_price
+        HAVING current_stock > 0
         ORDER BY $orderBy
-    ", $params);
+    ", array_merge($scopeParams, $params));
 
     // Headers
     fputcsv($output, ['PROFIT MARGIN ANALYSIS']);
     fputcsv($output, ['Report Date:', date('Y-m-d H:i:s')]);
+    if (hasMultiBranch()) {
+        fputcsv($output, ['Scope:', isCompanyWide() ? 'All Branches' : activeBranchName()]);
+    }
     fputcsv($output, []);
 
     fputcsv($output, [
@@ -1762,7 +2116,7 @@ function exportProfitMargin($db, $output)
     fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
 }
 
-function exportStocks($db, $output)
+function exportStocks(Database $db, mixed $output)
 {
     // Get filter parameters (matching your stock index page)
     $search     = trim($_GET['search'] ?? '');
@@ -1788,13 +2142,13 @@ function exportStocks($db, $output)
         $params[] = $category;
     }
 
-    // Stock status filter (matching your page logic)
+    // Stock status filter — branch-scoped (COALESCE(bs.quantity, 0)), matching the on-screen dashboard exactly
     if ($filter === 'out') {
-        $whereClause .= " AND p.current_stock <= 0";
+        $whereClause .= " AND COALESCE(bs.quantity, 0) <= 0";
     } elseif ($filter === 'low') {
-        $whereClause .= " AND p.current_stock > 0 AND p.current_stock <= p.reorder_level";
+        $whereClause .= " AND COALESCE(bs.quantity, 0) > 0 AND COALESCE(bs.quantity, 0) <= p.reorder_level";
     } elseif ($filter === 'ok') {
-        $whereClause .= " AND p.current_stock > p.reorder_level";
+        $whereClause .= " AND COALESCE(bs.quantity, 0) > p.reorder_level";
     }
     // 'all' = no additional filter
 
@@ -1817,14 +2171,17 @@ function exportStocks($db, $output)
         'is_active'
     ]);
 
-    // Fetch stock data
+    // Fetch stock data — current_stock/stock_value/status all reflect THIS
+    // branch (bs.quantity), not the company-wide total, matching the
+    // on-screen stock dashboard exactly.
+    $branchId = activeBranchId();
     $stocks = $db->fetchAll("
         SELECT 
             p.sku,
             p.name as product_name,
             c.name as category,
             p.unit,
-            p.current_stock,
+            COALESCE(bs.quantity, 0) as current_stock,
             p.reorder_level,
             p.cost_price,
             p.selling_price,
@@ -1837,27 +2194,28 @@ function exportStocks($db, $output)
                 ELSE 0 
             END as profit_margin_pct,
             
-            (p.current_stock * p.cost_price) as stock_value_cost,
-            (p.current_stock * p.selling_price) as stock_value_selling,
-            (p.current_stock * (p.selling_price - p.cost_price)) as potential_profit,
+            (COALESCE(bs.quantity, 0) * p.cost_price) as stock_value_cost,
+            (COALESCE(bs.quantity, 0) * p.selling_price) as stock_value_selling,
+            (COALESCE(bs.quantity, 0) * (p.selling_price - p.cost_price)) as potential_profit,
             
             -- Stock status (matching your page logic)
             CASE 
-                WHEN p.current_stock <= 0 THEN 'out'
-                WHEN p.current_stock <= p.reorder_level THEN 'low'
+                WHEN COALESCE(bs.quantity, 0) <= 0 THEN 'out'
+                WHEN COALESCE(bs.quantity, 0) <= p.reorder_level THEN 'low'
                 ELSE 'ok'
             END as stock_status,
             
-            -- Last movement date
+            -- Last movement date (this branch only)
             (SELECT MAX(created_at) 
              FROM stock_movements sm 
-             WHERE sm.product_id = p.id) as last_movement
+             WHERE sm.product_id = p.id AND sm.branch_id = ?) as last_movement
              
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $whereClause
         ORDER BY p.name ASC
-    ", $params);
+    ", array_merge([$branchId, $branchId], $params));
 
     // Calculate totals
     $totalProducts = count($stocks);
@@ -1903,6 +2261,9 @@ function exportStocks($db, $output)
     fputcsv($output, []);
     fputcsv($output, ['=== STOCK SUMMARY ===']);
     fputcsv($output, ['Export Date:', date('Y-m-d H:i:s')]);
+    if (hasMultiBranch()) {
+        fputcsv($output, ['Branch:', activeBranchName()]);
+    }
     fputcsv($output, ['Total Products:', $totalProducts]);
     fputcsv($output, []);
     fputcsv($output, ['By Status:']);
@@ -1947,7 +2308,7 @@ function exportStocks($db, $output)
 /**
  * Calculate date range based on period
  */
-function calculateDateRangeForExport($period, $customFrom = '', $customTo = '')
+function calculateDateRangeForExport(mixed $period, mixed $customFrom = '', mixed $customTo = '')
 {
     $today = date('Y-m-d');
     $from = $today;

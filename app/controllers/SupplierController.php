@@ -95,7 +95,7 @@ switch ($action) {
 // FUNCTIONS
 // ============================================================
 
-function listSuppliers($db)
+function listSuppliers(Database $db)
 {
     $search = trim($_GET['search'] ?? '');
     $filter = $_GET['filter'] ?? 'all';
@@ -150,13 +150,13 @@ function listSuppliers($db)
     include APP_PATH . '/views/suppliers/index.php';
 }
 
-function showCreateForm($db)
+function showCreateForm(Database $db)
 {
     $pageTitle = 'Add New Supplier';
     include APP_PATH . '/views/suppliers/create.php';
 }
 
-function createSupplier($db)
+function createSupplier(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers/create', 'error', 'Invalid form submission');
@@ -222,7 +222,7 @@ function createSupplier($db)
     }
 }
 
-function viewSupplier($db, $id)
+function viewSupplier(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -290,7 +290,7 @@ function viewSupplier($db, $id)
 /**
  * Show supplier deposit (payment) form
  */
-function showSupplierDepositForm($db, $id)
+function showSupplierDepositForm(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -299,12 +299,13 @@ function showSupplierDepositForm($db, $id)
     }
 
     // Load active financial accounts to pay from
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1
+        WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY type ASC, name ASC
-    ");
+    ", $acctScopeParams);
 
     $pageTitle = 'Supplier Payment — ' . $supplier['company_name'];
     include APP_PATH . '/views/suppliers/deposit.php';
@@ -313,7 +314,7 @@ function showSupplierDepositForm($db, $id)
 /**
  * Process a supplier deposit (payment to supplier) from a financial account
  */
-function processSupplierDeposit($db, $id)
+function processSupplierDeposit(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers/deposit/' . $id, 'error', 'Invalid form submission');
@@ -335,7 +336,7 @@ function processSupplierDeposit($db, $id)
     $dateSql = null;
     if (!empty($dateStr)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $dateStr);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/suppliers/deposit/' . $id, 'error', 'Invalid date — must be today or a past date');
             return;
         }
@@ -352,7 +353,8 @@ function processSupplierDeposit($db, $id)
         return;
     }
 
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$accountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$accountId], $acctScopeParams));
     if (!$account) {
         redirect(BASE_URL . '/suppliers/deposit/' . $id, 'error', 'Selected account not found or inactive');
         return;
@@ -447,7 +449,7 @@ function processSupplierDeposit($db, $id)
 /**
  * Delete a standalone supplier deposit (payment to supplier)
  */
-function deleteSupplierDeposit($db, $txId)
+function deleteSupplierDeposit(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers', 'error', 'Invalid form submission');
@@ -519,7 +521,7 @@ function deleteSupplierDeposit($db, $txId)
     }
 }
 
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -533,7 +535,7 @@ function showEditForm($db, $id)
 /**
  * Show edit form for a supplier deposit (payment to supplier)
  */
-function showEditSupplierDepositForm($db, $txId)
+function showEditSupplierDepositForm(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("
         SELECT * FROM supplier_transactions
@@ -550,12 +552,13 @@ function showEditSupplierDepositForm($db, $txId)
         return;
     }
 
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
-        WHERE is_active = 1
+        WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY type ASC, name ASC
-    ");
+    ", $acctScopeParams);
 
     // Find the linked account_transactions row
     // processSupplierDeposit() stored: reference_type='purchase', reference_id=supplier_id
@@ -586,7 +589,7 @@ function showEditSupplierDepositForm($db, $txId)
 /**
  * Process updating/editing a supplier deposit (payment to supplier)
  */
-function updateSupplierDeposit($db, $txId)
+function updateSupplierDeposit(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers', 'error', 'Invalid form submission');
@@ -618,7 +621,7 @@ function updateSupplierDeposit($db, $txId)
     $newDateSql = null;
     if (!empty($newDateStr)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $newDateStr);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/suppliers/edit-deposit/' . $txId, 'error', 'Invalid date — must be today or a past date');
             return;
         }
@@ -630,7 +633,8 @@ function updateSupplierDeposit($db, $txId)
         return;
     }
 
-    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1", [$newAccountId]);
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$newAccountId], $acctScopeParams));
     if (!$newAccount) {
         redirect(BASE_URL . '/suppliers/edit-deposit/' . $txId, 'error', 'Selected account not found or inactive');
         return;
@@ -727,7 +731,7 @@ function updateSupplierDeposit($db, $txId)
     }
 }
 
-function updateSupplier($db, $id)
+function updateSupplier(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/suppliers/edit/' . $id, 'error', 'Invalid form submission');
@@ -798,7 +802,7 @@ function updateSupplier($db, $id)
     }
 }
 
-function deleteSupplier($db, $id)
+function deleteSupplier(Database $db, mixed $id)
 {
     $supplier = $db->fetchOne("SELECT * FROM suppliers WHERE id = ?", [$id]);
     if (!$supplier) {
@@ -827,7 +831,7 @@ function deleteSupplier($db, $id)
     }
 }
 
-function toggleSupplier($db, $id)
+function toggleSupplier(Database $db, mixed $id)
 {
     header('Content-Type: application/json');
     $supplier = $db->fetchOne("SELECT id, is_active FROM suppliers WHERE id = ?", [$id]);
@@ -845,7 +849,7 @@ function toggleSupplier($db, $id)
     exit;
 }
 
-function searchSuppliers($db)
+function searchSuppliers(Database $db)
 {
     header('Content-Type: application/json');
     // Handle "all suppliers" request
@@ -880,7 +884,7 @@ function searchSuppliers($db)
 // ============================================================
 // HELPER
 // ============================================================
-function generateSupplierCode($db)
+function generateSupplierCode(Database $db)
 {
     $prefix = 'SUP-';
     $year   = date('Y');
@@ -890,9 +894,12 @@ function generateSupplierCode($db)
         ORDER BY id DESC LIMIT 1
     ", ["$prefix$year-%"]);
 
-    $num = $last
-        ? intval(end(explode('-', $last['supplier_code']))) + 1
-        : 1;
+    if ($last) {
+        $parts = explode('-', $last['supplier_code']);
+        $num   = intval(end($parts)) + 1;
+    } else {
+        $num = 1;
+    }
 
     return $prefix . $year . '-' . str_pad($num, 4, '0', STR_PAD_LEFT);
 }

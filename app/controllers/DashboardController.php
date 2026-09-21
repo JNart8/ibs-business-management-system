@@ -11,6 +11,13 @@ if (!defined('APP_START')) {
 
 $db = Database::getInstance();
 
+// Branch visibility for every sales/purchase-derived figure below (revenue,
+// profit, trends, top products, recent activity). Empty for company-wide
+// users, so their view is unchanged. Customer/supplier balances are left
+// company-wide on purpose: those records are shared across branches.
+[$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+[$purchScopeSql, $purchScopeParams] = branchScopeSql('p');
+
 // ══════════════════════════════════════════════════════════════════════════════
 // TODAY'S PERFORMANCE METRICS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -32,7 +39,8 @@ try {
             COALESCE(SUM(s.total_amount), 0) / NULLIF(COUNT(*), 0) as avg_transaction
         FROM sales s
         WHERE DATE(s.sale_date) = CURDATE() AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ");
+        $salesScopeSql
+    ", $salesScopeParams);
 
     $todayMetrics['revenue'] = floatval($todaySales['revenue'] ?? 0);
     $todayMetrics['transactions'] = intval($todaySales['transactions'] ?? 0);
@@ -45,7 +53,8 @@ try {
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) = CURDATE() AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ");
+        $salesScopeSql
+    ", $salesScopeParams);
 
     $cogs = floatval($todayCOGS['total_cogs'] ?? 0);
     $todayMetrics['profit'] = $todayMetrics['revenue'] - $cogs;
@@ -84,12 +93,19 @@ try {
     ");
     $financialHealth['payables'] = floatval($payables['total'] ?? 0);
 
-    // Total Stock Value (at average cost)
+    // Total Stock Value (at average cost) — summed across the branches
+    // this viewer can see (all of them for a company-wide user, just
+    // their own for a branch-scoped one), via branch_stock rather than
+    // products.current_stock directly, so this respects branch visibility
+    // the same way every other report in the app does.
+    [$dashScopeSql, $dashScopeParams] = branchScopeSql('bs');
     $stockValue = $db->fetchOne("
-        SELECT COALESCE(SUM(current_stock * average_cost), 0) as total
-        FROM products
-        WHERE is_active = 1
-    ");
+        SELECT COALESCE(SUM(bs.quantity * p.average_cost), 0) as total
+        FROM branch_stock bs
+        JOIN products p ON p.id = bs.product_id
+        WHERE p.is_active = 1
+        $dashScopeSql
+    ", $dashScopeParams);
     $financialHealth['stock_value'] = floatval($stockValue['total'] ?? 0);
 
     // Customer Deposits Held
@@ -115,18 +131,35 @@ $alerts = [
 ];
 
 try {
-    // Out of stock items
+    [$alertScopeSql, $alertScopeParams] = branchScopeSql('bs');
+
+    // Out of stock items — a product counts as out of stock if the total
+    // across this viewer's visible branches is zero.
     $result = $db->fetchOne("
-        SELECT COUNT(*) as count FROM products 
-        WHERE current_stock = 0 AND is_active = 1
-    ");
+        SELECT COUNT(*) as count FROM (
+            SELECT p.id
+            FROM products p
+            JOIN branch_stock bs ON bs.product_id = p.id
+            WHERE p.is_active = 1
+            $alertScopeSql
+            GROUP BY p.id
+            HAVING SUM(bs.quantity) = 0
+        ) t
+    ", $alertScopeParams);
     $alerts['out_of_stock'] = intval($result['count'] ?? 0);
 
     // Low stock items
     $result = $db->fetchOne("
-        SELECT COUNT(*) as count FROM products 
-        WHERE current_stock > 0 AND current_stock <= reorder_level AND is_active = 1
-    ");
+        SELECT COUNT(*) as count FROM (
+            SELECT p.id
+            FROM products p
+            JOIN branch_stock bs ON bs.product_id = p.id
+            WHERE p.is_active = 1
+            $alertScopeSql
+            GROUP BY p.id
+            HAVING SUM(bs.quantity) > 0 AND SUM(bs.quantity) <= MAX(p.reorder_level)
+        ) t
+    ", $alertScopeParams);
     $alerts['low_stock'] = intval($result['count'] ?? 0);
 
     // Overdue receivables (90+ days)
@@ -165,22 +198,101 @@ try {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SECURITY ALERTS (high-risk audit_log changes, since this user's last visit
+// to /audit — see AuditController::listAuditLog(), which stamps
+// last_security_alert_seen_at on every visit). Deliberately narrow: role
+// permission losses on users.manage/roles.manage, role deletion, sale voids
+// and edits, and 30%+ selling-price drops (that threshold is enforced at
+// write time in ProductController::updateProduct(), not here).
+// ══════════════════════════════════════════════════════════════════════════════
+
+$securityAlerts = [];
+if (can('audit.view')) {
+    try {
+        $lastSeen = currentUser()['last_security_alert_seen_at'] ?? null;
+        // >=, not > : both this column and audit_log.created_at are plain
+        // TIMESTAMP (1-second resolution, no fractional seconds), so an
+        // action taken right after visiting /audit can land in the very
+        // same second as the seen-stamp — a strict > would silently drop
+        // it from ever alerting. Confirmed live: voiding a sale immediately
+        // after visiting /audit produced identical created_at and
+        // last_security_alert_seen_at values down to the second.
+        $sinceSql = $lastSeen ? "AND created_at >= ?" : "";
+        $sinceParams = $lastSeen ? [$lastSeen] : [];
+
+        [$scopeSql, $scopeParams] = branchScopeSql('');
+        $rows = $db->fetchAll("
+            SELECT * FROM audit_log
+            WHERE action IN ('role.permissions_changed', 'role.delete', 'sale.void', 'sale.edit', 'product.price_change')
+            $sinceSql
+            $scopeSql
+            ORDER BY created_at DESC
+            LIMIT 20
+        ", array_merge($sinceParams, $scopeParams));
+
+        foreach ($rows as $row) {
+            $details = $row['details'] ? json_decode($row['details'], true) : [];
+
+            if ($row['action'] === 'role.permissions_changed') {
+                $removed = $details['removed'] ?? [];
+                if (!in_array('users.manage', $removed, true) && !in_array('roles.manage', $removed, true)) {
+                    continue; // a permission change that didn't touch the two sensitive ones
+                }
+                $lost = array_values(array_intersect($removed, ['users.manage', 'roles.manage']));
+                $securityAlerts[] = [
+                    'summary' => "Role \"" . ($details['name'] ?? '?') . "\" lost " . implode(' and ', $lost),
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'role.delete') {
+                $securityAlerts[] = [
+                    'summary' => "Role \"" . ($details['name'] ?? '?') . "\" was deleted",
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'sale.void') {
+                $securityAlerts[] = [
+                    'summary' => "Sale #" . ($details['sale_number'] ?? $row['entity_id']) . " voided (" . formatMoney($details['total_amount'] ?? 0) . ")",
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'sale.edit') {
+                $securityAlerts[] = [
+                    'summary' => "Sale #" . ($details['sale_number'] ?? $row['entity_id']) . " edited: " . ($details['changes'] ?? ''),
+                    'row'     => $row,
+                ];
+            } elseif ($row['action'] === 'product.price_change') {
+                $securityAlerts[] = [
+                    'summary' => "\"" . ($details['name'] ?? '?') . "\" price dropped " . ($details['drop_pct'] ?? '?') . "% ("
+                        . formatMoney($details['old_price'] ?? 0) . " → " . formatMoney($details['new_price'] ?? 0) . ")",
+                    'row'     => $row,
+                ];
+            }
+        }
+    } catch (Exception $e) {
+        error_log('Dashboard security alerts error: ' . $e->getMessage());
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // SALES TREND (LAST 30 DAYS) - WITH PROFIT
 // ══════════════════════════════════════════════════════════════════════════════
+
+// Line revenue net of the whole-cart discount (see saleItemNetSql()). Also
+// avoids repeating each sale's total once per line item when joined below.
+$netLine = saleItemNetSql();
 
 $salesTrend = $db->fetchAll("
     SELECT 
         DATE(s.sale_date) as date,
-        COALESCE(SUM(s.total_amount), 0) as revenue,
+        COALESCE(SUM({$netLine}), 0) as revenue,
         COALESCE(SUM(si.quantity * p.average_cost), 0) as cogs,
-        COALESCE(SUM(s.total_amount) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
     FROM sales s
     INNER JOIN sale_items si ON s.id = si.sale_id
     INNER JOIN products p ON si.product_id = p.id
     WHERE s.sale_date >= CURDATE() - INTERVAL 29 DAY AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    $salesScopeSql
     GROUP BY DATE(s.sale_date)
     ORDER BY date ASC
-");
+", $salesScopeParams);
 
 // Fill in missing days
 $trend = [];
@@ -216,31 +328,33 @@ $topProducts = $db->fetchAll("
     SELECT 
         p.name,
         SUM(si.quantity) as total_qty,
-        COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
     FROM sale_items si
     INNER JOIN sales s ON si.sale_id = s.id
     INNER JOIN products p ON si.product_id = p.id
     WHERE s.sale_date >= CURDATE() - INTERVAL 29 DAY AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    $salesScopeSql
     GROUP BY si.product_id, p.name
     ORDER BY profit DESC
     LIMIT 5
-");
+", $salesScopeParams);
 
 // Sales by Category (Last 30 Days)
 $categoryPerformance = $db->fetchAll("
     SELECT 
         COALESCE(c.name, 'Uncategorized') as category,
-        COALESCE(SUM(si.line_total), 0) as revenue,
-        COALESCE(SUM(si.line_total) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}), 0) as revenue,
+        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
     FROM sale_items si
     INNER JOIN sales s ON si.sale_id = s.id
     INNER JOIN products p ON si.product_id = p.id
     LEFT JOIN categories c ON p.category_id = c.id
     WHERE s.sale_date >= CURDATE() - INTERVAL 29 DAY AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    $salesScopeSql
     GROUP BY p.category_id, c.name
     ORDER BY profit DESC
     LIMIT 5
-");
+", $salesScopeParams);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // RECENT ACTIVITY (LAST 10)
@@ -257,9 +371,11 @@ $recentSales = $db->fetchAll("
         c.full_name as customer_name
     FROM sales s
     LEFT JOIN customers c ON s.customer_id = c.id
+    WHERE 1=1
+    $salesScopeSql
     ORDER BY s.created_at DESC
     LIMIT 10
-");
+", $salesScopeParams);
 
 $recentPurchases = $db->fetchAll("
     SELECT 
@@ -271,30 +387,36 @@ $recentPurchases = $db->fetchAll("
         s.company_name as supplier_name
     FROM purchases p
     LEFT JOIN suppliers s ON p.supplier_id = s.id
+    WHERE 1=1
+    $purchScopeSql
     ORDER BY p.created_at DESC
     LIMIT 10
-");
+", $purchScopeParams);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // LOW STOCK PRODUCTS (TOP 10 CRITICAL)
 // ══════════════════════════════════════════════════════════════════════════════
 
+[$topLowScopeSql, $topLowScopeParams] = branchScopeSql('bs');
 $lowStockProducts = $db->fetchAll("
     SELECT 
-        id, 
-        name, 
-        sku, 
-        current_stock, 
-        reorder_level,
-        unit
-    FROM products 
-    WHERE current_stock <= reorder_level 
-      AND is_active = 1
+        p.id, 
+        p.name, 
+        p.sku, 
+        COALESCE(SUM(bs.quantity), 0) as current_stock, 
+        p.reorder_level,
+        p.unit
+    FROM products p
+    JOIN branch_stock bs ON bs.product_id = p.id
+    WHERE p.is_active = 1
+    $topLowScopeSql
+    GROUP BY p.id, p.name, p.sku, p.reorder_level, p.unit
+    HAVING current_stock <= p.reorder_level
     ORDER BY 
         CASE WHEN current_stock = 0 THEN 0 ELSE 1 END,
         current_stock ASC
     LIMIT 10
-");
+", $topLowScopeParams);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // THIS MONTH SUMMARY
@@ -317,7 +439,8 @@ try {
             COUNT(*) as transactions
         FROM sales s
         WHERE DATE(s.sale_date) BETWEEN ? AND ? AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ", [$monthStart, $today]);
+        $salesScopeSql
+    ", array_merge([$monthStart, $today], $salesScopeParams));
 
     $monthSummary['revenue'] = floatval($monthData['revenue'] ?? 0);
     $monthSummary['transactions'] = intval($monthData['transactions'] ?? 0);
@@ -328,7 +451,8 @@ try {
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ? AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ", [$monthStart, $today]);
+        $salesScopeSql
+    ", array_merge([$monthStart, $today], $salesScopeParams));
 
     $cogs = floatval($monthCOGS['total_cogs'] ?? 0);
     $monthSummary['profit'] = $monthSummary['revenue'] - $cogs;

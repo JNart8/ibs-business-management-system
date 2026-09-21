@@ -112,7 +112,7 @@ switch ($action) {
 /**
  * List all customers with balance info
  */
-function listCustomers($db)
+function listCustomers(Database $db)
 {
     $search = trim($_GET['search'] ?? '');
     $filter = $_GET['filter'] ?? 'all'; // all | owing | credit | default
@@ -202,7 +202,7 @@ function listCustomers($db)
 /**
  * Show create form
  */
-function showCreateForm($db)
+function showCreateForm(Database $db)
 {
     $pageTitle = 'Add New Customer';
     include APP_PATH . '/views/customers/create.php';
@@ -211,7 +211,7 @@ function showCreateForm($db)
 /**
  * Create customer
  */
-function createCustomer($db)
+function createCustomer(Database $db)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/create', 'error', 'Invalid form submission');
@@ -272,7 +272,7 @@ function createCustomer($db)
 /**
  * View single customer - full details & transaction history
  */
-function viewCustomer($db, $id)
+function viewCustomer(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -329,7 +329,7 @@ function viewCustomer($db, $id)
 /**
  * Show edit form
  */
-function showEditForm($db, $id)
+function showEditForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -344,7 +344,7 @@ function showEditForm($db, $id)
 /**
  * Update customer
  */
-function updateCustomer($db, $id)
+function updateCustomer(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/edit/' . $id, 'error', 'Invalid form submission');
@@ -405,7 +405,7 @@ function updateCustomer($db, $id)
 /**
  * Delete customer (soft delete if has transactions)
  */
-function deleteCustomer($db, $id)
+function deleteCustomer(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -435,7 +435,7 @@ function deleteCustomer($db, $id)
 /**
  * Show deposit form
  */
-function showDepositForm($db, $id)
+function showDepositForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -449,7 +449,8 @@ function showDepositForm($db, $id)
         return;
     }
 
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams);
     $pageTitle = 'Customer Deposit';
     include APP_PATH . '/views/customers/deposit.php';
 }
@@ -457,7 +458,7 @@ function showDepositForm($db, $id)
 /**
  * Process a deposit with auto-apply to outstanding sales
  */
-function processDeposit($db, $id)
+function processDeposit(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/deposit/' . $id, 'error', 'Invalid form submission');
@@ -485,7 +486,7 @@ function processDeposit($db, $id)
     $depositDateSql = null;
     if (!empty($depositDate)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $depositDate);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/customers/deposit/' . $id, 'error', 'Invalid deposit date — must be today or a past date');
             return;
         }
@@ -503,7 +504,8 @@ function processDeposit($db, $id)
     }
 
     // Validate account
-    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$accountId]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $scopeSql", array_merge([$accountId], $scopeParams));
     if (!$account) {
         redirect(BASE_URL . '/customers/deposit/' . $id, 'error', 'Selected account not found or inactive');
         return;
@@ -528,11 +530,12 @@ function processDeposit($db, $id)
         if ($depositDateSql) {
             $db->query("
                 INSERT INTO customer_transactions
-                    (customer_id, transaction_type, amount, balance_before,
+                    (customer_id, branch_id, transaction_type, amount, balance_before,
                      balance_after, payment_method, notes, user_id, created_at)
-                VALUES (?, 'deposit', ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $id,
+                activeBranchId(),
                 $amount,
                 $balanceBefore,
                 $balanceAfterDeposit,
@@ -544,11 +547,12 @@ function processDeposit($db, $id)
         } else {
             $db->query("
                 INSERT INTO customer_transactions
-                    (customer_id, transaction_type, amount, balance_before,
+                    (customer_id, branch_id, transaction_type, amount, balance_before,
                      balance_after, payment_method, notes, user_id)
-                VALUES (?, 'deposit', ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?, ?)
             ", [
                 $id,
+                activeBranchId(),
                 $amount,
                 $balanceBefore,
                 $balanceAfterDeposit,
@@ -584,7 +588,7 @@ function processDeposit($db, $id)
 
         // Get all unpaid and partial sales for this customer (oldest first)
         $outstandingSales = $db->fetchAll("
-            SELECT id, sale_number, amount_due, amount_paid, total_amount
+            SELECT id, sale_number, amount_due, amount_paid, total_amount, branch_id
             FROM sales
             WHERE customer_id = ?
               AND payment_status IN ('unpaid', 'partial')
@@ -618,8 +622,8 @@ function processDeposit($db, $id)
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id)
-                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?)
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'payment', ?, ?, ?, 'sale', ?, 'deposit', ?, ?, ?)
             ", [
                 $id,
                 -$paymentAmount, // Negative because it's reducing their deposit balance
@@ -627,7 +631,8 @@ function processDeposit($db, $id)
                 $balanceAfterPayment,
                 $sale['id'],
                 "Auto-payment from deposit for sale " . $sale['sale_number'],
-                $userId
+                $userId,
+                $sale['branch_id'] ?? activeBranchId()
             ]);
 
             // Update customer balance (reduce by payment amount)
@@ -665,7 +670,7 @@ function processDeposit($db, $id)
 /**
  * Show credit limit adjustment form
  */
-function showCreditForm($db, $id)
+function showCreditForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -680,7 +685,7 @@ function showCreditForm($db, $id)
 /**
  * Adjust credit limit
  */
-function adjustCreditLimit($db, $id)
+function adjustCreditLimit(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers/adjust-credit/' . $id, 'error', 'Invalid form submission');
@@ -709,8 +714,8 @@ function adjustCreditLimit($db, $id)
         $db->query("
             INSERT INTO customer_transactions
                 (customer_id, transaction_type, amount, balance_before,
-                 balance_after, notes, user_id)
-            VALUES (?, 'adjustment', 0, ?, ?, ?, ?)
+                 balance_after, notes, user_id, branch_id)
+            VALUES (?, 'adjustment', 0, ?, ?, ?, ?, ?)
         ", [
             $id,
             $customer['current_balance'],
@@ -718,7 +723,8 @@ function adjustCreditLimit($db, $id)
             "Credit limit changed from " . formatMoney($customer['credit_limit'])
                 . " to " . formatMoney($newLimit)
                 . ($notes ? ". $notes" : ''),
-            $userId
+            $userId,
+            activeBranchId()
         ]);
 
         redirect(
@@ -735,7 +741,7 @@ function adjustCreditLimit($db, $id)
 /**
  * AJAX customer search for POS
  */
-function searchCustomers($db)
+function searchCustomers(Database $db)
 {
     header('Content-Type: application/json');
     $q = trim($_GET['q'] ?? '');
@@ -760,7 +766,7 @@ function searchCustomers($db)
 /**
  * Show statement form - date range selection
  */
-function showStatementForm($db, $id)
+function showStatementForm(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -781,7 +787,7 @@ function showStatementForm($db, $id)
 /**
  * Generate and display statement
  */
-function generateStatement($db, $id)
+function generateStatement(Database $db, mixed $id)
 {
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$id]);
     if (!$customer) {
@@ -861,7 +867,7 @@ function generateStatement($db, $id)
 /**
  * Revert and delete a customer deposit
  */
-function deleteCustomerDeposit($db, $txId)
+function deleteCustomerDeposit(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
     if (!$tx) {
@@ -932,7 +938,7 @@ function deleteCustomerDeposit($db, $txId)
 /**
  * Show edit deposit form
  */
-function showEditCustomerDepositForm($db, $txId)
+function showEditCustomerDepositForm(Database $db, mixed $txId)
 {
     $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
     if (!$tx) {
@@ -946,7 +952,8 @@ function showEditCustomerDepositForm($db, $txId)
         return;
     }
 
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 ORDER BY name ASC");
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams);
 
     // Retrieve financial account linked to this deposit
     $acctTx = $db->fetchOne("SELECT * FROM account_transactions WHERE reference_type = 'customer_deposit' AND reference_id = ?", [$txId]);
@@ -984,7 +991,7 @@ function showEditCustomerDepositForm($db, $txId)
 /**
  * Process updating/editing a customer deposit
  */
-function updateCustomerDeposit($db, $txId)
+function updateCustomerDeposit(Database $db, mixed $txId)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/customers', 'error', 'Invalid form submission');
@@ -1013,7 +1020,7 @@ function updateCustomerDeposit($db, $txId)
     $newDepositDateSql = null;
     if (!empty($newDepositDate)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $newDepositDate);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/customers/edit-deposit/' . $txId, 'error', 'Invalid deposit date — must be today or a past date');
             return;
         }
@@ -1026,7 +1033,8 @@ function updateCustomerDeposit($db, $txId)
     }
 
     // Validate account
-    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0", [$newAccountId]);
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $newAccount = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $scopeSql", array_merge([$newAccountId], $scopeParams));
     if (!$newAccount) {
         redirect(BASE_URL . '/customers/edit-deposit/' . $txId, 'error', 'Selected financial account not found or inactive');
         return;
@@ -1132,7 +1140,7 @@ function updateCustomerDeposit($db, $txId)
 /**
  * Auto-generate unique customer code
  */
-function generateCustomerCode($db)
+function generateCustomerCode(Database $db)
 {
     $prefix = 'CUST-';
     $year   = date('Y');

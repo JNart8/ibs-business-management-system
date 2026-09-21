@@ -9,11 +9,39 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
+// $path/$method are always set by public/index.php before this file is
+// included (same variable scope as the includer) — the ?? here is just to
+// satisfy static analysis, which can't see across the include boundary.
+/** @var string $path */
+$path = $path ?? '';
+/** @var string $method */
+$method = $method ?? '';
+
 $db = Database::getInstance();
 
 // Parse URL
 $segments = array_values(array_filter(explode('/', trim($path, '/'))));
-$type = $segments[1] ?? null; // categories, products, suppliers, customers
+$type = $segments[1] ?? null; // categories, products, suppliers, customers, purchases
+
+// ── Permission gate ─────────────────────────────────────────────
+// /import was only plan-gated (imports_exports, Growth+) in
+// public/index.php, not permission-gated — any logged-in user on that
+// plan could bulk-import data regardless of whether they could reach
+// the corresponding module page at all. Mirrors ExportController.php's
+// $exportPermissionMap: each import type requires the same permission
+// its module page does.
+$importPermissionMap = [
+    'categories' => 'categories.manage',
+    'products'   => 'products.manage',
+    'suppliers'  => 'suppliers.manage',
+    'customers'  => 'customers.manage',
+    'purchases'  => 'purchases.manage',
+];
+
+if (isset($importPermissionMap[$type]) && !can($importPermissionMap[$type])) {
+    redirect(BASE_URL . '/', 'error', 'You do not have permission to import this data.');
+    exit;
+}
 
 // Template download (GET request)
 if (isset($segments[2]) && $segments[2] === 'template') {
@@ -35,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 /**
  * Show import form
  */
-function showImportForm($db, $type)
+function showImportForm(Database $db, mixed $type)
 {
     if (!in_array($type, ['categories', 'products', 'suppliers', 'customers', 'purchases'])) {
         redirect(BASE_URL . '/', 'error', 'Invalid import type');
@@ -49,7 +77,7 @@ function showImportForm($db, $type)
 /**
  * Preview CSV before importing
  */
-function previewImport($db, $type)
+function previewImport(Database $db, mixed $type)
 {
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
         redirect(BASE_URL . '/import/' . $type, 'error', 'Please upload a valid CSV file');
@@ -84,7 +112,7 @@ function previewImport($db, $type)
 /**
  * Process the actual import
  */
-function processImport($db, $type)
+function processImport(Database $db, mixed $type)
 {
     if (!isset($_SESSION['import_preview']) || $_SESSION['import_preview']['type'] !== $type) {
         redirect(BASE_URL . '/import/' . $type, 'error', 'No preview data found. Please upload again.');
@@ -145,7 +173,7 @@ function processImport($db, $type)
 /**
  * Parse CSV file and validate
  */
-function parseCSV($file, $type, $mode, $db)
+function parseCSV(mixed $file, mixed $type, mixed $mode, Database $db)
 {
     $handle = fopen($file, 'r');
     if (!$handle) {
@@ -216,7 +244,7 @@ function parseCSV($file, $type, $mode, $db)
 /**
  * Get required CSV headers for each type
  */
-function getRequiredHeaders($type)
+function getRequiredHeaders(mixed $type)
 {
     switch ($type) {
         case 'categories':
@@ -237,7 +265,7 @@ function getRequiredHeaders($type)
 /**
  * Validate a single row
  */
-function validateRow($type, $row, $mode, $db)
+function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
 {
     switch ($type) {
         case 'categories':
@@ -378,7 +406,7 @@ function validateRow($type, $row, $mode, $db)
 /**
  * Import a single row
  */
-function importRow($db, $type, $row, $mode)
+function importRow(Database $db, mixed $type, mixed $row, mixed $mode)
 {
     $userId = $_SESSION['user_id'] ?? null;
 
@@ -400,7 +428,7 @@ function importRow($db, $type, $row, $mode)
     return ['success' => false, 'message' => 'Unknown type'];
 }
 
-function importCategory($db, $row, $mode, $userId)
+function importCategory(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM categories WHERE name = ?", [trim($row['name'])]);
 
@@ -418,7 +446,7 @@ function importCategory($db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importProduct($db, $row, $mode, $userId)
+function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     // Look up category and supplier IDs by name
     $category = $db->fetchOne("SELECT id FROM categories WHERE name = ? AND is_active = 1", [trim($row['category'])]);
@@ -432,12 +460,17 @@ function importProduct($db, $row, $mode, $userId)
     $supplierId = $supplier['id'];
 
     $existing = $db->fetchOne("SELECT id FROM products WHERE sku = ?", [trim($row['sku'])]);
+    $importedStock = isset($row['current_stock']) ? floatval($row['current_stock']) : 0;
 
     if ($existing) {
         if ($mode === 'skip') {
             return ['success' => true, 'action' => 'skipped'];
         }
-        // Update
+        // Update — current_stock is deliberately NOT set directly here; it's
+        // maintained automatically by setBranchStock() below, which keeps
+        // products.current_stock in sync as the sum across all branches.
+        // A CSV import continues to mean "set stock to exactly this value",
+        // now applied at the importer's active branch specifically.
         $db->query("
             UPDATE products 
             SET name = ?, category_id = ?, supplier_id = ?, selling_price = ?, cost_price = ?,
@@ -445,7 +478,7 @@ function importProduct($db, $row, $mode, $userId)
                     WHEN COALESCE(average_cost, 0) = 0 THEN ?
                     ELSE average_cost
                 END,
-                current_stock = ?, reorder_level = ?, unit = ?, barcode = ?, updated_at = NOW()
+                reorder_level = ?, unit = ?, barcode = ?, updated_at = NOW()
             WHERE id = ?
         ", [
             trim($row['name']),
@@ -454,21 +487,24 @@ function importProduct($db, $row, $mode, $userId)
             floatval($row['selling_price']),
             isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
             isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-            isset($row['current_stock']) ? floatval($row['current_stock']) : 0,
             isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
             normalizeUnit($row['unit'] ?? 'pcs'),
             $row['barcode'] ?? null,
             $existing['id']
         ]);
+        if (isset($row['current_stock'])) {
+            setBranchStock($db, $existing['id'], activeBranchId(), $importedStock);
+        }
         return ['success' => true, 'action' => 'updated'];
     }
 
-    // Create
+    // Create — same reasoning: current_stock is set via setBranchStock()
+    // after the insert, not as a direct column value.
     $db->query("
         INSERT INTO products 
             (sku, name, category_id, supplier_id, selling_price, cost_price,
-             average_cost, current_stock, reorder_level, unit, barcode, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             average_cost, reorder_level, unit, barcode, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     ", [
         trim($row['sku']),
         trim($row['name']),
@@ -477,15 +513,18 @@ function importProduct($db, $row, $mode, $userId)
         floatval($row['selling_price']),
         isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
         isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-        isset($row['current_stock']) ? floatval($row['current_stock']) : 0,
         isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
         normalizeUnit($row['unit'] ?? 'pcs'),
         $row['barcode'] ?? null
     ]);
+    $newProductId = $db->lastInsertId();
+    if ($importedStock > 0) {
+        setBranchStock($db, $newProductId, activeBranchId(), $importedStock);
+    }
     return ['success' => true, 'action' => 'created'];
 }
 
-function importSupplier($db, $row, $mode, $userId)
+function importSupplier(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM suppliers WHERE company_name = ?", [trim($row['company_name'])]);
 
@@ -525,7 +564,7 @@ function importSupplier($db, $row, $mode, $userId)
     return ['success' => true, 'action' => 'created'];
 }
 
-function importCustomer($db, $row, $mode, $userId)
+function importCustomer(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM customers WHERE phone = ?", [trim($row['phone'])]);
 
@@ -568,7 +607,7 @@ function importCustomer($db, $row, $mode, $userId)
 /**
  * Download CSV template
  */
-function downloadTemplate($type)
+function downloadTemplate(mixed $type)
 {
     $templates = [
         'categories' => [
@@ -638,7 +677,7 @@ function downloadTemplate($type)
 /**
  * Process purchases import
  */
-function processPurchasesImport($db, $data)
+function processPurchasesImport(Database $db, mixed $data)
 {
     $imported = 0;
     $skipped = 0;
@@ -732,7 +771,7 @@ function processPurchasesImport($db, $data)
 /**
  * Import a single purchase invoice group
  */
-function importPurchaseGroup($db, $group)
+function importPurchaseGroup(Database $db, mixed $group)
 {
     $supplierId = $group['supplier_id'];
     $purchaseDate = $group['purchase_date'];
@@ -845,7 +884,9 @@ function importPurchaseGroup($db, $group)
             $lineTotal
         ]);
 
-        // Calculate new weighted average cost
+        // Calculate new weighted average cost — company-wide, using the
+        // maintained total (p.current_stock) as its weight, matching how
+        // PurchaseController's own purchase-creation flow works.
         $currentStock   = floatval($p['current_stock']);
         $currentAvgCost = floatval($p['average_cost']);
 
@@ -855,26 +896,30 @@ function importPurchaseGroup($db, $group)
             $newAverageCost = $unitCost;
         }
 
-        $newStock = $currentStock + $qty;
-
-        // Update product
+        // Update product's cost fields (company-wide; not branch-specific)
         $db->query("
             UPDATE products
-            SET current_stock = ?,
-                cost_price = ?,
+            SET cost_price = ?,
                 average_cost = ?,
                 last_purchase_cost = ?,
                 last_purchase_date = ?
             WHERE id = ?
-        ", [$newStock, $unitCost, $newAverageCost, $unitCost, $purchaseDate, $p['id']]);
+        ", [$unitCost, $newAverageCost, $unitCost, $purchaseDate, $p['id']]);
+
+        // Update this branch's actual stock quantity (also keeps
+        // products.current_stock, used above, in sync)
+        $branchIdForImport = activeBranchId();
+        $branchPrevStock = getBranchStock($p['id'], $branchIdForImport);
+        $branchNewStock  = $branchPrevStock + $qty;
+        adjustBranchStock($db, $p['id'], $branchIdForImport, $qty);
 
         // Log stock movement
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 reference_id, previous_stock, new_stock, user_id, created_at)
-            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
-        ", [$p['id'], $qty, $purchaseId, $currentStock, $newStock, $userId, $purchaseDate]);
+                 reference_id, previous_stock, new_stock, user_id, branch_id, created_at)
+            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?)
+        ", [$p['id'], $qty, $purchaseId, $branchPrevStock, $branchNewStock, $userId, $branchIdForImport, $purchaseDate]);
 
         // Log cost history
         $changePercent = $currentAvgCost > 0
@@ -895,7 +940,7 @@ function importPurchaseGroup($db, $group)
             $qty,
             $changePercent,
             $currentStock,
-            $newStock,
+            $currentStock + $qty,
             $purchaseDate
         ]);
     }
@@ -974,7 +1019,7 @@ function importPurchaseGroup($db, $group)
 /**
  * Generate sequential purchase number for imports based on target date
  */
-function generatePurchaseNumberForImport($db, $dateStr)
+function generatePurchaseNumberForImport(Database $db, mixed $dateStr)
 {
     $prefix = 'PUR-';
     $date = date('Ymd', strtotime($dateStr));

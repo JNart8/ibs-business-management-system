@@ -45,10 +45,21 @@ if (!$isPublic && isLoggedIn()) {
     enforceSingleSession();
 }
 
+// ── Subscription lock ───────────────────────────────────────────
+// Computed live per-request (no caching) via licenseState() — see
+// functions.php and app/config/licensing.php. '/license' itself must
+// stay reachable no matter what, or a locked install could never be
+// unlocked. Checked before permission/plan gates below since it's a
+// more fundamental "is this install allowed to run at all" gate.
+$isLicensePage = strpos($path, '/license') === 0;
+if (!$isPublic && !$isLicensePage && isLoggedIn() && licenseState() === 'locked') {
+    redirect(BASE_URL . '/license');
+}
+
 // ── Permission-based access control ───────────────────────────
 // Define which permission each route prefix requires. Anything
 // not listed here is available to any logged-in user (matches
-// today's behavior for /pos, /sales, /dashboard, /reports, /account).
+// today's behavior for /dashboard, /reports, /account).
 // See app/config/plans.php for plan-tier gating (a separate,
 // orthogonal system — a route can require both a permission AND
 // a plan feature).
@@ -57,6 +68,11 @@ if (!$isPublic && isLoggedIn()) {
 // previously reachable by any logged-in user via direct URL (the
 // dashboard only *hid* the button for cashiers, it didn't actually
 // block the route). See ARCHITECTURE.md §5.10.
+//
+// NOTE: '/pos' and '/sales' were added later — a locked-down custom
+// role (products.manage + stock.manage only) could still open Sales
+// and ring up/void sales via direct URL, since neither route was
+// ever listed here. See ARCHITECTURE.md §5.11.
 $permissionRestrictions = [
     '/users'                => 'users.manage',
     '/settings'             => 'settings.manage',
@@ -72,6 +88,11 @@ $permissionRestrictions = [
     '/expenses'             => 'expenses.manage',
     '/distributor'          => 'distributor.manage',
     '/suspense'             => 'suspense.manage',
+    '/branches'             => 'branches.manage',
+    '/audit'                => 'audit.view',
+    '/transfers'            => 'stock.transfer',
+    '/pos'                  => 'sales.access',
+    '/sales'                => 'sales.access',
 ];
 
 if (!$isPublic && isLoggedIn()) {
@@ -136,6 +157,7 @@ $planFeatureMap = [
     '/reports/profit-loss'  => 'advanced_reports',
     '/reports/dead-stock'   => 'advanced_reports',
     '/reports/profit-margin' => 'advanced_reports',
+    '/reports/customer-credit' => 'advanced_reports',
     '/import'               => 'imports_exports',
     '/export'               => 'imports_exports',
     '/suspense'             => 'suspense',
@@ -147,6 +169,14 @@ $planFeatureMap = [
 
 if (!$isPublic && isLoggedIn()) {
     foreach ($planFeatureMap as $prefix => $feature) {
+        // The audit log itself isn't plan-gated (no /audit entry above) —
+        // its export shouldn't be either. It's a compliance feature, not
+        // a "power user" one, so it's exempted from the blanket /export
+        // Growth+ gate rather than requiring an upgrade just to get data
+        // a Core admin can already see on screen.
+        if ($prefix === '/export' && strpos($path, '/export/audit-log') === 0) {
+            continue;
+        }
         if (strpos($path, $prefix) === 0 && !planAllows($feature)) {
             http_response_code(403);
             echo '<!DOCTYPE html>
@@ -177,6 +207,39 @@ if (!$isPublic && isLoggedIn()) {
             exit;
         }
     }
+
+    // ── Multi-branch add-on gate ─────────────────────────────
+    // Not a plain plan-tier feature (see hasMultiBranch()), so it's
+    // checked separately from the $planFeatureMap loop above.
+    if ((strpos($path, '/branches') === 0 || strpos($path, '/transfers') === 0 || strpos($path, '/reports/customer-credit') === 0) && !hasMultiBranch()) {
+        http_response_code(403);
+        echo '<!DOCTYPE html>
+        <html>
+        <head>
+            <title>Upgrade Required</title>
+            <style>
+                body { font-family: Arial; text-align: center; padding: 80px; background: #f8fafc; }
+                .box { display:inline-block; background:#fff; border-radius:12px;
+                       padding:50px 60px; box-shadow:0 4px 20px rgba(0,0,0,.08); }
+                h1 { color: #d97706; font-size: 2rem; margin-bottom: 8px; }
+                p  { color: #6b7280; margin-bottom: 24px; }
+                a  { background:#3b82f6; color:#fff; padding:10px 24px;
+                     border-radius:8px; text-decoration:none; font-weight:600; }
+                a:hover { background:#2563eb; }
+            </style>
+        </head>
+        <body>
+            <div class="box">
+                <div style="font-size:3rem">🔒</div>
+                <h1>Upgrade Required</h1>
+                <p>Multi-branch isn\'t enabled for this account. Contact us to add it.</p>
+                <a href="' . BASE_URL . '/">← Go to Dashboard</a>
+            </div>
+        </body>
+        </html>';
+        ob_end_flush();
+        exit;
+    }
 }
 
 // ── Route to controller ───────────────────────────────────────
@@ -206,6 +269,12 @@ if ($path === '/' || $path === '' || $path === '/dashboard') {
     require APP_PATH . '/controllers/UserController.php';
 } elseif (strpos($path, '/roles') === 0) {
     require APP_PATH . '/controllers/RoleController.php';
+} elseif (strpos($path, '/branches') === 0) {
+    require APP_PATH . '/controllers/BranchController.php';
+} elseif (strpos($path, '/transfers') === 0) {
+    require APP_PATH . '/controllers/TransferController.php';
+} elseif (strpos($path, '/audit') === 0) {
+    require APP_PATH . '/controllers/AuditController.php';
 } elseif (strpos($path, '/settings') === 0) {
     require APP_PATH . '/controllers/SettingsController.php';
 } elseif (strpos($path, '/import') === 0) {
@@ -220,6 +289,8 @@ if ($path === '/' || $path === '' || $path === '/dashboard') {
     require APP_PATH . '/controllers/SuspenseController.php';
 } elseif (strpos($path, '/account') === 0) {
     require APP_PATH . '/controllers/AccountController.php';
+} elseif (strpos($path, '/license') === 0) {
+    require APP_PATH . '/controllers/LicenseController.php';
 } elseif ($path === '/login' || $path === '/logout') {
     require APP_PATH . '/controllers/AuthController.php';
 } else {

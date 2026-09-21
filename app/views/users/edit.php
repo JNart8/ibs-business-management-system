@@ -64,6 +64,56 @@
             <?php endif; ?>
         </div>
 
+        <?php if (hasMultiBranch()): ?>
+        <?php $currentBranchId = $assignedBranches[0]['id'] ?? $user['branch_id'] ?? null; ?>
+        <!-- Branch assignment -->
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+                Branch <span class="text-red-500">*</span>
+            </label>
+            <div class="space-y-2 border border-gray-200 rounded-lg p-3">
+                <?php foreach ($branches as $b): ?>
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="radio" name="branch_id" value="<?= $b['id'] ?>"
+                            <?= ($currentBranchId == $b['id']) ? 'checked' : '' ?>
+                            class="border-gray-300 text-blue-600 focus:ring-blue-500">
+                        <?= e($b['name']) ?>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">
+                Where this user's POS/sales are recorded, and — for a Branch-level user below —
+                the only branch they can see or manage. A Company-wide user still needs one
+                branch here for defaulting, but isn't limited to it.
+            </p>
+        </div>
+
+        <!-- Branch visibility scope -->
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Visibility</label>
+            <div class="space-y-2">
+                <label class="flex items-start gap-2 text-sm text-gray-700 border rounded-lg p-3 cursor-pointer">
+                    <input type="radio" name="branch_scope" value="assigned"
+                        <?= ($user['branch_scope'] ?? 'assigned') !== 'all' ? 'checked' : '' ?>
+                        class="mt-0.5 border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <span>
+                        <span class="block font-medium">Branch-level (default)</span>
+                        <span class="text-xs text-gray-500">Only sees/manages data for the branches checked above.</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2 text-sm text-gray-700 border rounded-lg p-3 cursor-pointer">
+                    <input type="radio" name="branch_scope" value="all"
+                        <?= ($user['branch_scope'] ?? '') === 'all' ? 'checked' : '' ?>
+                        class="mt-0.5 border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <span>
+                        <span class="block font-medium">Company-wide</span>
+                        <span class="text-xs text-gray-500">Sees/manages every branch, regardless of the assignment above — e.g. an owner or head-office admin.</span>
+                    </span>
+                </label>
+            </div>
+        </div>
+        <?php endif; ?>
+
         <!-- Active toggle -->
         <div class="flex items-center gap-3">
             <input type="checkbox" name="is_active" id="is_active" value="1"

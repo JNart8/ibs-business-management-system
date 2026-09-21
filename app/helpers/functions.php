@@ -7,7 +7,7 @@
 /**
  * Redirect to another page with optional flash message
  */
-function redirect($url, $type = null, $message = null)
+function redirect(mixed $url, mixed $type = null, mixed $message = null)
 {
     if ($type && $message) {
         $_SESSION['flash_type'] = $type; // 'success', 'error', 'warning', 'info'
@@ -53,7 +53,7 @@ function flashMessage()
 /**
  * Format currency (NULL-safe for PHP 8+)
  */
-function formatMoney($amount)
+function formatMoney(mixed $amount)
 {
     // Handle NULL and empty values
     $amount = $amount ?? 0;
@@ -69,7 +69,7 @@ function formatMoney($amount)
 /**
  * Format number safely (NULL-safe for PHP 8+)
  */
-function formatNumber($number, $decimals = 0)
+function formatNumber(mixed $number, mixed $decimals = 0)
 {
     $number = $number ?? 0;
     return number_format(floatval($number), $decimals);
@@ -78,7 +78,7 @@ function formatNumber($number, $decimals = 0)
 /**
  * Safe integer conversion
  */
-function safeInt($value)
+function safeInt(mixed $value)
 {
     return intval($value ?? 0);
 }
@@ -86,7 +86,7 @@ function safeInt($value)
 /**
  * Safe float conversion
  */
-function safeFloat($value)
+function safeFloat(mixed $value)
 {
     return floatval($value ?? 0);
 }
@@ -94,7 +94,7 @@ function safeFloat($value)
 /**
  * Escape HTML output (prevent XSS attacks)
  */
-function e($string)
+function e(mixed $string)
 {
     return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8');
 }
@@ -102,7 +102,7 @@ function e($string)
 /**
  * Get old input value (for form validation errors)
  */
-function old($field, $default = '')
+function old(mixed $field, mixed $default = '')
 {
     if (isset($_SESSION['old_input'][$field])) {
         $value = $_SESSION['old_input'][$field];
@@ -203,7 +203,7 @@ function canManageAnything()
  * Does the current user have this permission?
  * Usage: if (can('products.manage')) { ... }
  */
-function can($permission)
+function can(mixed $permission)
 {
     return in_array($permission, currentUserPermissions(), true);
 }
@@ -213,7 +213,7 @@ function can($permission)
  * per-request per role_id since it's looked up repeatedly (e.g.
  * once per user row on the Users list).
  */
-function roleSlug($roleId)
+function roleSlug(mixed $roleId)
 {
     static $cache = [];
     if (!$roleId) return null;
@@ -228,7 +228,7 @@ function roleSlug($roleId)
 /**
  * Display name of a role by id (e.g. for the Users list / badges).
  */
-function roleName($roleId)
+function roleName(mixed $roleId)
 {
     static $cache = [];
     if (!$roleId) return 'Unknown';
@@ -299,7 +299,7 @@ function currentPlanDefinition()
  * Does the current plan include this feature?
  * Usage: if (planAllows('advanced_reports')) { ... }
  */
-function planAllows($feature)
+function planAllows(mixed $feature)
 {
     $definition = currentPlanDefinition();
     return in_array($feature, $definition['features'] ?? [], true);
@@ -309,7 +309,7 @@ function planAllows($feature)
  * Is there room for one more active user under the current plan?
  * Pass the count of currently active users (see UserController).
  */
-function withinUserLimit($activeUserCount)
+function withinUserLimit(mixed $activeUserCount)
 {
     return (int)$activeUserCount < currentPlanDefinition()['max_users'];
 }
@@ -318,7 +318,7 @@ function withinUserLimit($activeUserCount)
  * Render a small "Upgrade your plan" notice, styled like the app's
  * existing flash messages, for use on blocked pages/sections.
  */
-function planUpgradeNotice($featureLabel = 'This feature')
+function planUpgradeNotice(mixed $featureLabel = 'This feature')
 {
     $planLabel = currentPlanDefinition()['label'];
     return "
@@ -329,9 +329,141 @@ function planUpgradeNotice($featureLabel = 'This feature')
 }
 
 /**
+ * Load app/config/licensing.php (warning/grace windows + public key).
+ * Cached per-request, same pattern as planDefinitions().
+ */
+function licensingConfig()
+{
+    static $config = null;
+    if ($config === null) {
+        $config = require APP_PATH . '/config/licensing.php';
+    }
+    return $config;
+}
+
+/**
+ * The single `license` row for this install (one row, like `settings`).
+ * Auto-creates it (grandfathered 90 days) if a fresh install somehow
+ * reaches this before the migration has run, so it degrades safely
+ * rather than fatal-erroring every page.
+ * Cached per-request only (not session) — same reasoning as
+ * currentPlan(): entering a code should take effect on the very next
+ * page load, no logout/login needed.
+ */
+function licenseRow()
+{
+    static $row = null;
+    if ($row === null) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT * FROM license ORDER BY id ASC LIMIT 1");
+        if (!$row) {
+            $db->query(
+                "INSERT INTO license (install_id, expires_at) VALUES (?, DATE_ADD(NOW(), INTERVAL 90 DAY))",
+                [bin2hex(random_bytes(8))]
+            );
+            $row = $db->fetchOne("SELECT * FROM license ORDER BY id ASC LIMIT 1");
+        }
+    }
+    return $row;
+}
+
+/**
+ * This install's unique id. Shown on /license so the client can quote
+ * it when requesting a renewal code — codes are bound to one install_id
+ * and won't verify against a different one.
+ */
+function licenseInstallId()
+{
+    return licenseRow()['install_id'];
+}
+
+function licenseExpiresAt()
+{
+    return licenseRow()['expires_at'];
+}
+
+/**
+ * Signed day count to expiry: positive = days remaining, negative =
+ * days since it expired. Display only — see licenseState() for the
+ * actual lock/warning decision (which compares full timestamps, not
+ * rounded days, to avoid off-by-one edge cases at day boundaries).
+ */
+function licenseDaysRemaining()
+{
+    $now       = new DateTimeImmutable('today');
+    $expiresAt = new DateTimeImmutable(licenseExpiresAt());
+    return (int) $now->diff($expiresAt)->format('%r%a');
+}
+
+/**
+ * 'active'  — nothing to show.
+ * 'warning' — inside warning_days of expiry, or past expiry but still
+ *             inside grace_days. App stays fully usable either way.
+ * 'locked'  — past expires_at + grace_days. Every route except
+ *             /license (and login/logout) redirects there — see
+ *             public/index.php.
+ */
+function licenseState()
+{
+    $config    = licensingConfig();
+    $now       = new DateTimeImmutable();
+    $expiresAt = new DateTimeImmutable(licenseExpiresAt());
+
+    if ($now > $expiresAt->modify("+{$config['grace_days']} days")) {
+        return 'locked';
+    }
+    if ($now >= $expiresAt->modify("-{$config['warning_days']} days")) {
+        return 'warning';
+    }
+    return 'active';
+}
+
+/**
+ * Verify and apply an unlock code submitted on /license.
+ * Returns ['ok' => bool, 'message' => string] for the controller to
+ * flash straight back to the user.
+ */
+function applyLicenseCode(mixed $code)
+{
+    $config  = licensingConfig();
+    $decoded = LicenseCode::verify((string) $code, $config['public_key']);
+
+    if ($decoded === null) {
+        return ['ok' => false, 'message' => "That code isn't valid. Double check you copied the whole thing."];
+    }
+
+    if ($decoded['install_id'] !== licenseInstallId()) {
+        return ['ok' => false, 'message' => 'That code was issued for a different installation.'];
+    }
+
+    if ($decoded['expires_at'] <= time()) {
+        return ['ok' => false, 'message' => 'That code has already expired.'];
+    }
+
+    $previousExpiresAt = licenseExpiresAt();
+    $newExpiresAt       = date('Y-m-d H:i:s', $decoded['expires_at']);
+
+    $db = Database::getInstance();
+    $db->query(
+        "UPDATE license SET expires_at = ?, last_code_used = ?, last_unlocked_at = NOW() ORDER BY id ASC LIMIT 1",
+        [$newExpiresAt, substr((string) $code, 0, 255)]
+    );
+
+    logAudit('license.renew', 'license', null, [
+        'previous_expires_at' => $previousExpiresAt,
+        'new_expires_at'      => $newExpiresAt,
+    ], true);
+
+    return [
+        'ok'      => true,
+        'message' => 'Subscription renewed — active until ' . formatDate($newExpiresAt, 'd M Y') . '.',
+    ];
+}
+
+/**
  * Generate unique SKU (if you want auto-generation)
  */
-function generateSKU($prefix = 'PROD')
+function generateSKU(mixed $prefix = 'PROD')
 {
     return $prefix . '-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
 }
@@ -339,7 +471,7 @@ function generateSKU($prefix = 'PROD')
 /**
  * Format date for display
  */
-function formatDate($date, $format = 'Y-m-d H:i')
+function formatDate(mixed $date, mixed $format = 'Y-m-d H:i')
 {
     if (empty($date)) {
         return '';
@@ -350,7 +482,7 @@ function formatDate($date, $format = 'Y-m-d H:i')
 /**
  * Extract numeric ID from a string (e.g., "SALE-0001" → 1)
  */
-function extractId($string)
+function extractId(mixed $string)
 {
     preg_match('/\d+$/', $string, $matches);
     return isset($matches[0]) ? (int)$matches[0] : 0;
@@ -359,7 +491,7 @@ function extractId($string)
 /**
  * Normalize product units so common aliases map to the app's default value.
  */
-function normalizeUnit($value)
+function normalizeUnit(mixed $value)
 {
     $unit = trim((string)($value ?? ''));
     if ($unit === '') {
@@ -376,8 +508,11 @@ function normalizeUnit($value)
  * Record a transaction on a financial account.
  *
  * When $accountId is provided the transaction is posted directly to that
- * account. When omitted the helper falls back to the seeded default cash
- * account so that money is never silently dropped.
+ * account. When omitted the helper falls back to the default account for
+ * $paymentMethod's type, preferring one scoped to $branchId (or the
+ * current active branch) over a company-wide one — cash accounts are
+ * branch-scoped, so this matters there; mobile/bank defaults are still
+ * company-wide today and match regardless of branch.
  *
  * @param Database $db
  * @param string   $paymentMethod  'cash', 'mobile', 'bank', etc.
@@ -387,19 +522,29 @@ function normalizeUnit($value)
  * @param int      $referenceId
  * @param string   $notes
  * @param int|null $accountId      Specific account ID (optional)
+ * @param int|null $branchId       Branch to prefer when falling back by type (optional, defaults to activeBranchId())
  * @return bool
  */
-function recordAccountTransaction($db, $paymentMethod, $amount, $type, $referenceType, $referenceId, $notes, $accountId = null)
+function recordAccountTransaction(Database $db, mixed $paymentMethod, mixed $amount, mixed $type, mixed $referenceType, mixed $referenceId, mixed $notes, mixed $accountId = null, mixed $branchId = null)
 {
     $amount = floatval($amount);
     if ($amount <= 0) return false;
 
     // ── Resolve account ────────────────────────────────────────────────────
     if ($accountId && $accountId > 0) {
-        // Use the explicitly selected account
+        // Use the explicitly selected account. Deliberately NOT branch-scoped
+        // here — this single function is also how void/refund flows reverse a
+        // historical account_transactions row (e.g. SaleController::voidSale()
+        // passes $acctTx['account_id']), and that account must be reachable
+        // regardless of the *voiding* user's own branch scope, since undoing a
+        // transaction isn't the same as choosing one. Branch validation of a
+        // freshly-submitted account_id belongs in the caller, before it ever
+        // reaches here — see accountBranchScopeSql() call sites in the
+        // controllers (deposit/payment/POS pickers).
         $account = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 LIMIT 1", [$accountId]);
     } else {
-        // Auto-resolve: try default account for the payment-method type
+        // Auto-resolve: try default account for the payment-method type,
+        // preferring one scoped to $branchId over a company-wide one.
         $accountType = null;
         if ($paymentMethod === 'cash') {
             $accountType = 'cash';
@@ -409,17 +554,28 @@ function recordAccountTransaction($db, $paymentMethod, $amount, $type, $referenc
             $accountType = 'bank';
         }
 
+        $effectiveBranchId = $branchId ?? activeBranchId();
+
         if ($accountType) {
             $account = $db->fetchOne(
-                "SELECT * FROM accounts WHERE type = ? AND is_default = 1 AND is_active = 1 LIMIT 1",
-                [$accountType]
+                "SELECT * FROM accounts
+                 WHERE type = ? AND is_default = 1 AND is_active = 1
+                   AND (branch_id = ? OR branch_id IS NULL)
+                 ORDER BY (branch_id = ?) DESC
+                 LIMIT 1",
+                [$accountType, $effectiveBranchId, $effectiveBranchId]
             );
         }
 
-        // Final fallback: default cash account (always seeded)
+        // Final fallback: default cash account (always seeded), same branch preference
         if (empty($account)) {
             $account = $db->fetchOne(
-                "SELECT * FROM accounts WHERE type = 'cash' AND is_default = 1 AND is_active = 1 LIMIT 1"
+                "SELECT * FROM accounts
+                 WHERE type = 'cash' AND is_default = 1 AND is_active = 1
+                   AND (branch_id = ? OR branch_id IS NULL)
+                 ORDER BY (branch_id = ?) DESC
+                 LIMIT 1",
+                [$effectiveBranchId, $effectiveBranchId]
             );
         }
     }
@@ -476,7 +632,7 @@ function ledgerFilters()
  * Build the WHERE clause + params for an account's ledger, given the
  * filters from ledgerFilters().
  */
-function buildLedgerWhere($accountId, $filters)
+function buildLedgerWhere(mixed $accountId, mixed $filters)
 {
     $where  = "WHERE t.account_id = ?";
     $params = [$accountId];
@@ -509,7 +665,7 @@ function buildLedgerWhere($accountId, $filters)
  * stock/quantity support so displays don't silently round a real
  * fractional quantity down to a whole number.
  */
-function formatQty($value)
+function formatQty(mixed $value)
 {
     $value = floatval($value ?? 0);
     $rounded = round($value, 3);
@@ -563,24 +719,22 @@ function enforceSingleSession()
 
     // Someone (possibly this same person, from another device) has
     // logged in since this session started. Sign this one out.
+    logAudit('user.session_kicked', 'user', $userId, [
+        'reason' => 'Signed in from another device/session',
+    ]);
+
+    // Clear auth state but keep this same session (and its cookie) alive
+    // so the flash message actually reaches /login. An earlier version of
+    // this function expired the cookie and called session_destroy() first
+    // (like processLogout() does), then tried to session_start() a fresh
+    // session under the same ID to carry the flash message — but PHP
+    // doesn't reliably re-send a Set-Cookie for a reused ID once one has
+    // already been expired in the same response, so the browser was left
+    // with no session cookie at all and the flash message never made it
+    // to the login page (QA: "signed out, but no explanatory message").
+    // Simply clearing $_SESSION (as redirect() already does for every
+    // other flash message) avoids the whole cookie/destroy dance.
     $_SESSION = [];
-
-    if (ini_get('session.use_cookies')) {
-        $params = session_get_cookie_params();
-        setcookie(
-            session_name(),
-            '',
-            time() - 42000,
-            $params['path'],
-            $params['domain'],
-            $params['secure'],
-            $params['httponly']
-        );
-    }
-    session_destroy();
-
-    // Start a new session so the flash message survives to the login page.
-    session_start();
     $_SESSION['flash_type'] = 'info';
     $_SESSION['flash_message'] = 'You have been signed out because this account was signed in from another device.';
 
@@ -598,7 +752,7 @@ function enforceSingleSession()
  * setting on proactively fixes it too). Idempotent — safe to call on
  * every POS load; it only ever inserts once.
  */
-function ensureWalkInCustomerExists($db)
+function ensureWalkInCustomerExists(Database $db)
 {
     $existing = $db->fetchOne("SELECT id FROM customers WHERE is_default = 1 LIMIT 1");
     if ($existing) {
@@ -613,4 +767,331 @@ function ensureWalkInCustomerExists($db)
         "INSERT INTO customers (customer_code, full_name, is_default, credit_limit, is_active) VALUES (?, ?, 1, 0.00, 1)",
         [$code, 'Walk-in Customer']
     );
+}
+
+/**
+ * Is multi-branch active for this install? Independent of plan tier —
+ * every Enterprise client gets it automatically, but it can also be
+ * sold as a paid add-on to a Growth client via settings.addon_multi_branch.
+ * Cached per-request like currentPlan().
+ */
+function hasMultiBranch()
+{
+    static $result = null;
+    if ($result === null) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT plan, addon_multi_branch FROM settings ORDER BY id ASC LIMIT 1");
+        $result = (($row['plan'] ?? 'core') === 'enterprise') || !empty($row['addon_multi_branch']);
+    }
+    return $result;
+}
+
+/**
+ * All branches a user is assigned to (id, name, is_primary), ordered
+ * primary-first. Cached per user id per request.
+ */
+function userBranches(mixed $userId)
+{
+    static $cache = [];
+    if (!isset($cache[$userId])) {
+        $db = Database::getInstance();
+        $cache[$userId] = $db->fetchAll("
+            SELECT b.id, b.name, ub.is_primary
+            FROM user_branches ub
+            JOIN branches b ON b.id = ub.branch_id
+            WHERE ub.user_id = ? AND b.is_active = 1
+            ORDER BY ub.is_primary DESC, b.name ASC
+        ", [$userId]);
+    }
+    return $cache[$userId];
+}
+
+/**
+ * The branch a sale/purchase/stock movement should be recorded
+ * against right now — the current user's "active" branch. No picker
+ * is shown in POS; this is resolved once (defaults to the user's
+ * primary branch, changeable via the branch switcher when a user has
+ * more than one). Falls back to Main Branch (1) defensively if
+ * somehow unset.
+ */
+function activeBranchId()
+{
+    return currentUser()['branch_id'] ?? 1;
+}
+
+/**
+ * Display name for the current user's active branch.
+ */
+function activeBranchName()
+{
+    return branchName(activeBranchId());
+}
+
+/**
+ * Is the current user "company-wide" (sees/manages every branch) or
+ * restricted to just the branches they're assigned to? Independent of
+ * role — an Admin can be scoped to one branch ("branch admin"), and a
+ * non-admin could in principle be made company-wide, though in
+ * practice this is mainly used to distinguish branch-level admins
+ * from company-wide ones. Defaults to 'assigned' (the more
+ * conservative option) for anyone not explicitly set otherwise.
+ */
+function isCompanyWide()
+{
+    return (currentUser()['branch_scope'] ?? 'assigned') === 'all';
+}
+
+/**
+ * Which branch IDs the current user should see data for.
+ * Returns null to mean "no restriction" (multi-branch isn't active
+ * for this install, or this user is company-wide) — callers should
+ * treat null as "don't filter at all", not as "empty list".
+ */
+function visibleBranchIds()
+{
+    if (!hasMultiBranch() || isCompanyWide()) {
+        return null;
+    }
+    return array_column(userBranches(currentUser()['id']), 'id');
+}
+
+/**
+ * SQL expression for a sale line's revenue net of the sale-level
+ * discount. sale_items.line_total is already net of the line's own
+ * discount; sales.discount_amount (the whole-cart discount) lives only
+ * on the header, so it is spread across lines pro rata to line_total.
+ * sales.subtotal is the sum of line_totals, so the shares add back up
+ * to the discount given. Use in place of SUM(si.line_total) in any
+ * revenue/profit report that joins sale_items to sales.
+ *
+ * Usage:
+ *   $netLine = saleItemNetSql();          // aliases si / s
+ *   "SELECT SUM({$netLine}) AS revenue FROM sale_items si JOIN sales s ..."
+ */
+function saleItemNetSql(string $itemAlias = 'si', string $saleAlias = 's'): string
+{
+    return "{$itemAlias}.line_total * (1 - COALESCE({$saleAlias}.discount_amount / NULLIF({$saleAlias}.subtotal, 0), 0))";
+}
+
+/**
+ * A ready-to-splice SQL fragment + params enforcing branch visibility
+ * on a query, built from visibleBranchIds(). Returns ['', []] when
+ * there's no restriction to apply. If a user is somehow assigned to
+ * zero branches, this deliberately shows nothing rather than
+ * everything (fails closed, not open).
+ *
+ * Usage:
+ *   [$scopeSql, $scopeParams] = branchScopeSql('s');
+ *   $where   .= $scopeSql;
+ *   $params   = array_merge($params, $scopeParams);
+ */
+function branchScopeSql(mixed $alias = '', mixed $column = 'branch_id')
+{
+    $branchIds = visibleBranchIds();
+    if ($branchIds === null) {
+        return ['', []];
+    }
+    if (empty($branchIds)) {
+        return [' AND 1=0', []];
+    }
+    $prefix = $alias ? "$alias." : '';
+    $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
+    return [" AND {$prefix}{$column} IN ($placeholders)", $branchIds];
+}
+
+/**
+ * Same idea as branchScopeSql(), but for accounts specifically: a
+ * branch-scoped user must still see every company-wide account
+ * (branch_id IS NULL — a shared bank account, the suspense account)
+ * alongside their own branch's. branchScopeSql()'s plain `IN (...)`
+ * would wrongly hide every NULL-branch row, so accounts gets its own
+ * OR-NULL variant instead of reusing it directly.
+ *
+ * Usage: identical to branchScopeSql() — [$scopeSql, $scopeParams] = accountBranchScopeSql('a');
+ */
+function accountBranchScopeSql(mixed $alias = '')
+{
+    if (!hasMultiBranch() || isCompanyWide()) {
+        return ['', []];
+    }
+    $branchIds = array_column(userBranches(currentUser()['id']), 'id');
+    if (empty($branchIds)) {
+        return [' AND 1=0', []];
+    }
+    $prefix = $alias ? "$alias." : '';
+    $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
+    return [" AND ({$prefix}branch_id IS NULL OR {$prefix}branch_id IN ($placeholders))", $branchIds];
+}
+
+/**
+ * Validates a submitted branch choice for a manually-created/edited
+ * mobile_money or bank account (cash accounts are always system-managed
+ * and branch-scoped — they never go through this). Empty/absent means
+ * company-wide (NULL), always allowed regardless of the submitter's own
+ * branch scope — sharing an account isn't a bigger privilege than
+ * managing your own branch's. A specific branch must exist, be active,
+ * and be one of the submitting user's own branches unless they're
+ * company-wide (isCompanyWide()).
+ *
+ * @return array [int|null $branchId, string|null $error]
+ */
+function resolveAccountBranchChoice(Database $db, mixed $rawBranchId)
+{
+    $rawBranchId = trim((string) $rawBranchId);
+    if ($rawBranchId === '') {
+        return [null, null];
+    }
+
+    $branchId = intval($rawBranchId);
+    $branch = $db->fetchOne("SELECT id FROM branches WHERE id = ? AND is_active = 1", [$branchId]);
+    if (!$branch) {
+        return [null, 'Selected branch is invalid or inactive.'];
+    }
+
+    if (!isCompanyWide()) {
+        $ownBranchIds = array_column(userBranches(currentUser()['id']), 'id');
+        if (!in_array($branchId, $ownBranchIds, true)) {
+            return [null, 'You can only assign an account to your own branch.'];
+        }
+    }
+
+    return [$branchId, null];
+}
+
+/**
+ * Display name of any branch by id (e.g. for the Users list),
+ * cached per-request per branch id.
+ */
+function branchName(mixed $branchId)
+{
+    static $cache = [];
+    if (!$branchId) return '—';
+    if (!array_key_exists($branchId, $cache)) {
+        $db  = Database::getInstance();
+        $row = $db->fetchOne("SELECT name FROM branches WHERE id = ?", [$branchId]);
+        $cache[$branchId] = $row['name'] ?? '—';
+    }
+    return $cache[$branchId];
+}
+
+/**
+ * Record an audit trail entry. Scope is deliberately narrow — this is
+ * for money and access-changing actions (voids, permission/role
+ * changes, user/branch/account edits, settings), not routine data
+ * entry (a normal sale or purchase is not logged here; who can see
+ * it and reconstruct it from the sales/purchases tables themselves).
+ *
+ * Never throws — a logging failure should never block the actual
+ * action it's describing. If the audit_log insert fails for any
+ * reason (e.g. this migration hasn't been run yet on an older
+ * install), the calling code continues normally.
+ *
+ * @param string $action      e.g. 'sale.void', 'user.update', 'role.permissions_changed'
+ * @param string|null $entityType  e.g. 'sale', 'user', 'role', 'account', 'branch', 'settings'
+ * @param int|null $entityId
+ * @param array $details      Arbitrary JSON-able context — what changed, old/new values, etc.
+ * @param bool $companyWide   True for actions that aren't really about any one
+ *                            branch (role/permission changes, settings) — stores
+ *                            branch_id as NULL instead of the actor's current
+ *                            branch, so branchScopeSql() excludes it for every
+ *                            branch-scoped viewer, not just ones outside the
+ *                            actor's branch at the time. Without this, a branch
+ *                            admin could see company-wide administrative history
+ *                            just because they happened to be active at their
+ *                            own branch when someone made the change.
+ */
+function logAudit(mixed $action, mixed $entityType = null, mixed $entityId = null, mixed $details = [], mixed $companyWide = false)
+{
+    try {
+        $db = Database::getInstance();
+        $db->query("
+            INSERT INTO audit_log (user_id, username, action, entity_type, entity_id, branch_id, details, ip_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ", [
+            $_SESSION['user_id'] ?? null,
+            $_SESSION['username'] ?? null,
+            $action,
+            $entityType,
+            $entityId,
+            ($companyWide || !currentUser()) ? null : activeBranchId(),
+            !empty($details) ? json_encode($details) : null,
+            $_SERVER['REMOTE_ADDR'] ?? null,
+        ]);
+    } catch (Exception $e) {
+        // Deliberately swallow — see doc comment above.
+    }
+}
+
+/**
+ * How much of a product is at a given branch (defaults to the
+ * current user's active branch). This is the real, per-branch
+ * source of truth — products.current_stock is a maintained total
+ * across all branches, not a substitute for this.
+ */
+function getBranchStock(mixed $productId, mixed $branchId = null)
+{
+    $branchId = $branchId ?? activeBranchId();
+    $db = Database::getInstance();
+    $row = $db->fetchOne(
+        "SELECT quantity FROM branch_stock WHERE product_id = ? AND branch_id = ?",
+        [$productId, $branchId]
+    );
+    return $row ? floatval($row['quantity']) : 0.0;
+}
+
+/**
+ * Add (positive delta) or remove (negative delta) stock for a product
+ * at a specific branch, then keep products.current_stock in sync as
+ * the total across all branches. This is THE function every
+ * stock-changing action should call — never write to branch_stock or
+ * products.current_stock directly, or the two will drift apart.
+ *
+ * Upserts the branch_stock row (a product may not have had any
+ * recorded stock at this branch yet).
+ */
+function adjustBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $delta)
+{
+    $db->query("
+        INSERT INTO branch_stock (product_id, branch_id, quantity)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)
+    ", [$productId, $branchId, $delta]);
+
+    recalcProductTotalStock($db, $productId);
+
+    return getBranchStock($productId, $branchId);
+}
+
+/**
+ * Set a product's stock at a specific branch to an absolute value
+ * (used by manual stock adjustment, not by sales/purchases, which
+ * should use adjustBranchStock() with a relative delta instead).
+ * Also keeps products.current_stock in sync.
+ */
+function setBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $newQuantity)
+{
+    $db->query("
+        INSERT INTO branch_stock (product_id, branch_id, quantity)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE quantity = VALUES(quantity)
+    ", [$productId, $branchId, $newQuantity]);
+
+    recalcProductTotalStock($db, $productId);
+}
+
+/**
+ * Recompute products.current_stock as the sum of branch_stock across
+ * every branch for one product. Called automatically by
+ * adjustBranchStock()/setBranchStock() — exposed standalone too, for
+ * a one-off repair if the cache is ever suspected to have drifted.
+ */
+function recalcProductTotalStock(Database $db, mixed $productId)
+{
+    $total = $db->fetchOne(
+        "SELECT COALESCE(SUM(quantity), 0) AS total FROM branch_stock WHERE product_id = ?",
+        [$productId]
+    );
+    $totalValue = floatval($total['total'] ?? 0);
+    $db->query("UPDATE products SET current_stock = ? WHERE id = ?", [$totalValue, $productId]);
+    return $totalValue;
 }

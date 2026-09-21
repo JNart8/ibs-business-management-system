@@ -88,7 +88,7 @@ switch ($action) {
 /**
  * Show purchase creation interface (POS-style)
  */
-function showCreatePurchase($db)
+function showCreatePurchase(Database $db)
 {
     // Get all active suppliers
     $suppliers = $db->fetchAll("
@@ -101,14 +101,15 @@ function showCreatePurchase($db)
     // Recent products for quick access
     $quickProducts = $db->fetchAll("
         SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, 
-               p.current_stock, p.unit, p.supplier_id,
+               COALESCE(bs.quantity, 0) AS current_stock, p.unit, p.supplier_id,
                s.company_name AS supplier_name
         FROM products p
         LEFT JOIN suppliers s ON p.supplier_id = s.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         WHERE p.is_active = 1
         ORDER BY p.id DESC
         LIMIT 20
-    ");
+    ", [activeBranchId()]);
 
     // Categories for filtering
     $categories = $db->fetchAll("
@@ -116,8 +117,10 @@ function showCreatePurchase($db)
     ");
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     // Check if a product is preselected
@@ -126,12 +129,13 @@ function showCreatePurchase($db)
     if ($preselectId > 0) {
         $preselectedProduct = $db->fetchOne("
             SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, 
-                   p.current_stock, p.unit, p.supplier_id,
+                   COALESCE(bs.quantity, 0) AS current_stock, p.unit, p.supplier_id,
                    s.company_name AS supplier_name
             FROM products p
             LEFT JOIN suppliers s ON p.supplier_id = s.id
+            LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
             WHERE p.id = ? AND p.is_active = 1
-        ", [$preselectId]);
+        ", [activeBranchId(), $preselectId]);
     }
 
     $pageTitle = 'Create Purchase';
@@ -141,7 +145,7 @@ function showCreatePurchase($db)
 /**
  * Complete a purchase - create record, update costs, update stock
  */
-function completePurchase($db)
+function completePurchase(Database $db)
 {
     header('Content-Type: application/json');
 
@@ -276,8 +280,8 @@ function completePurchase($db)
                     (purchase_number, supplier_id, subtotal, discount_percent,
                      discount_amount, vat_percent, vat_amount, total_amount,
                      payment_status, payment_method, amount_paid, amount_due,
-                     invoice_number, notes, user_id, purchase_date, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     invoice_number, notes, user_id, branch_id, purchase_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $purchaseNumber,
                 $supplierId,
@@ -294,6 +298,7 @@ function completePurchase($db)
                 $invoiceNumber ?: null,
                 $notes ?: null,
                 $userId,
+                activeBranchId(),
                 $purchaseDate,
                 $purchaseDate,
                 $purchaseDate
@@ -304,8 +309,8 @@ function completePurchase($db)
                     (purchase_number, supplier_id, subtotal, discount_percent,
                      discount_amount, vat_percent, vat_amount, total_amount,
                      payment_status, payment_method, amount_paid, amount_due,
-                     invoice_number, notes, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     invoice_number, notes, user_id, branch_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $purchaseNumber,
                 $supplierId,
@@ -321,7 +326,8 @@ function completePurchase($db)
                 $amountDue,
                 $invoiceNumber ?: null,
                 $notes ?: null,
-                $userId
+                $userId,
+                activeBranchId()
             ]);
         }
 
@@ -347,7 +353,11 @@ function completePurchase($db)
                 $vi['lineTotal']
             ]);
 
-            // Calculate new weighted average cost
+            // Calculate new weighted average cost — this is a company-wide
+            // cost-accounting figure, not a per-branch one, so it correctly
+            // keeps using the global current_stock (p.current_stock, the
+            // maintained total) as its weight, even though the actual
+            // stock quantity below is now tracked per branch.
             $currentStock   = floatval($p['current_stock']);
             $currentAvgCost = floatval($p['average_cost']);
             $newQty         = $vi['qty'];
@@ -361,26 +371,30 @@ function completePurchase($db)
                 $newAverageCost = $newCost;
             }
 
-            $newStock = $currentStock + $newQty;
-
-            // Update product
+            // Update product's cost fields (company-wide; not branch-specific)
             $db->query("
                 UPDATE products
-                SET current_stock = ?,
-                    cost_price = ?,
+                SET cost_price = ?,
                     average_cost = ?,
                     last_purchase_cost = ?,
                     last_purchase_date = NOW()
                 WHERE id = ?
-            ", [$newStock, $newCost, $newAverageCost, $newCost, $p['id']]);
+            ", [$newCost, $newAverageCost, $newCost, $p['id']]);
+
+            // Update this branch's actual stock quantity (also keeps
+            // products.current_stock, the company-wide total used above, in sync)
+            $branchIdForPurchase = activeBranchId();
+            $branchPrevStock = getBranchStock($p['id'], $branchIdForPurchase);
+            $branchNewStock  = $branchPrevStock + $newQty;
+            adjustBranchStock($db, $p['id'], $branchIdForPurchase, $newQty);
 
             // Log stock movement
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, user_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?)
-            ", [$p['id'], $newQty, $purchaseId, $currentStock, $newStock, $userId]);
+                     reference_id, previous_stock, new_stock, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
+            ", [$p['id'], $newQty, $purchaseId, $branchPrevStock, $branchNewStock, $userId, $branchIdForPurchase]);
 
             // Log cost history
             $changePercent = $currentAvgCost > 0
@@ -401,7 +415,7 @@ function completePurchase($db)
                 $newQty,
                 $changePercent,
                 $currentStock,
-                $newStock
+                $currentStock + $newQty
             ]);
         }
 
@@ -457,9 +471,10 @@ function completePurchase($db)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank', 'cheque' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }
@@ -509,7 +524,7 @@ function completePurchase($db)
 /**
  * List all purchases
  */
-function listPurchases($db)
+function listPurchases(Database $db)
 {
     $search = trim($_GET['search'] ?? '');
     $status = $_GET['status']     ?? '';
@@ -520,6 +535,11 @@ function listPurchases($db)
 
     $params = [];
     $where  = "WHERE 1=1";
+
+    // Branch visibility — same rule as sales history.
+    [$scopeSql, $scopeParams] = branchScopeSql('p');
+    $where .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
 
     if (!empty($search)) {
         $where   .= " AND (p.purchase_number LIKE ? OR s.company_name LIKE ? OR p.invoice_number LIKE ?)";
@@ -560,7 +580,8 @@ function listPurchases($db)
         LIMIT ? OFFSET ?
     ", array_merge($params, [$limit, $offset]));
 
-    // Today's stats
+    // Today's stats — also branch-scoped, same reasoning as sales' daily summary.
+    [$dailyScopeSql, $dailyScopeParams] = branchScopeSql('');
     $todayStats = $db->fetchOne("
         SELECT
             COUNT(*)                        AS total_purchases,
@@ -569,7 +590,8 @@ function listPurchases($db)
             COALESCE(SUM(amount_due), 0)    AS outstanding
         FROM purchases
         WHERE DATE(purchase_date) = CURDATE()
-    ");
+        $dailyScopeSql
+    ", $dailyScopeParams);
 
     $pageTitle = 'Purchases';
     include APP_PATH . '/views/purchases/index.php';
@@ -578,8 +600,9 @@ function listPurchases($db)
 /**
  * View single purchase
  */
-function viewPurchase($db, $id)
+function viewPurchase(Database $db, mixed $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('p');
     $purchase = $db->fetchOne("
         SELECT p.*, s.company_name, s.contact_name, s.phone AS supplier_phone,
                s.supplier_code, u.full_name AS created_by
@@ -587,7 +610,8 @@ function viewPurchase($db, $id)
         LEFT JOIN suppliers s ON p.supplier_id = s.id
         LEFT JOIN users u ON p.user_id = u.id
         WHERE p.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$purchase) {
         redirect(BASE_URL . '/purchases', 'error', 'Purchase not found');
@@ -595,11 +619,12 @@ function viewPurchase($db, $id)
     }
 
     $items = $db->fetchAll("
-        SELECT pi.*, p.sku, p.unit, p.current_stock
+        SELECT pi.*, p.sku, p.unit, COALESCE(bs.quantity, 0) AS current_stock
         FROM purchase_items pi
         LEFT JOIN products p ON pi.product_id = p.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         WHERE pi.purchase_id = ?
-    ", [$id]);
+    ", [$purchase['branch_id'] ?? activeBranchId(), $id]);
 
     // Payment history
     $payments = $db->fetchAll("
@@ -619,13 +644,15 @@ function viewPurchase($db, $id)
 /**
  * Show payment form for outstanding purchase
  */
-function showPurchasePaymentForm($db, $id)
+function showPurchasePaymentForm(Database $db, mixed $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('p');
     $purchase = $db->fetchOne("
         SELECT p.*, s.company_name AS supplier_name
         FROM purchases p LEFT JOIN suppliers s ON p.supplier_id = s.id
         WHERE p.id = ? AND p.payment_status != 'paid'
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$purchase) {
         redirect(BASE_URL . '/purchases', 'error', 'Purchase not found or already paid');
@@ -633,8 +660,10 @@ function showPurchasePaymentForm($db, $id)
     }
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     $pageTitle = 'Record Payment';
@@ -644,14 +673,15 @@ function showPurchasePaymentForm($db, $id)
 /**
  * Process payment on outstanding purchase
  */
-function processPurchasePayment($db, $id)
+function processPurchasePayment(Database $db, mixed $id)
 {
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         redirect(BASE_URL . '/purchases/pay/' . $id, 'error', 'Invalid form submission');
         return;
     }
 
-    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$purchase || $purchase['payment_status'] === 'paid') {
         redirect(BASE_URL . '/purchases', 'error', 'Purchase not found or already paid');
         return;
@@ -667,7 +697,7 @@ function processPurchasePayment($db, $id)
     $paymentDateSql = null;
     if (!empty($paymentDate)) {
         $dateObj = DateTime::createFromFormat('Y-m-d', $paymentDate);
-        if (!$dateObj || $dateObj > new DateTime('today')) {
+        if (!$dateObj || $dateObj->format('Y-m-d') > date('Y-m-d')) {
             redirect(BASE_URL . '/purchases/pay/' . $id, 'error', 'Invalid payment date — must be today or a past date');
             return;
         }
@@ -747,9 +777,10 @@ function processPurchasePayment($db, $id)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank', 'cheque' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }
@@ -782,8 +813,9 @@ function processPurchasePayment($db, $id)
 /**
  * Print purchase receipt
  */
-function printPurchaseReceipt($db, $id)
+function printPurchaseReceipt(Database $db, mixed $id)
 {
+    [$scopeSql, $scopeParams] = branchScopeSql('p');
     $purchase = $db->fetchOne("
         SELECT p.*, s.company_name, s.contact_name, s.phone AS supplier_phone,
                s.supplier_code, u.full_name AS created_by
@@ -791,7 +823,8 @@ function printPurchaseReceipt($db, $id)
         LEFT JOIN suppliers s ON p.supplier_id = s.id
         LEFT JOIN users u ON p.user_id = u.id
         WHERE p.id = ?
-    ", [$id]);
+        $scopeSql
+    ", array_merge([$id], $scopeParams));
 
     if (!$purchase) {
         redirect(BASE_URL . '/purchases', 'error', 'Purchase not found');
@@ -809,7 +842,7 @@ function printPurchaseReceipt($db, $id)
 // HELPERS
 // ============================================================
 
-function generatePurchaseNumber($db)
+function generatePurchaseNumber(Database $db)
 {
     $prefix = 'PUR-' . date('Ymd') . '-';
     $last   = $db->fetchOne("
@@ -825,20 +858,22 @@ function generatePurchaseNumber($db)
 /**
  * Show purchase edit interface
  */
-function showEditPurchase($db, $id)
+function showEditPurchase(Database $db, mixed $id)
 {
-    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$purchase) {
         redirect(BASE_URL . '/purchases', 'error', 'Purchase not found');
         return;
     }
 
     $purchaseItems = $db->fetchAll("
-        SELECT pi.*, p.sku, p.unit, p.current_stock
+        SELECT pi.*, p.sku, p.unit, COALESCE(bs.quantity, 0) AS current_stock
         FROM purchase_items pi
         LEFT JOIN products p ON pi.product_id = p.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         WHERE pi.purchase_id = ?
-    ", [$id]);
+    ", [$purchase['branch_id'] ?? activeBranchId(), $id]);
 
     // Get all active suppliers
     $suppliers = $db->fetchAll("
@@ -851,14 +886,15 @@ function showEditPurchase($db, $id)
     // Recent products for quick access
     $quickProducts = $db->fetchAll("
         SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, 
-               p.current_stock, p.unit, p.supplier_id,
+               COALESCE(bs.quantity, 0) AS current_stock, p.unit, p.supplier_id,
                s.company_name AS supplier_name
         FROM products p
         LEFT JOIN suppliers s ON p.supplier_id = s.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         WHERE p.is_active = 1
         ORDER BY p.id DESC
         LIMIT 20
-    ");
+    ", [$purchase['branch_id'] ?? activeBranchId()]);
 
     // Categories for filtering
     $categories = $db->fetchAll("
@@ -866,8 +902,10 @@ function showEditPurchase($db, $id)
     ");
 
     // Financial accounts for the payment account selector
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
     $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 ORDER BY type ASC, name ASC"
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
     );
 
     // Find if there is an active account transaction to highlight which account was used
@@ -885,7 +923,7 @@ function showEditPurchase($db, $id)
 /**
  * Process purchase update
  */
-function updatePurchase($db, $id)
+function updatePurchase(Database $db, mixed $id)
 {
     header('Content-Type: application/json');
 
@@ -895,7 +933,8 @@ function updatePurchase($db, $id)
         return;
     }
 
-    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$purchase) {
         echo json_encode(['success' => false, 'message' => 'Purchase not found']);
         return;
@@ -989,19 +1028,23 @@ function updatePurchase($db, $id)
     $allProductIds = array_unique(array_merge(array_keys($oldItemsMap), array_keys($newItemsMap)));
     $stockChecks = [];
 
+    $purchaseBranchId = $purchase['branch_id'] ?? activeBranchId();
+
     foreach ($allProductIds as $pid) {
         $oldQty = isset($oldItemsMap[$pid]) ? floatval($oldItemsMap[$pid]['quantity']) : 0;
         $newQty = isset($newItemsMap[$pid]) ? floatval($newItemsMap[$pid]['qty']) : 0;
         $diff = $newQty - $oldQty;
 
         if ($diff < 0) {
-            // Check product current stock
-            $p = $db->fetchOne("SELECT name, current_stock FROM products WHERE id = ?", [$pid]);
-            $currentStock = floatval($p['current_stock'] ?? 0);
-            if ($currentStock + $diff < 0) {
+            // Check the branch this purchase actually belongs to, not the
+            // company-wide total — reducing quantity here only affects
+            // that branch's stock, so that's what must not go negative.
+            $p = $db->fetchOne("SELECT name FROM products WHERE id = ?", [$pid]);
+            $branchStock = getBranchStock($pid, $purchaseBranchId);
+            if ($branchStock + $diff < 0) {
                 echo json_encode([
                     'success' => false,
-                    'message' => "Cannot reduce quantity for product '{$p['name']}' by " . abs($diff) . ". Doing so would reduce stock below zero (Current stock: {$currentStock})."
+                    'message' => "Cannot reduce quantity for product '{$p['name']}' by " . abs($diff) . ". Doing so would reduce " . branchName($purchaseBranchId) . "'s stock below zero (Current stock: {$branchStock})."
                 ]);
                 return;
             }
@@ -1031,9 +1074,10 @@ function updatePurchase($db, $id)
         $db->beginTransaction();
 
         // 1. Revert stock and average cost logic
+        $newAverageCostByProduct = [];
         foreach ($allProductIds as $pid) {
             $p = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$pid]);
-            $currentStock   = floatval($p['current_stock']);
+            $currentStock   = floatval($p['current_stock']); // company-wide total, for cost calc only
             $currentAvgCost = floatval($p['average_cost']);
 
             $oldQty  = isset($oldItemsMap[$pid]) ? floatval($oldItemsMap[$pid]['quantity']) : 0;
@@ -1042,7 +1086,7 @@ function updatePurchase($db, $id)
             $newQty  = isset($newItemsMap[$pid]) ? floatval($newItemsMap[$pid]['qty']) : 0;
             $newCost = isset($newItemsMap[$pid]) ? floatval($newItemsMap[$pid]['cost']) : 0;
 
-            // Revert old purchase effect:
+            // Revert old purchase effect (company-wide cost basis):
             $stockBefore = $currentStock - $oldQty;
             if ($stockBefore > 0) {
                 $avgCostBefore = (($currentStock * $currentAvgCost) - ($oldQty * $oldCost)) / $stockBefore;
@@ -1050,24 +1094,33 @@ function updatePurchase($db, $id)
                 $avgCostBefore = 0;
             }
 
-            // Apply new purchase effect:
+            // Apply new purchase effect (company-wide cost basis):
             $newStock = $stockBefore + $newQty;
             if ($newStock > 0) {
                 $newAverageCost = (($stockBefore * $avgCostBefore) + ($newQty * $newCost)) / $newStock;
             } else {
                 $newAverageCost = $newCost;
             }
+            $newAverageCostByProduct[$pid] = $newAverageCost;
 
-            // Update product
+            // Update product's cost fields (company-wide; not branch-specific)
             $db->query("
                 UPDATE products
-                SET current_stock = ?,
-                    cost_price = ?,
+                SET cost_price = ?,
                     average_cost = ?,
                     last_purchase_cost = ?,
                     last_purchase_date = NOW()
                 WHERE id = ?
-            ", [$newStock, ($newQty > 0 ? $newCost : $p['cost_price']), $newAverageCost, ($newQty > 0 ? $newCost : $p['last_purchase_cost']), $pid]);
+            ", [($newQty > 0 ? $newCost : $p['cost_price']), $newAverageCost, ($newQty > 0 ? $newCost : $p['last_purchase_cost']), $pid]);
+
+            // Apply the actual quantity delta to the branch this purchase
+            // belongs to (not the editor's current active branch, and not
+            // a global figure) — this is the only place stock quantity
+            // actually moves in this function.
+            $qtyDelta = $newQty - $oldQty;
+            if (abs($qtyDelta) > 0.0001) {
+                adjustBranchStock($db, $pid, $purchaseBranchId, $qtyDelta);
+            }
         }
 
         // 2. Delete old items & stock movements & cost history
@@ -1094,23 +1147,31 @@ function updatePurchase($db, $id)
                 $vi['lineTotal']
             ]);
 
-            // Log stock movement
-            // Retrieve updated stock after our adjustment above
-            $updatedProduct = $db->fetchOne("SELECT current_stock, average_cost FROM products WHERE id = ?", [$p['id']]);
-            $currentStockAfter = floatval($updatedProduct['current_stock']);
+            // Log stock movement — using this branch's actual current
+            // quantity (already updated by adjustBranchStock() above),
+            // not the company-wide total.
+            $currentStockAfter = getBranchStock($p['id'], $purchaseBranchId);
             $currentStockBefore = $currentStockAfter - $vi['qty'];
 
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, user_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?)
-            ", [$p['id'], $vi['qty'], $id, $currentStockBefore, $currentStockAfter, $userId]);
+                     reference_id, previous_stock, new_stock, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
+            ", [$p['id'], $vi['qty'], $id, $currentStockBefore, $currentStockAfter, $userId, $purchaseBranchId]);
 
-            // Log cost history
+            // Log cost history — $newAverageCostByProduct was populated per
+            // product id in the loop above (§1, where the same value was
+            // also written to products.average_cost), not re-fetched from
+            // the database here. Previously referenced an undefined
+            // $updatedProduct, which silently coerced to floatval(null) = 0
+            // — every edited purchase recorded new_cost as 0 and
+            // change_percent as a flat -100% in product_cost_history,
+            // regardless of the actual new cost.
+            $newAvgCost = $newAverageCostByProduct[$p['id']] ?? 0;
             $oldAvgCost = isset($oldItemsMap[$p['id']]) ? floatval($oldItemsMap[$p['id']]['unit_cost']) : floatval($p['average_cost']);
             $changePercent = $oldAvgCost > 0
-                ? ((floatval($updatedProduct['average_cost']) - $oldAvgCost) / $oldAvgCost) * 100
+                ? (($newAvgCost - $oldAvgCost) / $oldAvgCost) * 100
                 : 0;
 
             $db->query("
@@ -1122,7 +1183,7 @@ function updatePurchase($db, $id)
                 $p['id'],
                 $id,
                 $oldAvgCost,
-                floatval($updatedProduct['average_cost']),
+                $newAvgCost,
                 $vi['unitCost'],
                 $vi['qty'],
                 $changePercent,
@@ -1211,9 +1272,10 @@ function updatePurchase($db, $id)
             if ($accountId > 0) {
                 $typeMap   = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank', 'cheque' => 'bank'];
                 $expected  = $typeMap[$paymentMethod] ?? null;
+                [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
                 $acctCheck = $db->fetchOne(
-                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1" . ($expected ? " AND type = ?" : ""),
-                    $expected ? [$accountId, $expected] : [$accountId]
+                    "SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0" . ($expected ? " AND type = ?" : "") . " $acctScopeSql",
+                    array_merge($expected ? [$accountId, $expected] : [$accountId], $acctScopeParams)
                 );
                 $resolvedAccountId = $acctCheck ? $accountId : null;
             }
@@ -1282,9 +1344,10 @@ function updatePurchase($db, $id)
 /**
  * Void/delete a purchase and reverse all associated stock and financial effects
  */
-function voidPurchase($db, $id)
+function voidPurchase(Database $db, mixed $id)
 {
-    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ?", [$id]);
+    [$scopeSql, $scopeParams] = branchScopeSql('');
+    $purchase = $db->fetchOne("SELECT * FROM purchases WHERE id = ? $scopeSql", array_merge([$id], $scopeParams));
     if (!$purchase) {
         redirect(BASE_URL . '/purchases', 'error', 'Purchase not found');
         return;
@@ -1292,16 +1355,18 @@ function voidPurchase($db, $id)
 
     $items  = $db->fetchAll("SELECT * FROM purchase_items WHERE purchase_id = ?", [$id]);
     $userId = $_SESSION['user_id'] ?? null;
+    $purchaseBranchId = $purchase['branch_id'] ?? activeBranchId();
 
     // Validate that deducting the purchased stock will not result in negative stock
+    // at the branch this purchase actually belongs to.
     foreach ($items as $item) {
-        $p = $db->fetchOne("SELECT name, current_stock FROM products WHERE id = ?", [$item['product_id']]);
+        $p = $db->fetchOne("SELECT name FROM products WHERE id = ?", [$item['product_id']]);
         if (!$p) continue;
-        
-        $currentStock = floatval($p['current_stock']);
+
+        $branchStock = getBranchStock($item['product_id'], $purchaseBranchId);
         $qty = floatval($item['quantity']);
-        if ($currentStock - $qty < 0) {
-            redirect(BASE_URL . '/purchases/view/' . $id, 'error', "Cannot void purchase. Deducting {$qty} from '{$p['name']}' would reduce stock below zero (Current stock: {$currentStock}).");
+        if ($branchStock - $qty < 0) {
+            redirect(BASE_URL . '/purchases/view/' . $id, 'error', "Cannot void purchase. Deducting {$qty} from '{$p['name']}' would reduce " . branchName($purchaseBranchId) . "'s stock below zero (Current stock: {$branchStock}).");
             return;
         }
     }
@@ -1315,7 +1380,7 @@ function voidPurchase($db, $id)
             $p = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$pid]);
             if (!$p) continue;
 
-            $currentStock   = floatval($p['current_stock']);
+            $currentStock   = floatval($p['current_stock']); // company-wide total, for cost calc only
             $currentAvgCost = floatval($p['average_cost']);
             $oldQty         = floatval($item['quantity']);
             $oldCost        = floatval($item['unit_cost']);
@@ -1339,14 +1404,18 @@ function voidPurchase($db, $id)
             $prevCost = $prevPurchaseItem ? floatval($prevPurchaseItem['unit_cost']) : $p['cost_price'];
             $prevDate = $prevPurchaseItem ? $prevPurchaseItem['purchase_date'] : null;
 
+            // Update product's cost fields (company-wide; not branch-specific)
             $db->query("
                 UPDATE products
-                SET current_stock = ?,
-                    average_cost = ?,
+                SET average_cost = ?,
                     last_purchase_cost = ?,
                     last_purchase_date = ?
                 WHERE id = ?
-            ", [$newStock, $newAverageCost, $prevCost, $prevDate, $pid]);
+            ", [$newAverageCost, $prevCost, $prevDate, $pid]);
+
+            // Deduct the actual quantity from the branch this purchase
+            // belongs to (also keeps products.current_stock, used above, in sync)
+            adjustBranchStock($db, $pid, $purchaseBranchId, -$oldQty);
         }
 
         // 2. Revert supplier balance and total purchases
@@ -1386,6 +1455,11 @@ function voidPurchase($db, $id)
         $db->query("DELETE FROM purchases WHERE id = ?", [$id]);
 
         $db->commit();
+        logAudit('purchase.void', 'purchase', $id, [
+            'purchase_number' => $purchase['purchase_number'],
+            'total_amount' => $purchase['total_amount'],
+            'note' => 'Purchase row and related records were deleted, not just marked voided.',
+        ]);
         redirect(BASE_URL . '/purchases', 'success', 'Purchase #' . $purchase['purchase_number'] . ' has been voided successfully.');
 
     } catch (Exception $e) {

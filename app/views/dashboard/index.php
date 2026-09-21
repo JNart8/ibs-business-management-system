@@ -55,6 +55,39 @@ if ($totalAlerts > 0):
 <?php endif; ?>
 
 <!-- ══════════════════════════════════════════════════════════════════════════════
+     SECURITY ALERTS (IF ANY) — high-risk changes since this user last
+     visited /audit: role permission losses, role deletion, sale voids/
+     edits, big selling-price drops. Visually distinct from the critical
+     alerts above (amber, not red) — different kind of concern.
+     ══════════════════════════════════════════════════════════════════════════════ -->
+
+<?php if (!empty($securityAlerts)): ?>
+    <div class="bg-amber-50 border-l-4 border-amber-500 rounded-lg p-4 mb-6">
+        <div class="flex items-start gap-3">
+            <span class="text-2xl">🛡️</span>
+            <div class="flex-1">
+                <h3 class="font-bold text-amber-900 mb-2">
+                    <?= count($securityAlerts) ?> High-Risk Change(s) Since You Last Checked
+                </h3>
+                <div class="space-y-1">
+                    <?php foreach (array_slice($securityAlerts, 0, 3) as $sa): ?>
+                        <div class="text-sm bg-white rounded px-3 py-2">
+                            <?= e($sa['summary']) ?>
+                            <span class="text-xs text-gray-400">
+                                — <?= e($sa['row']['username'] ?? 'system') ?>, <?= formatDate($sa['row']['created_at']) ?>
+                            </span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+                <a href="<?= BASE_URL ?>/audit" class="inline-block mt-2 text-sm font-medium text-amber-800 hover:underline">
+                    View audit log →
+                </a>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
+<!-- ══════════════════════════════════════════════════════════════════════════════
      TODAY'S PERFORMANCE
      ══════════════════════════════════════════════════════════════════════════════ -->
 
@@ -289,6 +322,7 @@ if ($totalAlerts > 0):
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
+    <?php if (can('sales.access')): ?>
     <!-- Recent Sales -->
     <div class="bg-white rounded-lg shadow-sm p-5">
         <div class="flex items-center justify-between mb-4">
@@ -330,7 +364,9 @@ if ($totalAlerts > 0):
             </div>
         <?php endif; ?>
     </div>
+    <?php endif; ?>
 
+    <?php if (can('purchases.manage')): ?>
     <!-- Recent Purchases -->
     <div class="bg-white rounded-lg shadow-sm p-5">
         <div class="flex items-center justify-between mb-4">
@@ -351,7 +387,7 @@ if ($totalAlerts > 0):
                         </div>
                         <div class="text-right">
                             <div class="text-sm font-bold text-blue-600"><?= formatMoney($purchase['total_amount']) ?></div>
-                            <span class="text-xs px-2 py-0.5 rounded-full 
+                            <span class="text-xs px-2 py-0.5 rounded-full
                                 <?= $purchase['payment_status'] === 'paid' ? 'bg-green-100 text-green-700' : ($purchase['payment_status'] === 'partial' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700') ?>">
                                 <?= ucfirst($purchase['payment_status']) ?>
                             </span>
@@ -366,6 +402,7 @@ if ($totalAlerts > 0):
             </div>
         <?php endif; ?>
     </div>
+    <?php endif; ?>
 
 </div>
 

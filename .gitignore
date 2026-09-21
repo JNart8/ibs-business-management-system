@@ -7,6 +7,10 @@ public/assets/css/tailwind.css
 # Environment file (contains passwords — never commit this)
 .env
 
+# License signing key — NEVER commit or deploy this. It's what lets you
+# (and only you) issue unlock codes. See tools/generate-license-code.php.
+licensing-authority/
+
 # Storage (logs and cache)
 storage/logs/
 storage/cache/
