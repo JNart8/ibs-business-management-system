@@ -11,6 +11,13 @@ if (!defined('APP_START')) {
 
 $db = Database::getInstance();
 
+// Branch visibility for every sales/purchase-derived figure below (revenue,
+// profit, trends, top products, recent activity). Empty for company-wide
+// users, so their view is unchanged. Customer/supplier balances are left
+// company-wide on purpose: those records are shared across branches.
+[$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+[$purchScopeSql, $purchScopeParams] = branchScopeSql('p');
+
 // ══════════════════════════════════════════════════════════════════════════════
 // TODAY'S PERFORMANCE METRICS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -32,7 +39,8 @@ try {
             COALESCE(SUM(s.total_amount), 0) / NULLIF(COUNT(*), 0) as avg_transaction
         FROM sales s
         WHERE DATE(s.sale_date) = CURDATE() AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ");
+        $salesScopeSql
+    ", $salesScopeParams);
 
     $todayMetrics['revenue'] = floatval($todaySales['revenue'] ?? 0);
     $todayMetrics['transactions'] = intval($todaySales['transactions'] ?? 0);
@@ -45,7 +53,8 @@ try {
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) = CURDATE() AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ");
+        $salesScopeSql
+    ", $salesScopeParams);
 
     $cogs = floatval($todayCOGS['total_cogs'] ?? 0);
     $todayMetrics['profit'] = $todayMetrics['revenue'] - $cogs;
@@ -280,9 +289,10 @@ $salesTrend = $db->fetchAll("
     INNER JOIN sale_items si ON s.id = si.sale_id
     INNER JOIN products p ON si.product_id = p.id
     WHERE s.sale_date >= CURDATE() - INTERVAL 29 DAY AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    $salesScopeSql
     GROUP BY DATE(s.sale_date)
     ORDER BY date ASC
-");
+", $salesScopeParams);
 
 // Fill in missing days
 $trend = [];
@@ -323,10 +333,11 @@ $topProducts = $db->fetchAll("
     INNER JOIN sales s ON si.sale_id = s.id
     INNER JOIN products p ON si.product_id = p.id
     WHERE s.sale_date >= CURDATE() - INTERVAL 29 DAY AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    $salesScopeSql
     GROUP BY si.product_id, p.name
     ORDER BY profit DESC
     LIMIT 5
-");
+", $salesScopeParams);
 
 // Sales by Category (Last 30 Days)
 $categoryPerformance = $db->fetchAll("
@@ -339,10 +350,11 @@ $categoryPerformance = $db->fetchAll("
     INNER JOIN products p ON si.product_id = p.id
     LEFT JOIN categories c ON p.category_id = c.id
     WHERE s.sale_date >= CURDATE() - INTERVAL 29 DAY AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    $salesScopeSql
     GROUP BY p.category_id, c.name
     ORDER BY profit DESC
     LIMIT 5
-");
+", $salesScopeParams);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // RECENT ACTIVITY (LAST 10)
@@ -359,9 +371,11 @@ $recentSales = $db->fetchAll("
         c.full_name as customer_name
     FROM sales s
     LEFT JOIN customers c ON s.customer_id = c.id
+    WHERE 1=1
+    $salesScopeSql
     ORDER BY s.created_at DESC
     LIMIT 10
-");
+", $salesScopeParams);
 
 $recentPurchases = $db->fetchAll("
     SELECT 
@@ -373,9 +387,11 @@ $recentPurchases = $db->fetchAll("
         s.company_name as supplier_name
     FROM purchases p
     LEFT JOIN suppliers s ON p.supplier_id = s.id
+    WHERE 1=1
+    $purchScopeSql
     ORDER BY p.created_at DESC
     LIMIT 10
-");
+", $purchScopeParams);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // LOW STOCK PRODUCTS (TOP 10 CRITICAL)
@@ -423,7 +439,8 @@ try {
             COUNT(*) as transactions
         FROM sales s
         WHERE DATE(s.sale_date) BETWEEN ? AND ? AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ", [$monthStart, $today]);
+        $salesScopeSql
+    ", array_merge([$monthStart, $today], $salesScopeParams));
 
     $monthSummary['revenue'] = floatval($monthData['revenue'] ?? 0);
     $monthSummary['transactions'] = intval($monthData['transactions'] ?? 0);
@@ -434,7 +451,8 @@ try {
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ? AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
-    ", [$monthStart, $today]);
+        $salesScopeSql
+    ", array_merge([$monthStart, $today], $salesScopeParams));
 
     $cogs = floatval($monthCOGS['total_cogs'] ?? 0);
     $monthSummary['profit'] = $monthSummary['revenue'] - $cogs;
