@@ -556,6 +556,11 @@ function exportTransactions(Database $db, mixed $output)
         $params[] = $dateTo;
     }
 
+    // Branch visibility — same rule as the on-screen transactions list.
+    [$scopeSql, $scopeParams] = branchScopeSql('ct');
+    $whereClause .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
     // Write headers
     fputcsv($output, [
         'transaction_date',

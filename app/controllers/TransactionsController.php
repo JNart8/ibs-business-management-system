@@ -81,6 +81,13 @@ function listTransactions(Database $db)
 
     $whereClause = implode(' AND ', $where);
 
+    // Branch visibility — the list, its count and the summary cards all
+    // reuse $whereClause/$params, so one scope covers all three. Customers
+    // stay shared across branches; it's the transaction's branch that's scoped.
+    [$scopeSql, $scopeParams] = branchScopeSql('ct');
+    $whereClause .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
     // Get transactions with pagination
     $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
     $perPage = 50;
