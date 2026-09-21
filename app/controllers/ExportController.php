@@ -1017,6 +1017,7 @@ function exportReceivables(Database $db, mixed $output)
             FROM sales s
             WHERE s.payment_status IN ('unpaid', 'partial')
               AND (s.total_amount - COALESCE(s.amount_paid, 0)) > 0.01
+              AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
               $scopeSql
             GROUP BY s.customer_id
         ) agg ON c.id = agg.customer_id
@@ -1268,6 +1269,7 @@ function exportCustomerCreditSettlement(Database $db, mixed $output)
         FROM sales s
         WHERE s.payment_method = 'deposit'
             AND DATE(s.sale_date) BETWEEN ? AND ?
+            AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
             $redeemedScopeSql
         GROUP BY s.branch_id
     ", array_merge([$dateFrom, $dateTo], $redeemedScopeParams));
@@ -1376,6 +1378,7 @@ function exportSalesReport(Database $db, mixed $output)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
         $scopeSql
         ORDER BY s.sale_date DESC, s.id, si.id
     ", array_merge([$dateFrom, $dateTo], $scopeParams));
@@ -1650,6 +1653,7 @@ function exportTopSelling(Database $db, mixed $output)
         INNER JOIN products p ON si.product_id = p.id
         LEFT JOIN categories c ON p.category_id = c.id
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
         $whereCategory
         GROUP BY si.product_id, p.name, p.sku, c.name
         ORDER BY total_quantity DESC
@@ -1858,6 +1862,7 @@ function exportDeadStock(Database $db, mixed $output)
                 FROM sale_items si
                 INNER JOIN sales s ON si.sale_id = s.id
                 WHERE si.product_id = p.id
+                AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
                 $salesScopeSql
             ) AS last_sale_date,
             DATEDIFF(
@@ -1867,6 +1872,7 @@ function exportDeadStock(Database $db, mixed $output)
                     FROM sale_items si
                     INNER JOIN sales s ON si.sale_id = s.id
                     WHERE si.product_id = p.id
+                    AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
                     $salesScopeSql
                 )
             ) AS days_since_last_sale

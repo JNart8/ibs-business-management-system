@@ -479,6 +479,7 @@ function receivablesReport(Database $db)
             AND c.is_default = 0
             AND s.payment_status IN ('unpaid', 'partial')
             AND (s.total_amount - COALESCE(s.amount_paid, 0)) > 0.01
+            AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
             $scopeSql
         ORDER BY c.id, s.sale_date ASC
     ", $scopeParams);
@@ -838,6 +839,7 @@ function customerCreditSettlementReport(Database $db)
         FROM sales s
         WHERE s.payment_method = 'deposit'
             AND DATE(s.sale_date) BETWEEN ? AND ?
+            AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
             $redeemedScopeSql
         GROUP BY s.branch_id
     ", array_merge([$dateFrom, $dateTo], $redeemedScopeParams));
@@ -1326,6 +1328,7 @@ function lowStockReport(Database $db)
                 INNER JOIN sales sa ON si.sale_id = sa.id
                 WHERE si.product_id = ?
                 AND DATE(sa.sale_date) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                AND (sa.notes IS NULL OR sa.notes NOT LIKE '%[VOIDED]%')
                 $velocityScopeSql
                 GROUP BY DATE(sa.sale_date)
             ) AS daily_sales
@@ -1414,6 +1417,7 @@ function deadStockReport(Database $db)
                 FROM sale_items si
                 INNER JOIN sales s ON si.sale_id = s.id
                 WHERE si.product_id = p.id
+                AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
                 $salesScopeSql
             ) AS last_sale_date,
             DATEDIFF(
@@ -1423,6 +1427,7 @@ function deadStockReport(Database $db)
                     FROM sale_items si
                     INNER JOIN sales s ON si.sale_id = s.id
                     WHERE si.product_id = p.id
+                    AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
                     $salesScopeSql
                 )
             ) AS days_since_last_sale,
@@ -1431,6 +1436,7 @@ function deadStockReport(Database $db)
                 FROM sale_items si
                 INNER JOIN sales s ON si.sale_id = s.id
                 WHERE si.product_id = p.id
+                AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
                 $salesScopeSql
             ) AS total_sold
         FROM products p
