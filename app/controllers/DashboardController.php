@@ -266,12 +266,16 @@ if (can('audit.view')) {
 // SALES TREND (LAST 30 DAYS) - WITH PROFIT
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Line revenue net of the whole-cart discount (see saleItemNetSql()). Also
+// avoids repeating each sale's total once per line item when joined below.
+$netLine = saleItemNetSql();
+
 $salesTrend = $db->fetchAll("
     SELECT 
         DATE(s.sale_date) as date,
-        COALESCE(SUM(s.total_amount), 0) as revenue,
+        COALESCE(SUM({$netLine}), 0) as revenue,
         COALESCE(SUM(si.quantity * p.average_cost), 0) as cogs,
-        COALESCE(SUM(s.total_amount) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
     FROM sales s
     INNER JOIN sale_items si ON s.id = si.sale_id
     INNER JOIN products p ON si.product_id = p.id
@@ -308,9 +312,6 @@ for ($i = 29; $i >= 0; $i--) {
 // ══════════════════════════════════════════════════════════════════════════════
 // TOP PERFORMERS (LAST 30 DAYS)
 // ══════════════════════════════════════════════════════════════════════════════
-
-// Line revenue net of the whole-cart discount (see saleItemNetSql()).
-$netLine = saleItemNetSql();
 
 // Top 5 Products by Profit
 $topProducts = $db->fetchAll("
