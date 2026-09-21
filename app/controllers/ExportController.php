@@ -365,6 +365,11 @@ function exportSales(Database $db, mixed $output)
     $params = [];
     $where  = "WHERE 1=1";
 
+    // Branch visibility — same rule as the on-screen sales list this mirrors.
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    $where .= $scopeSql;
+    $params = array_merge($params, $scopeParams);
+
     // Search filter
     if (!empty($search)) {
         $where   .= " AND (s.sale_number LIKE ? OR c.full_name LIKE ? OR c.phone LIKE ?)";
@@ -416,12 +421,18 @@ function exportSales(Database $db, mixed $output)
         'payment_method',
         'payment_status',
         'notes',
-        'sold_by'
+        'sold_by',
+        'net_line_total'
     ]);
+
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
 
     // Fetch sales with items (FILTERED)
     $salesItems = $db->fetchAll("
-        SELECT 
+        SELECT
+            s.id AS sale_id,
+            {$netLine} AS net_line_total,
             s.sale_number,
             s.sale_date,
             c.full_name as customer_name,
@@ -453,8 +464,22 @@ function exportSales(Database $db, mixed $output)
         ORDER BY s.sale_date DESC, s.id, si.id
     ", $params);
 
-    // Write data rows
+    // Write data rows. One row per line item, so the sale-level MONEY columns
+    // (subtotal, discount, total, paid, due) are written on a sale's first row
+    // only — repeating them would multiply the sale by its number of lines
+    // when the column is summed. Descriptive columns still repeat on every row
+    // so the file stays filterable by customer, payment method, etc.
+    $seenSales = [];
+    $netRevenue = 0.0;
     foreach ($salesItems as $item) {
+        $first = !isset($seenSales[$item['sale_id']]);
+        $seenSales[$item['sale_id']] = true;
+        $isVoided = str_contains($item['notes'] ?? '', '[VOIDED]');
+        if ($first && !$isVoided) {
+            $netRevenue += (float)$item['sale_total'];
+        }
+        $money = fn($v) => $first ? number_format($v, 2, '.', '') : '';
+
         fputcsv($output, [
             $item['sale_number'],
             $item['sale_date'],
@@ -467,17 +492,18 @@ function exportSales(Database $db, mixed $output)
             $item['discount_percent'],
             number_format($item['item_discount_amount'], 2, '.', ''),
             number_format($item['line_total'], 2, '.', ''),
-            number_format($item['sale_subtotal'], 2, '.', ''),
+            $money($item['sale_subtotal']),
             $item['sale_discount_type'],
             $item['sale_discount_percent'],
-            number_format($item['sale_discount_amount'], 2, '.', ''),
-            number_format($item['sale_total'], 2, '.', ''),
-            number_format($item['amount_paid'], 2, '.', ''),
-            number_format($item['amount_due'], 2, '.', ''),
+            $money($item['sale_discount_amount']),
+            $money($item['sale_total']),
+            $money($item['amount_paid']),
+            $money($item['amount_due']),
             $item['payment_method'],
             $item['payment_status'],
             $item['notes'] ?? '',
-            $item['sold_by']
+            $item['sold_by'],
+            number_format($item['net_line_total'], 2, '.', '')
         ]);
     }
 
@@ -486,6 +512,8 @@ function exportSales(Database $db, mixed $output)
     fputcsv($output, ['=== EXPORT SUMMARY ===']);
     fputcsv($output, ['Export Date:', date('Y-m-d H:i:s')]);
     fputcsv($output, ['Total Records:', count($salesItems)]);
+    fputcsv($output, ['Total Sales:', count($seenSales)]);
+    fputcsv($output, ['Net Revenue (excl. voided):', number_format($netRevenue, 2, '.', '')]);
 
     // Add filter info if filters were applied
     if (!empty($search) || !empty($status) || !empty($dateFrom) || !empty($dateTo)) {
@@ -1352,9 +1380,12 @@ function exportSalesReport(Database $db, mixed $output)
 
     // Fetch one row per sold item. Sale fields intentionally repeat for Excel analysis.
     [$scopeSql, $scopeParams] = branchScopeSql('s');
+    // Line revenue net of the whole-cart discount (see saleItemNetSql()).
+    $netLine = saleItemNetSql();
     $salesItems = $db->fetchAll("
         SELECT
             s.id AS sale_id,
+            {$netLine} AS net_line_total,
             s.sale_number,
             s.sale_date,
             c.full_name AS customer_name,
@@ -1412,16 +1443,23 @@ function exportSalesReport(Database $db, mixed $output)
         'Status',
         'Paid (' . CURRENCY_HOLDER . ')',
         'Due (' . CURRENCY_HOLDER . ')',
-        'Notes'
+        'Notes',
+        'Net Line Total (' . CURRENCY_HOLDER . ')'
     ]);
 
-    // Data
+    // Data. One row per line item: the sale-level MONEY columns (subtotal,
+    // discount, total, paid, due) go on a sale's first row only, so summing a
+    // column never multiplies a sale by its line count. Descriptive columns
+    // repeat so the file stays filterable.
     $total = 0;
     $totalPaid = 0;
     $totalDue = 0;
+    $totalNetLines = 0;
 
     $uniqueSales = [];
     foreach ($salesItems as $sale) {
+        $first = !isset($uniqueSales[$sale['sale_id']]);
+        $money = fn($v) => $first ? number_format($v, 2, '.', '') : '';
         $datetime = new DateTime($sale['sale_date']);
         fputcsv($output, [
             $sale['sale_number'],
@@ -1437,20 +1475,23 @@ function exportSalesReport(Database $db, mixed $output)
             $sale['item_discount_percent'],
             number_format($sale['item_discount_amount'], 2, '.', ''),
             number_format($sale['line_total'], 2, '.', ''),
-            number_format($sale['subtotal'], 2, '.', ''),
+            $money($sale['subtotal']),
             $sale['sale_discount_type'],
             $sale['sale_discount_percent'],
-            number_format($sale['discount_amount'], 2, '.', ''),
-            number_format($sale['total_amount'], 2, '.', ''),
+            $money($sale['discount_amount']),
+            $money($sale['total_amount']),
             ucfirst($sale['payment_method']),
             ucfirst($sale['payment_status']),
-            number_format($sale['amount_paid'], 2, '.', ''),
-            number_format($sale['amount_due'], 2, '.', ''),
-            $sale['notes'] ?? ''
+            $money($sale['amount_paid']),
+            $money($sale['amount_due']),
+            $sale['notes'] ?? '',
+            number_format($sale['net_line_total'], 2, '.', '')
         ]);
 
+        $totalNetLines += (float)$sale['net_line_total'];
+
         // Repeated item rows must not multiply sale-level totals.
-        if (!isset($uniqueSales[$sale['sale_id']])) {
+        if ($first) {
             $uniqueSales[$sale['sale_id']] = true;
             $total += $sale['total_amount'];
             $totalPaid += $sale['amount_paid'];
@@ -1459,11 +1500,12 @@ function exportSalesReport(Database $db, mixed $output)
     }
 
     // Totals
-    $totalsRow = array_fill(0, 23, '');
+    $totalsRow = array_fill(0, 24, '');
     $totalsRow[0] = 'TOTAL';
     $totalsRow[17] = number_format($total, 2, '.', '');
     $totalsRow[20] = number_format($totalPaid, 2, '.', '');
     $totalsRow[21] = number_format($totalDue, 2, '.', '');
+    $totalsRow[23] = number_format($totalNetLines, 2, '.', '');
     fputcsv($output, $totalsRow);
 
     // Summary
