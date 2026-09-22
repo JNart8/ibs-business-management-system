@@ -10,10 +10,14 @@ if (!defined('APP_START')) {
     die('Direct access not permitted');
 }
 
-// Load environment variables if not already loaded
-if (!getenv('DB_HOST')) {
-    require_once __DIR__ . '/database.php';
-}
+// Load environment variables and the Database class definition. Always
+// (not just "if not already loaded") — require_once is idempotent within
+// a request, and this guarantees the Database class actually exists
+// before the timezone bootstrap below calls Database::getInstance(),
+// regardless of whether getenv('DB_HOST') happens to already be set
+// (e.g. a persistent PHP-FPM worker that kept env state from an earlier
+// request).
+require_once __DIR__ . '/database.php';
 
 // Error reporting based on environment
 if (getenv('APP_ENV') === 'production') {
@@ -28,8 +32,15 @@ if (getenv('APP_ENV') === 'production') {
     ini_set('display_errors', 1);
 }
 
-// Timezone (adjust to your location)
-date_default_timezone_set('Africa/Accra');
+// Timezone — configurable per install via Settings → General
+// (settings.timezone), not hardcoded to any one country, so the same
+// codebase works for a client in any timezone. Resolving it needs a DB
+// connection, so it's applied as a side effect of connecting — see
+// Database::applyTimezone() in database.php. Force that connection now
+// (rather than waiting for the first controller query) so PHP's default
+// timezone is correct before ANYTHING else in this request calls
+// date()/time().
+Database::getInstance();
 
 // Session configuration
 ini_set('session.cookie_httponly', 1); // Prevent JavaScript access to session cookie

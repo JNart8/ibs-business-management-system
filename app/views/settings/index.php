@@ -36,6 +36,43 @@
         </fieldset>
 
         <fieldset class="mt-6 pt-6 border-t">
+            <legend class="font-semibold text-gray-800">Timezone</legend>
+            <p class="text-sm text-gray-500 mt-1 mb-3">
+                Controls what "now" means everywhere in this install — sale/purchase timestamps,
+                reports, exports, session timeouts. Set this to wherever this business actually
+                operates; it's per-install, not tied to any one country, so a client anywhere can
+                use it correctly.
+            </p>
+            <?php
+                $currentTimezone = $settings['timezone'] ?? 'Africa/Accra';
+                // Grouped by continent/region (the part before the "/" in each IANA
+                // identifier) so the list is actually browsable instead of one flat
+                // alphabetical wall of ~400 entries.
+                $timezoneGroups = [];
+                foreach (DateTimeZone::listIdentifiers() as $tz) {
+                    $region = strstr($tz, '/', true) ?: 'Other';
+                    $timezoneGroups[$region][] = $tz;
+                }
+                ksort($timezoneGroups);
+            ?>
+            <select name="timezone" required
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <?php foreach ($timezoneGroups as $region => $zones): ?>
+                    <optgroup label="<?= e($region) ?>">
+                        <?php foreach ($zones as $tz): ?>
+                            <option value="<?= e($tz) ?>" <?= $tz === $currentTimezone ? 'selected' : '' ?>><?= e($tz) ?></option>
+                        <?php endforeach; ?>
+                    </optgroup>
+                <?php endforeach; ?>
+            </select>
+            <p class="text-xs text-gray-400 mt-1">
+                Currently: <strong><?= e($currentTimezone) ?></strong> —
+                right now that's <strong><?= (new DateTime('now', new DateTimeZone($currentTimezone)))->format('d M Y, H:i') ?></strong>.
+                Changing this takes effect immediately for everyone, from their next page load.
+            </p>
+        </fieldset>
+
+        <fieldset class="mt-6 pt-6 border-t">
             <legend class="font-semibold text-gray-800">POS default customer</legend>
             <p class="text-sm text-gray-500 mt-1 mb-3">
                 Most shops sell mostly to walk-in customers, so POS pre-selects "Walk-in Customer"

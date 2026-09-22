@@ -94,8 +94,13 @@ class Database
             //$this->connection->exec("SET SESSION query_cache_type = ON");
             $this->connection->exec("SET SESSION sql_mode = ''");
 
-            // Set timezone to match PHP
-            $this->connection->exec("SET time_zone = '+02:00'");
+            // Resolve and apply this install's configured timezone — see
+            // applyTimezone() below. Every connection (there's only ever
+            // one, this is a singleton) goes through this, so PHP's
+            // date()/time() and MySQL's CURRENT_TIMESTAMP/NOW() always
+            // agree on what "now" is, for whichever timezone this install
+            // is actually running in.
+            $this->applyTimezone();
         } catch (PDOException $e) {
             // Show error only if in development mode
             if (getenv('APP_DEBUG') === 'true') {
@@ -104,6 +109,58 @@ class Database
                 die("Database connection error. Please contact support.");
             }
         }
+    }
+
+    /** The IANA timezone this install actually resolved to (see applyTimezone()). */
+    private static $timezone = 'UTC';
+
+    /**
+     * Reads settings.timezone (configurable per install via Settings →
+     * General — see SettingsController.php) and applies it to BOTH PHP
+     * (date_default_timezone_set(), so every date()/formatDate() call
+     * everywhere in the app agrees) and this MySQL session (so
+     * CURRENT_TIMESTAMP/NOW()-populated columns like created_at agree
+     * too). Not hardcoded to any one country — this codebase is meant to
+     * run for clients in any timezone, not just the one it was first
+     * built for.
+     *
+     * Falls back to UTC — deliberately not any particular country's zone
+     * — if the settings row/column isn't there yet (e.g. this migration
+     * hasn't run on this install) or the stored value isn't a real IANA
+     * identifier, rather than silently guessing a country.
+     */
+    private function applyTimezone()
+    {
+        $tzName = 'UTC';
+        try {
+            $stmt = $this->connection->query("SELECT timezone FROM settings ORDER BY id ASC LIMIT 1");
+            $row  = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : null;
+            if (!empty($row['timezone']) && in_array($row['timezone'], DateTimeZone::listIdentifiers(), true)) {
+                $tzName = $row['timezone'];
+            }
+        } catch (PDOException $e) {
+            // settings table/timezone column not migrated yet — fall back
+            // to UTC rather than fail the whole connection over it.
+        }
+
+        date_default_timezone_set($tzName);
+        self::$timezone = $tzName;
+
+        // MySQL's named timezones (SET time_zone = 'Africa/Accra') need the
+        // mysql.time_zone_name tables loaded, which most shared hosts never
+        // populate — so this uses the equivalent fixed UTC offset instead,
+        // computed from PHP's own (always-available) timezone database.
+        $offset = (new DateTime('now', new DateTimeZone($tzName)))->format('P');
+        $this->connection->exec('SET time_zone = ' . $this->connection->quote($offset));
+    }
+
+    /**
+     * The IANA timezone identifier this install is actually running as
+     * (e.g. for displaying "current setting" in the Settings UI).
+     */
+    public static function timezone()
+    {
+        return self::$timezone;
     }
 
     /**
