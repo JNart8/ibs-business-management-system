@@ -38,6 +38,9 @@
                 <span>📦 <?= e($product['unit']) ?></span>
                 <span>💰 Cost (Last): <?= formatMoney($product['cost_price']) ?></span>
                 <span>📈 Cost (WMA): <?= formatMoney($product['average_cost']) ?></span>
+                <?php if ($viewingBranchName ?? null): ?>
+                    <span>🏬 Stock at: <strong><?= e($viewingBranchName) ?></strong></span>
+                <?php endif; ?>
                 <span>💵 Sell: <?= formatMoney($product['selling_price']) ?></span>
                 <span>📊 Margin: <?= number_format($summary['margin_percent'], 1) ?>%</span>
             </div>

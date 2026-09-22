@@ -230,16 +230,18 @@ function viewSupplier(Database $db, mixed $id)
         return;
     }
 
-    // Products supplied by this supplier
+    // Products supplied by this supplier — current_stock is this branch's
+    // quantity, not the company-wide total (see functions.php getBranchStock()).
     $products = $db->fetchAll("
-        SELECT p.id, p.sku, p.name, p.current_stock,
+        SELECT p.id, p.sku, p.name, COALESCE(bs.quantity, 0) AS current_stock,
                p.cost_price, p.average_cost, p.selling_price, p.unit,
                c.name AS category_name
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         WHERE p.supplier_id = ? AND p.is_active = 1
         ORDER BY p.name ASC
-    ", [$id]);
+    ", [activeBranchId(), $id]);
 
     // Purchase history (from purchases table)
     $purchases = $db->fetchAll("

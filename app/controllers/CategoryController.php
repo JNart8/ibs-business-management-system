@@ -99,25 +99,31 @@ function listCategories(Database $db)
         $params = ["%$search%", "%$search%"];
     }
 
+    // stock_value/low_stock_count use this branch's quantity (bs.quantity),
+    // not the company-wide products.current_stock — same reasoning as
+    // ProductController::listProducts(). See getBranchStock() in functions.php.
+    $branchId = activeBranchId();
+
     // Get categories with product count
     $categories = $db->fetchAll("
-        SELECT 
+        SELECT
             c.id,
             c.name,
             c.description,
             c.is_active,
             c.created_at,
-            COUNT(p.id)                                          AS total_products,
-            COALESCE(SUM(p.current_stock * p.cost_price), 0)    AS stock_value,
-            SUM(CASE WHEN p.current_stock <= p.reorder_level 
-                      AND p.is_active = 1 
-                      THEN 1 ELSE 0 END)                         AS low_stock_count
+            COUNT(p.id)                                                  AS total_products,
+            COALESCE(SUM(COALESCE(bs.quantity, 0) * p.cost_price), 0)    AS stock_value,
+            SUM(CASE WHEN COALESCE(bs.quantity, 0) <= p.reorder_level
+                      AND p.is_active = 1
+                      THEN 1 ELSE 0 END)                                 AS low_stock_count
         FROM categories c
         LEFT JOIN products p ON p.category_id = c.id AND p.is_active = 1
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where
         GROUP BY c.id
         ORDER BY c.name ASC
-    ", $params);
+    ", array_merge([$branchId], $params));
 
     // Summary stats
     $stats = $db->fetchOne("
@@ -202,13 +208,15 @@ function showEditForm(Database $db, mixed $id)
         return;
     }
 
-    // Get products in this category
+    // Get products in this category — current_stock is this branch's
+    // quantity, not the company-wide total (see functions.php getBranchStock()).
     $products = $db->fetchAll("
-        SELECT id, name, sku, current_stock, selling_price, is_active
-        FROM products
-        WHERE category_id = ?
-        ORDER BY name ASC
-    ", [$id]);
+        SELECT p.id, p.name, p.sku, COALESCE(bs.quantity, 0) AS current_stock, p.selling_price, p.is_active
+        FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+        WHERE p.category_id = ?
+        ORDER BY p.name ASC
+    ", [activeBranchId(), $id]);
 
     $pageTitle = 'Edit Category';
     include APP_PATH . '/views/categories/edit.php';

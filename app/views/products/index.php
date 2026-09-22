@@ -2,7 +2,12 @@
 
 <!-- Page Header -->
 <div class="flex justify-between items-center mb-6">
-    <h1 class="text-3xl font-bold text-gray-800"><?= e($pageTitle) ?></h1>
+    <div>
+        <h1 class="text-3xl font-bold text-gray-800"><?= e($pageTitle) ?></h1>
+        <?php if ($viewingBranchName ?? null): ?>
+            <p class="text-gray-500 mt-1 text-sm">Stock levels shown for <strong><?= e($viewingBranchName) ?></strong></p>
+        <?php endif; ?>
+    </div>
 
     <!-- Mobile: Dropdown -->
     <div class="sm:hidden" x-data="{ open: false }">

@@ -116,35 +116,46 @@ function listProducts(Database $db)
     $totalProducts = $totalResult['total'];
     $totalPages    = max(1, ceil($totalProducts / $perPage));
 
+    // current_stock here is THIS branch's quantity (bs.quantity), not the
+    // company-wide total on products.current_stock — otherwise every branch
+    // would show the same (company-wide) numbers on this page, which is the
+    // same mistake StockController::stockDashboard() and
+    // ProductController::searchProducts() already avoid. See getBranchStock()
+    // / branch_stock in functions.php.
+    $branchId = activeBranchId();
+
     $products = $db->fetchAll("
         SELECT
             p.id, p.sku, p.barcode, p.name,
             p.selling_price, p.cost_price, p.average_cost,
-            p.current_stock, p.reorder_level, p.unit, p.is_active,
+            COALESCE(bs.quantity, 0) AS current_stock, p.reorder_level, p.unit, p.is_active,
             c.name AS category_name,
             CASE
-                WHEN p.current_stock = 0              THEN 'out-of-stock'
-                WHEN p.current_stock <= p.reorder_level THEN 'low-stock'
+                WHEN COALESCE(bs.quantity, 0) = 0               THEN 'out-of-stock'
+                WHEN COALESCE(bs.quantity, 0) <= p.reorder_level THEN 'low-stock'
                 ELSE 'in-stock'
             END AS stock_status
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where
         ORDER BY p.name ASC
         LIMIT ? OFFSET ?
-    ", array_merge($params, [$perPage, $offset]));
+    ", array_merge([$branchId], $params, [$perPage, $offset]));
 
     $stats = $db->fetchOne("
         SELECT
-            COUNT(*)                                                          AS total_products,
-            COALESCE(SUM(current_stock * cost_price), 0)                      AS total_value,
-            COALESCE(SUM(CASE WHEN current_stock <= reorder_level THEN 1 ELSE 0 END), 0) AS low_stock_count,
-            COALESCE(SUM(CASE WHEN current_stock = 0 THEN 1 ELSE 0 END), 0)  AS out_of_stock_count
-        FROM products
-        WHERE is_active = 1
-    ");
+            COUNT(*)                                                                                   AS total_products,
+            COALESCE(SUM(COALESCE(bs.quantity, 0) * p.cost_price), 0)                                   AS total_value,
+            COALESCE(SUM(CASE WHEN COALESCE(bs.quantity, 0) <= p.reorder_level THEN 1 ELSE 0 END), 0)    AS low_stock_count,
+            COALESCE(SUM(CASE WHEN COALESCE(bs.quantity, 0) = 0 THEN 1 ELSE 0 END), 0)                  AS out_of_stock_count
+        FROM products p
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
+        WHERE p.is_active = 1
+    ", [$branchId]);
 
     $pageTitle = 'Products';
+    $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
     include APP_PATH . '/views/products/index.php';
 }
 
@@ -422,6 +433,13 @@ function viewProduct(Database $db, mixed $id)
         redirect(BASE_URL . '/products', 'error', 'Product not found');
         return;
     }
+
+    // p.* pulled in the company-wide total on current_stock — override with
+    // this branch's quantity so this page matches what the branch actually
+    // has on the shelf (same convention as StockController's stock-in/out
+    // forms). See getBranchStock() in functions.php.
+    $product['current_stock'] = getBranchStock($product['id']);
+    $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
 
     // Calculate stock value and margin based on Weighted Moving Average Cost
     $stockValue = $product['current_stock'] * $product['average_cost'];
