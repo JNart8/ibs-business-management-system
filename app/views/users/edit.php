@@ -88,7 +88,9 @@
             </p>
         </div>
 
-        <!-- Branch visibility scope -->
+        <!-- Branch visibility scope — a branch-scoped admin can't grant
+             company-wide access to anyone (enforced server-side too), so
+             they only get the one option. -->
         <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Visibility</label>
             <div class="space-y-2">
@@ -101,6 +103,7 @@
                         <span class="text-xs text-gray-500">Only sees/manages data for the branches checked above.</span>
                     </span>
                 </label>
+                <?php if (isCompanyWide()): ?>
                 <label class="flex items-start gap-2 text-sm text-gray-700 border rounded-lg p-3 cursor-pointer">
                     <input type="radio" name="branch_scope" value="all"
                         <?= ($user['branch_scope'] ?? '') === 'all' ? 'checked' : '' ?>
@@ -110,6 +113,7 @@
                         <span class="text-xs text-gray-500">Sees/manages every branch, regardless of the assignment above — e.g. an owner or head-office admin.</span>
                     </span>
                 </label>
+                <?php endif; ?>
             </div>
         </div>
         <?php endif; ?>

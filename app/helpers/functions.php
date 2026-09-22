@@ -856,6 +856,23 @@ function visibleBranchIds()
 }
 
 /**
+ * Can the current user manage/see data scoped to this specific branch
+ * id? True for company-wide users (and whenever multi-branch isn't
+ * active for this install); otherwise only for branches they're
+ * actually assigned to. Use this to guard direct-by-id access (edit,
+ * delete, etc.) — visibleBranchIds()/branchScopeSql() alone only keep
+ * a *list* correctly scoped, they don't stop a branch-scoped user
+ * from reaching another branch's record by guessing/typing its URL.
+ */
+function canAccessBranch(mixed $branchId): bool
+{
+    if (!hasMultiBranch() || isCompanyWide()) {
+        return true;
+    }
+    return in_array((int) $branchId, array_column(userBranches(currentUser()['id']), 'id'), true);
+}
+
+/**
  * SQL expression for a sale line's revenue net of the sale-level
  * discount. sale_items.line_total is already net of the line's own
  * discount; sales.discount_amount (the whole-cart discount) lives only

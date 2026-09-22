@@ -75,12 +75,19 @@ switch ($action) {
 
 function listUsers(Database $db)
 {
+    // A branch-scoped admin only sees users assigned to their own
+    // branch(es) — company-wide users (branch_scope = 'all', or
+    // multi-branch not active for this install) see everyone, same as
+    // every other branchScopeSql() consumer.
+    [$scopeSql, $scopeParams] = branchScopeSql('', 'branch_id');
+
     $users = $db->fetchAll("
         SELECT id, username, full_name, role, role_id, branch_scope, branch_id, is_active,
                login_attempts, locked_until, last_login, created_at
         FROM users
+        WHERE 1 = 1 $scopeSql
         ORDER BY is_active DESC, role ASC, full_name ASC
-    ");
+    ", $scopeParams);
     $pageTitle = 'Users';
     include APP_PATH . '/views/users/index.php';
 }
@@ -88,11 +95,27 @@ function listUsers(Database $db)
 function showCreateUser(Database $db)
 {
     $roles = assignableRoles();
+    // A branch-scoped admin can only place a new user at a branch
+    // they're themselves assigned to.
     $branches = hasMultiBranch()
-        ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+        ? manageableBranches($db)
         : [];
     $pageTitle = 'Add User';
     include APP_PATH . '/views/users/create.php';
+}
+
+/**
+ * Branches the current user is allowed to assign OTHER users to.
+ * Company-wide admins (or installs without multi-branch) get every
+ * active branch; a branch-scoped admin only gets their own — they
+ * can't plant or move a user into a branch they don't manage.
+ */
+function manageableBranches(Database $db)
+{
+    if (!hasMultiBranch() || isCompanyWide()) {
+        return $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC");
+    }
+    return userBranches(currentUser()['id']);
 }
 
 function storeUser(Database $db)
@@ -120,7 +143,20 @@ function storeUser(Database $db)
     $slug = roleSlug($roleId);
     $legacyRole = in_array($slug, ['admin', 'staff', 'cashier'], true) ? $slug : 'staff';
 
-    $branchScope = (hasMultiBranch() && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+    // A branch-scoped admin can't grant company-wide access to a user
+    // they create, and can only place them at a branch they themselves
+    // manage — otherwise they could plant a company-wide account or a
+    // user in a branch outside their own scope.
+    $isCompanyWideAdmin = isCompanyWide();
+    $branchScope = (hasMultiBranch() && $isCompanyWideAdmin && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+
+    if (hasMultiBranch() && !$isCompanyWideAdmin) {
+        $requestedBranchId = intval($_POST['branch_id'] ?? 0);
+        if (!canAccessBranch($requestedBranchId)) {
+            $_SESSION['old_input'] = $_POST;
+            redirect(BASE_URL . '/users/create', 'error', 'You can only add users to your own branch.');
+        }
+    }
 
     $db->query("
         INSERT INTO users (username, password_hash, full_name, role, role_id, branch_scope, is_active)
@@ -160,9 +196,10 @@ function showEditUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
     $roles = assignableRoles();
     $branches = hasMultiBranch()
-        ? $db->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC")
+        ? manageableBranches($db)
         : [];
     $assignedBranches = hasMultiBranch() ? userBranches($id) : [];
     $pageTitle = 'Edit User';
@@ -173,6 +210,7 @@ function updateUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     $fullName    = trim($_POST['full_name'] ?? '');
     $roleId      = intval($_POST['role_id'] ?? 0);
@@ -201,7 +239,24 @@ function updateUser(Database $db, mixed $id)
         }
     }
 
-    $branchScope = (hasMultiBranch() && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+    // A branch-scoped admin can't grant (or revoke) company-wide access —
+    // that field is simply left as it already was for them — and can only
+    // move this user to a branch they themselves manage, so they can't
+    // relocate someone to a branch they don't manage. Only a company-wide
+    // admin can actually change who's company-wide.
+    $isCompanyWideAdmin = isCompanyWide();
+    if ($isCompanyWideAdmin) {
+        $branchScope = (hasMultiBranch() && ($_POST['branch_scope'] ?? '') === 'all') ? 'all' : 'assigned';
+    } else {
+        $branchScope = $user['branch_scope'] ?? 'assigned';
+    }
+
+    if (hasMultiBranch() && !$isCompanyWideAdmin && isset($_POST['branch_id'])) {
+        $requestedBranchId = intval($_POST['branch_id']);
+        if (!canAccessBranch($requestedBranchId)) {
+            redirect(BASE_URL . '/users/edit/' . $id, 'error', 'You can only assign users to your own branch.');
+        }
+    }
 
     $db->query("
         UPDATE users SET username = ?, full_name = ?, role = ?, role_id = ?, branch_scope = ?, is_active = ?
@@ -261,8 +316,9 @@ function saveUserBranches(Database $db, mixed $userId, mixed $branchId)
 
 function showPasswordForm(Database $db, mixed $id)
 {
-    $user = $db->fetchOne("SELECT id, username, full_name FROM users WHERE id = ?", [$id]);
+    $user = $db->fetchOne("SELECT id, username, full_name, branch_id FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
     $pageTitle = 'Change Password';
     include APP_PATH . '/views/users/password.php';
 }
@@ -271,6 +327,7 @@ function updatePassword(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     $newPassword     = $_POST['password']         ?? '';
     $confirmPassword = $_POST['password_confirm'] ?? '';
@@ -306,6 +363,7 @@ function deleteUser(Database $db, mixed $id)
 
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     if ($user['role'] === 'admin') {
         $adminCount = $db->fetchOne("SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND is_active = 1");
@@ -326,6 +384,9 @@ function activateUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) {
+        redirect(BASE_URL . '/users', 'error', 'User not found');
+    }
+    if (!canAccessBranch($user['branch_id'])) {
         redirect(BASE_URL . '/users', 'error', 'User not found');
     }
 
@@ -352,6 +413,7 @@ function unlockUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     // Guard against unlocking a user that isn't actually locked
     $isLocked = $user['locked_until'] && strtotime($user['locked_until']) > time();
