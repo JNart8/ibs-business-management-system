@@ -863,15 +863,28 @@ function customerCreditSettlementReport(Database $db)
             'issued'      => $issued,
             'redeemed'    => $redeemed,
             'net'         => $issued - $redeemed,
+            'settled'     => 0.0, // filled in below
         ];
     }
+
+    // Net out settlements already recorded for this exact period, and
+    // usort by branch name — shared with ExportController's CSV so the
+    // two can never drift. See netOutSettledCustomerCredit() in
+    // functions.php.
+    $settled = netOutSettledCustomerCredit($db, $rows, $dateFrom, $dateTo);
+    $rows    = $settled['rows'];
 
     usort($rows, fn($a, $b) => strcmp($a['branch_name'], $b['branch_name']));
 
     $summary = [
         'total_issued'   => array_sum(array_column($rows, 'issued')),
         'total_redeemed' => array_sum(array_column($rows, 'redeemed')),
+        'total_settled'  => $settled['total_settled'],
     ];
+
+    // ── Suggested who-owes-whom allocation, from the (already-settled-
+    // adjusted) net positions ────────────────────────────────────────
+    $settlementMatrix = settlementMatrix($rows);
 
     $pageTitle = 'Customer Credit Settlement';
     $isPartialView = hasMultiBranch() && !isCompanyWide();

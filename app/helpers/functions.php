@@ -1292,3 +1292,143 @@ function recalcProductTotalStock(Database $db, mixed $productId)
     $db->query("UPDATE products SET current_stock = ? WHERE id = ?", [$totalValue, $productId]);
     return $totalValue;
 }
+
+/**
+ * Nets already-recorded customer-credit settlement transfers out of a
+ * set of branch net positions (see customerCreditSettlementReport() in
+ * ReportsController.php, §5.5 in ARCHITECTURE.md). Shared with
+ * ExportController's CSV so the screen and the export can never drift.
+ *
+ * Only transfers with settlement_type = 'customer_credit_balancing'
+ * whose settles_period_from/settles_period_to exactly match the
+ * period being reported count — "Record Settlement" always writes
+ * those to match the period it was launched from, so an exact match
+ * is unambiguous (no risk of a settlement silently bleeding into an
+ * adjacent period it wasn't actually for).
+ *
+ * Sign convention (see settlementMatrix()'s docblock for the full
+ * cash trace): net > 0 means the branch took in more deposit cash
+ * than it gave away in redemptions — it's cash-RICH and must PAY the
+ * difference out. net < 0 means it gave away goods against other
+ * branches' deposits without collecting matching cash — it's owed and
+ * must RECEIVE. A settlement transfer moves real cash from the payer
+ * (net > 0) to the receiver (net < 0): the payer's surplus shrinks
+ * (net -= amount, toward zero), the receiver's deficit shrinks
+ * (net += amount, toward zero).
+ *
+ * @param array $rows each with branch_id, branch_name, net, issued, redeemed, settled
+ * @return array ['rows' => array (same shape, net/settled updated), 'total_settled' => float]
+ */
+function netOutSettledCustomerCredit(Database $db, array $rows, string $dateFrom, string $dateTo): array
+{
+    $settledTransfers = $db->fetchAll("
+        SELECT
+            fa.branch_id AS from_branch_id,
+            ta.branch_id AS to_branch_id,
+            t.amount
+        FROM account_transfers t
+        INNER JOIN accounts fa ON fa.id = t.from_account_id
+        INNER JOIN accounts ta ON ta.id = t.to_account_id
+        WHERE t.settlement_type = 'customer_credit_balancing'
+          AND t.settles_period_from = ?
+          AND t.settles_period_to   = ?
+    ", [$dateFrom, $dateTo]);
+
+    $rowsByBranch = [];
+    foreach ($rows as $i => $row) {
+        $rowsByBranch[$row['branch_id']] = $i;
+    }
+
+    $totalSettled = 0.0;
+    foreach ($settledTransfers as $t) {
+        // A transfer to/from a company-wide account (branch_id NULL,
+        // e.g. a shared bank account) can't be attributed to one
+        // branch's position — skip rather than guess.
+        if ($t['from_branch_id'] === null || $t['to_branch_id'] === null) {
+            continue;
+        }
+        $amount = (float) $t['amount'];
+        $totalSettled += $amount;
+
+        // from_account_id is where the settlement cash left FROM — the
+        // payer, whose net was positive; its surplus shrinks.
+        if (isset($rowsByBranch[$t['from_branch_id']])) {
+            $rows[$rowsByBranch[$t['from_branch_id']]]['net']     -= $amount;
+            $rows[$rowsByBranch[$t['from_branch_id']]]['settled'] += $amount;
+        }
+        // to_account_id is where it landed — the receiver, whose net
+        // was negative; its deficit shrinks.
+        if (isset($rowsByBranch[$t['to_branch_id']])) {
+            $rows[$rowsByBranch[$t['to_branch_id']]]['net']     += $amount;
+            $rows[$rowsByBranch[$t['to_branch_id']]]['settled'] += $amount;
+        }
+    }
+
+    return ['rows' => $rows, 'total_settled' => $totalSettled];
+}
+
+/**
+ * Turns a list of branch net positions into a suggested set of
+ * branch-to-branch payments that would zero every branch out — a
+ * classic debt-simplification allocation (largest payer settles with
+ * largest receiver, repeat), NOT a claim about which specific deposit
+ * funded which specific sale. Customer credit is pooled money (§5.5)
+ * — this only allocates the already-computed *aggregate* net numbers,
+ * it doesn't add per-transaction tracing.
+ *
+ * Sign convention — worked cash trace: customer deposits GHS 100 at
+ * Branch A (A's till: +100 cash, company-wide liability: +100), then
+ * spends it at Branch B (liability: -100, B hands over GHS 100 of
+ * goods for zero cash). A is left holding GHS 100 of cash it never
+ * earned via its own completed sale; B gave away GHS 100 of goods and
+ * collected nothing. So A — issued (100) > redeemed (0), net = +100 —
+ * is the one holding surplus cash and must PAY it to B — redeemed
+ * (100) > issued (0), net = -100 — which must RECEIVE. In short:
+ * net > 0 = pays, net < 0 = receives. (Do not flip this without
+ * re-deriving the trace above — it's easy to get backwards, and it
+ * was, in an earlier version of this report's UI copy.)
+ *
+ * @param array $rows each with branch_id, branch_name, net
+ * @return array list of ['from_branch_id','from_branch_name','to_branch_id','to_branch_name','amount']
+ */
+function settlementMatrix(array $rows): array
+{
+    $payers = [];
+    $receivers = [];
+    foreach ($rows as $row) {
+        if ($row['net'] > 0.01) {
+            $payers[] = ['branch_id' => $row['branch_id'], 'branch_name' => $row['branch_name'], 'amount' => $row['net']];
+        } elseif ($row['net'] < -0.01) {
+            $receivers[] = ['branch_id' => $row['branch_id'], 'branch_name' => $row['branch_name'], 'amount' => -$row['net']];
+        }
+    }
+
+    usort($payers, fn($a, $b) => $b['amount'] <=> $a['amount']);
+    usort($receivers, fn($a, $b) => $b['amount'] <=> $a['amount']);
+
+    $matrix = [];
+    $p = 0;
+    $r = 0;
+    while ($p < count($payers) && $r < count($receivers)) {
+        $pay = min($payers[$p]['amount'], $receivers[$r]['amount']);
+        if ($pay > 0.01) {
+            $matrix[] = [
+                'from_branch_id'   => $payers[$p]['branch_id'],
+                'from_branch_name' => $payers[$p]['branch_name'],
+                'to_branch_id'     => $receivers[$r]['branch_id'],
+                'to_branch_name'   => $receivers[$r]['branch_name'],
+                'amount'           => round($pay, 2),
+            ];
+        }
+        $payers[$p]['amount']    -= $pay;
+        $receivers[$r]['amount'] -= $pay;
+        if ($payers[$p]['amount'] <= 0.01) {
+            $p++;
+        }
+        if ($receivers[$r]['amount'] <= 0.01) {
+            $r++;
+        }
+    }
+
+    return $matrix;
+}

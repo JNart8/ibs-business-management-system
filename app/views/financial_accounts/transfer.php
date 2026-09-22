@@ -14,10 +14,16 @@
     <?= flashMessage() ?>
 
     <?php $settlementType = $_GET['settlement_type'] ?? ''; ?>
+    <?php $settlesPeriodFrom = $_GET['period_from'] ?? ''; ?>
+    <?php $settlesPeriodTo   = $_GET['period_to']   ?? ''; ?>
     <?php if ($settlementType === 'customer_credit_balancing'): ?>
         <div class="bg-blue-50 border border-blue-200 text-blue-800 text-sm rounded-lg p-4 mb-4">
             🔁 <strong>Recording a customer-credit branch settlement.</strong>
             Pick the accounts this settlement actually moves money between, then confirm.
+            <?php if ($settlesPeriodFrom && $settlesPeriodTo): ?>
+                <br>Settling the <strong><?= formatDate($settlesPeriodFrom, 'd M Y') ?> – <?= formatDate($settlesPeriodTo, 'd M Y') ?></strong>
+                imbalance — once recorded, the settlement report will net this back out of that period.
+            <?php endif; ?>
         </div>
     <?php endif; ?>
 
@@ -27,6 +33,10 @@
             <?= csrfField() ?>
             <?php if ($settlementType === 'customer_credit_balancing'): ?>
                 <input type="hidden" name="settlement_type" value="customer_credit_balancing">
+                <?php if ($settlesPeriodFrom && $settlesPeriodTo): ?>
+                    <input type="hidden" name="settles_period_from" value="<?= e($settlesPeriodFrom) ?>">
+                    <input type="hidden" name="settles_period_to" value="<?= e($settlesPeriodTo) ?>">
+                <?php endif; ?>
             <?php endif; ?>
 
             <div>
@@ -59,7 +69,11 @@
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1">Amount to Transfer (GHS) *</label>
                 <input type="number" step="0.01" min="0.01" name="amount" required placeholder="0.00"
+                    value="<?= e($_GET['amount'] ?? '') ?>"
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-semibold text-lg">
+                <?php if (!empty($_GET['amount'])): ?>
+                    <span class="text-xs text-gray-400">Suggested from the settlement report — adjust to whatever's actually being transferred.</span>
+                <?php endif; ?>
             </div>
 
             <div>

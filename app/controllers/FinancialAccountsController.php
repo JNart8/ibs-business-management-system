@@ -170,6 +170,24 @@ function executeTransfer(Database $db)
         $settlementType = 'routine';
     }
 
+    // Which reporting period this settlement pays off — only meaningful
+    // (and only ever set) for a customer-credit settlement, threaded
+    // through as hidden fields from the settlement report's "Record
+    // Settlement" link. Lets that report net a settled amount back out
+    // instead of showing the same imbalance as owed forever. Malformed/
+    // missing dates just leave it untracked rather than failing the
+    // transfer — the money still moves either way.
+    $settlesPeriodFrom = null;
+    $settlesPeriodTo   = null;
+    if ($settlementType === 'customer_credit_balancing') {
+        $rawFrom = $_POST['settles_period_from'] ?? '';
+        $rawTo   = $_POST['settles_period_to']   ?? '';
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $rawFrom) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $rawTo)) {
+            $settlesPeriodFrom = $rawFrom;
+            $settlesPeriodTo   = $rawTo;
+        }
+    }
+
     if ($fromAccountId === $toAccountId) {
         redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Source and destination accounts must be different.');
     }
@@ -212,9 +230,14 @@ function executeTransfer(Database $db)
 
         // 3. Record transfer log
         $db->query("
-            INSERT INTO account_transfers (from_account_id, to_account_id, amount, charges, charged_to, settlement_type, notes, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ", [$fromAccountId, $toAccountId, $amount, $charges, $chargedTo, $settlementType, $notes, $_SESSION['user_id']]);
+            INSERT INTO account_transfers
+                (from_account_id, to_account_id, amount, charges, charged_to, settlement_type,
+                 settles_period_from, settles_period_to, notes, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ", [
+            $fromAccountId, $toAccountId, $amount, $charges, $chargedTo, $settlementType,
+            $settlesPeriodFrom, $settlesPeriodTo, $notes, $_SESSION['user_id']
+        ]);
         
         $transferId = $db->lastInsertId();
 

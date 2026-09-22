@@ -1318,18 +1318,27 @@ function exportCustomerCreditSettlement(Database $db, mixed $output)
         $issued   = $amounts['issued']   ?? 0.0;
         $redeemed = $amounts['redeemed'] ?? 0.0;
         $rows[] = [
+            'branch_id'   => $branchId,
             'branch_name' => branchName($branchId),
             'issued'      => $issued,
             'redeemed'    => $redeemed,
             'net'         => $issued - $redeemed,
+            'settled'     => 0.0,
         ];
     }
+
+    // Same helper the on-screen report uses, so the two can never drift.
+    $settled      = netOutSettledCustomerCredit($db, $rows, $dateFrom, $dateTo);
+    $rows         = $settled['rows'];
+    $totalSettled = $settled['total_settled'];
+
     usort($rows, fn($a, $b) => strcmp($a['branch_name'], $b['branch_name']));
 
     fputcsv($output, [
         'Branch',
         'Deposits Issued (' . CURRENCY_HOLDER . ')',
         'Credit Redeemed (' . CURRENCY_HOLDER . ')',
+        'Already Settled (' . CURRENCY_HOLDER . ')',
         'Net Position (' . CURRENCY_HOLDER . ')',
     ]);
 
@@ -1338,6 +1347,7 @@ function exportCustomerCreditSettlement(Database $db, mixed $output)
             $row['branch_name'],
             number_format($row['issued'], 2, '.', ''),
             number_format($row['redeemed'], 2, '.', ''),
+            number_format($row['settled'], 2, '.', ''),
             number_format($row['net'], 2, '.', ''),
         ]);
     }
@@ -1346,6 +1356,7 @@ function exportCustomerCreditSettlement(Database $db, mixed $output)
         'TOTAL',
         number_format(array_sum(array_column($rows, 'issued')), 2, '.', ''),
         number_format(array_sum(array_column($rows, 'redeemed')), 2, '.', ''),
+        number_format($totalSettled, 2, '.', ''),
         number_format(array_sum(array_column($rows, 'net')), 2, '.', ''),
     ]);
 
@@ -1353,6 +1364,15 @@ function exportCustomerCreditSettlement(Database $db, mixed $output)
         fputcsv($output, []);
         fputcsv($output, ['Note: partial view — showing ' . activeBranchName() . ' only.']);
         fputcsv($output, ['This report is inherently about cross-branch imbalance; a branch-scoped export can only show this branch\'s side of it.']);
+    } else {
+        // Suggested settlement matrix — company-wide only, same as the screen.
+        $matrix = settlementMatrix($rows);
+        fputcsv($output, []);
+        fputcsv($output, ['Suggested Settlement (allocation of the net positions above, not a transaction trace)']);
+        fputcsv($output, ['From Branch', 'To Branch', 'Amount Owed (' . CURRENCY_HOLDER . ')']);
+        foreach ($matrix as $pair) {
+            fputcsv($output, [$pair['from_branch_name'], $pair['to_branch_name'], number_format($pair['amount'], 2, '.', '')]);
+        }
     }
 
     fputcsv($output, []);

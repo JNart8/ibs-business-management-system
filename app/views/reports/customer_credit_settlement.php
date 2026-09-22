@@ -33,9 +33,13 @@
 <div class="bg-blue-50 border border-blue-200 text-blue-800 text-sm rounded-lg p-4 mb-6">
     ℹ️ This report shows a <strong>net position</strong> per branch, not a trace of which
     specific deposit funded which specific sale — customer balances are pooled, shared
-    company-wide money, not earmarked cash. A positive net means the branch has issued more
-    store credit than has been redeemed there (other branches owe it); negative means the
-    reverse.
+    company-wide money, not earmarked cash. A positive net means the branch took in more
+    deposit cash than it gave away in redemptions — it's <strong>holding cash it must pay
+    out</strong> to whichever branch(es) fulfilled those redemptions. A negative net means
+    the branch gave away goods against deposits made elsewhere and collected no matching
+    cash — it's <strong>owed and should receive</strong>. The suggested settlement below is
+    likewise an <strong>allocation</strong> of these aggregate numbers, not a claim about
+    which deposit funded which sale.
 </div>
 
 <!-- Filters -->
@@ -99,6 +103,14 @@
     </div>
 </div>
 
+<?php if (($summary['total_settled'] ?? 0) > 0.01): ?>
+<div class="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-lg p-4 mb-6">
+    ✅ <strong><?= formatMoney($summary['total_settled']) ?></strong> already settled for this exact
+    period (<?= formatDate($dateFrom, 'd M Y') ?> – <?= formatDate($dateTo, 'd M Y') ?>) — netted out of
+    the positions and suggested settlement below.
+</div>
+<?php endif; ?>
+
 <!-- Branch Net Position Table -->
 <div class="bg-white rounded-lg shadow overflow-hidden mb-6">
     <div class="px-4 py-3 border-b">
@@ -111,8 +123,8 @@
                     <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Branch</th>
                     <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Deposits Issued</th>
                     <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Credit Redeemed</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Settled</th>
                     <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Net Position</th>
-                    <th class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Actions</th>
                 </tr>
             </thead>
             <tbody class="divide-y">
@@ -121,18 +133,11 @@
                         <td class="px-4 py-3 text-sm font-medium text-gray-800"><?= e($row['branch_name']) ?></td>
                         <td class="px-4 py-3 text-right text-sm text-gray-700"><?= formatMoney($row['issued']) ?></td>
                         <td class="px-4 py-3 text-right text-sm text-gray-700"><?= formatMoney($row['redeemed']) ?></td>
+                        <td class="px-4 py-3 text-right text-sm text-gray-500">
+                            <?= $row['settled'] > 0.01 ? formatMoney($row['settled']) : '—' ?>
+                        </td>
                         <td class="px-4 py-3 text-right text-sm font-bold <?= $row['net'] > 0.01 ? 'text-green-600' : ($row['net'] < -0.01 ? 'text-red-600' : 'text-gray-500') ?>">
                             <?= ($row['net'] > 0.01 ? '+' : '') . formatMoney($row['net']) ?>
-                        </td>
-                        <td class="px-4 py-3 text-center">
-                            <?php if (abs($row['net']) > 0.01): ?>
-                                <a href="<?= BASE_URL ?>/financial-accounts/transfer?settlement_type=customer_credit_balancing&note=<?= urlencode('Customer-credit settlement for ' . $row['branch_name']) ?>"
-                                    class="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                                    Record Settlement →
-                                </a>
-                            <?php else: ?>
-                                <span class="text-gray-300 text-sm">—</span>
-                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -147,6 +152,50 @@
         </table>
     </div>
 </div>
+
+<?php if (!($isPartialView ?? false)): ?>
+<!-- Suggested Settlement (who owes whom) -->
+<div class="bg-white rounded-lg shadow overflow-hidden mb-6">
+    <div class="px-4 py-3 border-b">
+        <h3 class="font-bold text-gray-800">Suggested Settlement</h3>
+        <p class="text-xs text-gray-400 mt-0.5">One possible set of payments that would clear every branch's remaining position — not the only valid split.</p>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead class="bg-gray-50 border-b">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">From</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">To</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Amount Owed</th>
+                    <th class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y">
+                <?php foreach ($settlementMatrix as $pair): ?>
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3 text-sm font-medium text-gray-800"><?= e($pair['from_branch_name']) ?></td>
+                        <td class="px-4 py-3 text-sm font-medium text-gray-800"><?= e($pair['to_branch_name']) ?></td>
+                        <td class="px-4 py-3 text-right text-sm font-bold text-red-600"><?= formatMoney($pair['amount']) ?></td>
+                        <td class="px-4 py-3 text-center">
+                            <a href="<?= BASE_URL ?>/financial-accounts/transfer?settlement_type=customer_credit_balancing&period_from=<?= $dateFrom ?>&period_to=<?= $dateTo ?>&amount=<?= $pair['amount'] ?>&note=<?= urlencode($pair['from_branch_name'] . ' → ' . $pair['to_branch_name'] . ' customer-credit settlement for ' . formatDate($dateFrom, 'd M Y') . ' – ' . formatDate($dateTo, 'd M Y')) ?>"
+                                class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                Record Settlement →
+                            </a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (empty($settlementMatrix)): ?>
+                    <tr>
+                        <td colspan="4" class="px-4 py-8 text-center text-gray-400 text-sm">
+                            Nothing left to settle for this period.
+                        </td>
+                    </tr>
+                <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
 
 <script>
     function toggleCustomDates(period) {
