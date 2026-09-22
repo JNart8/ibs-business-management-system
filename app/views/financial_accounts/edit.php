@@ -77,14 +77,32 @@
             <?php elseif (hasMultiBranch()): ?>
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1">Scope</label>
-                <select name="branch_id"
-                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                    <option value="" <?= !$account['branch_id'] ? 'selected' : '' ?>>Company-wide (all branches)</option>
-                    <?php foreach ($branches as $branch): ?>
-                        <option value="<?= $branch['id'] ?>" <?= $account['branch_id'] == $branch['id'] ? 'selected' : '' ?>><?= e($branch['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <p class="text-xs text-gray-400 mt-1">Shared by default — scope it to one branch if this account lives at a single location.</p>
+                <?php if (!isCompanyWide() && !$account['branch_id']): ?>
+                    <!-- Branch-scoped admin, currently-company-wide account: locked, not just
+                         defaulted — re-scoping a shared account away from company-wide is the
+                         same privilege as creating one, so it's not offered as a choice here
+                         (a disabled <select> also won't submit, so the field is left untouched). -->
+                    <input type="text" disabled value="Company-wide (all branches)"
+                        class="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500">
+                    <p class="text-xs text-gray-400 mt-1">
+                        Only a company-wide admin can move a company-wide account to a single branch.
+                    </p>
+                <?php else: ?>
+                    <select name="branch_id"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <?php if (isCompanyWide()): ?>
+                            <option value="" <?= !$account['branch_id'] ? 'selected' : '' ?>>Company-wide (all branches)</option>
+                        <?php endif; ?>
+                        <?php foreach ($branches as $branch): ?>
+                            <option value="<?= $branch['id'] ?>" <?= $account['branch_id'] == $branch['id'] ? 'selected' : '' ?>><?= e($branch['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="text-xs text-gray-400 mt-1">
+                        <?= isCompanyWide()
+                            ? 'Shared by default — scope it to one branch if this account lives at a single location.'
+                            : 'Only a company-wide admin can make an account company-wide — pick one of your branches.' ?>
+                    </p>
+                <?php endif; ?>
             </div>
             <?php endif; ?>
 

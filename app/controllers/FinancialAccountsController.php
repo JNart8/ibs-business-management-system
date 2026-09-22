@@ -105,9 +105,9 @@ function storeAccount(Database $db)
         redirect(BASE_URL . '/financial-accounts', 'error', 'Invalid account type selected. Cash accounts cannot be created manually.');
     }
 
-    // Company-wide (shared) by default — a specific branch is only ever
-    // set when the client deliberately chooses one, and only among their
-    // own branches unless they're company-wide.
+    // Company-wide (shared, branch_id NULL) only when a company-wide admin
+    // deliberately leaves the branch blank; a branch-scoped admin's account
+    // must land on one of their own branches — see resolveAccountBranchChoice().
     $branchId = null;
     if (hasMultiBranch()) {
         [$branchId, $branchError] = resolveAccountBranchChoice($db, $_POST['branch_id'] ?? '');
@@ -376,7 +376,7 @@ function updateAccount(Database $db, mixed $id)
     // and always stay pinned to the branch they were created for.
     $branchId = $account['branch_id'];
     if (hasMultiBranch() && $account['type'] !== 'cash') {
-        [$branchId, $branchError] = resolveAccountBranchChoice($db, $_POST['branch_id'] ?? '');
+        [$branchId, $branchError] = resolveAccountBranchChoice($db, $_POST['branch_id'] ?? '', $account['branch_id']);
         if ($branchError) {
             redirect(BASE_URL . '/financial-accounts/edit/' . $id, 'error', $branchError);
         }

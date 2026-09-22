@@ -1124,18 +1124,33 @@ function accountBranchScopeSql(mixed $alias = '')
  * Validates a submitted branch choice for a manually-created/edited
  * mobile_money or bank account (cash accounts are always system-managed
  * and branch-scoped — they never go through this). Empty/absent means
- * company-wide (NULL), always allowed regardless of the submitter's own
- * branch scope — sharing an account isn't a bigger privilege than
- * managing your own branch's. A specific branch must exist, be active,
+ * company-wide (NULL) — restricted to company-wide admins only: a
+ * shared, every-branch-visible account is a bigger privilege than
+ * managing your own branch's, so a branch-scoped admin can't create or
+ * re-home an account into it. A specific branch must exist, be active,
  * and be one of the submitting user's own branches unless they're
  * company-wide (isCompanyWide()).
  *
+ * @param mixed $currentBranchId On an edit, the account's branch_id
+ *   *before* this submission (int, or null if already company-wide).
+ *   Leave at the default when creating a new account. A branch-scoped
+ *   admin can't newly grant company-wide scope (nor re-home an
+ *   already-company-wide account into their own branch — same
+ *   privilege, opposite direction), but editing some other field on
+ *   an account that was already company-wide and stays that way isn't
+ *   granting anything — that specific no-op case is let through so
+ *   editing doesn't accidentally demote it.
  * @return array [int|null $branchId, string|null $error]
  */
-function resolveAccountBranchChoice(Database $db, mixed $rawBranchId)
+function resolveAccountBranchChoice(Database $db, mixed $rawBranchId, mixed $currentBranchId = 'new-account')
 {
     $rawBranchId = trim((string) $rawBranchId);
+    $wasCompanyWide = ($currentBranchId === null);
+
     if ($rawBranchId === '') {
+        if (hasMultiBranch() && !isCompanyWide() && !$wasCompanyWide) {
+            return [null, 'Only a company-wide admin can create a company-wide account.'];
+        }
         return [null, null];
     }
 
@@ -1146,6 +1161,13 @@ function resolveAccountBranchChoice(Database $db, mixed $rawBranchId)
     }
 
     if (!isCompanyWide()) {
+        // Re-homing an already-company-wide account into a specific
+        // branch is the same privilege as creating one, from the other
+        // direction — a disabled UI control prevents this in the normal
+        // flow, but a crafted request could still POST it directly.
+        if ($wasCompanyWide) {
+            return [null, 'Only a company-wide admin can move a company-wide account to a single branch.'];
+        }
         $ownBranchIds = array_column(userBranches(currentUser()['id']), 'id');
         if (!in_array($branchId, $ownBranchIds, true)) {
             return [null, 'You can only assign an account to your own branch.'];
