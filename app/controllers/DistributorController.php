@@ -354,17 +354,19 @@ function completeDistributorDelivery(Database $db)
                 $vi['purchase_total']
             ]);
 
-            // Save Sale Item
+            // Save Sale Item — COGS is this delivery's own purchase cost, not
+            // the product's average: the goods pass straight through.
             $db->query("
-                INSERT INTO sale_items 
-                    (sale_id, product_id, product_name, quantity, unit_price, line_total)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO sale_items
+                    (sale_id, product_id, product_name, quantity, unit_price, unit_cost, line_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ", [
                 $saleId,
                 $p['id'],
                 $p['name'],
                 $qty,
                 $vi['selling_price'],
+                $vi['purchase_cost'],
                 $vi['sale_total']
             ]);
 

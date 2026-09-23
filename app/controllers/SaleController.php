@@ -422,18 +422,28 @@ function completeSale(Database $db)
         foreach ($validatedItems as $vi) {
             $p = $vi['product'];
 
+            // Snapshot COGS: the average cost right now, re-read inside the
+            // transaction (not from the pre-validation fetch) so a purchase
+            // posted since then is reflected. Frozen on the line so later
+            // purchases don't rewrite this sale's profit.
+            $unitCost = (float) ($db->fetchOne(
+                "SELECT average_cost FROM products WHERE id = ?",
+                [$p['id']]
+            )['average_cost'] ?? 0);
+
             // Insert line item
             $db->query("
                 INSERT INTO sale_items
                     (sale_id, product_id, product_name, quantity,
-                     unit_price, discount_type, discount_percent, discount_amount, line_total)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     unit_price, unit_cost, discount_type, discount_percent, discount_amount, line_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $saleId,
                 $p['id'],
                 $p['name'],
                 $vi['qty'],
                 $vi['unitPrice'],
+                $unitCost,
                 $vi['discountType'],
                 $vi['discount'],
                 $vi['discountAmount'],

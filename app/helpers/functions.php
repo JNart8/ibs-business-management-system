@@ -891,6 +891,23 @@ function saleItemNetSql(string $itemAlias = 'si', string $saleAlias = 's'): stri
 }
 
 /**
+ * SQL expression for a sale line's cost of goods sold. Uses the cost
+ * snapshotted on the line at time of sale (sale_items.unit_cost), so a
+ * past period's COGS doesn't move when later purchases change
+ * products.average_cost. Falls back to the current average cost only
+ * for a line with no snapshot. Use in any COGS/profit report that joins
+ * sale_items to products — never si.quantity * p.average_cost.
+ *
+ * Usage:
+ *   $costLine = saleItemCostSql();        // aliases si / p
+ *   "SELECT SUM({$costLine}) AS cogs FROM sale_items si JOIN products p ..."
+ */
+function saleItemCostSql(string $itemAlias = 'si', string $productAlias = 'p'): string
+{
+    return "({$itemAlias}.quantity * COALESCE({$itemAlias}.unit_cost, {$productAlias}.average_cost))";
+}
+
+/**
  * Per-line share of each sale's whole-cart discount, for exports that write
  * one row per line item. Same rule as saleItemNetSql() (pro rata to
  * line_total), but rounded to cents per line with the leftover cent put on

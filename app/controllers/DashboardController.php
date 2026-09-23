@@ -18,6 +18,9 @@ $db = Database::getInstance();
 [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
 [$purchScopeSql, $purchScopeParams] = branchScopeSql('p');
 
+// Line COGS at the cost snapshotted at time of sale (see saleItemCostSql()).
+$costLine = saleItemCostSql();
+
 // ══════════════════════════════════════════════════════════════════════════════
 // TODAY'S PERFORMANCE METRICS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -48,7 +51,7 @@ try {
 
     // Calculate today's COGS
     $todayCOGS = $db->fetchOne("
-        SELECT COALESCE(SUM(si.quantity * p.average_cost), 0) as total_cogs
+        SELECT COALESCE(SUM({$costLine}), 0) as total_cogs
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
@@ -283,8 +286,8 @@ $salesTrend = $db->fetchAll("
     SELECT 
         DATE(s.sale_date) as date,
         COALESCE(SUM({$netLine}), 0) as revenue,
-        COALESCE(SUM(si.quantity * p.average_cost), 0) as cogs,
-        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$costLine}), 0) as cogs,
+        COALESCE(SUM({$netLine}) - SUM({$costLine}), 0) as profit
     FROM sales s
     INNER JOIN sale_items si ON s.id = si.sale_id
     INNER JOIN products p ON si.product_id = p.id
@@ -328,7 +331,7 @@ $topProducts = $db->fetchAll("
     SELECT 
         p.name,
         SUM(si.quantity) as total_qty,
-        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}) - SUM({$costLine}), 0) as profit
     FROM sale_items si
     INNER JOIN sales s ON si.sale_id = s.id
     INNER JOIN products p ON si.product_id = p.id
@@ -344,7 +347,7 @@ $categoryPerformance = $db->fetchAll("
     SELECT 
         COALESCE(c.name, 'Uncategorized') as category,
         COALESCE(SUM({$netLine}), 0) as revenue,
-        COALESCE(SUM({$netLine}) - SUM(si.quantity * p.average_cost), 0) as profit
+        COALESCE(SUM({$netLine}) - SUM({$costLine}), 0) as profit
     FROM sale_items si
     INNER JOIN sales s ON si.sale_id = s.id
     INNER JOIN products p ON si.product_id = p.id
@@ -446,7 +449,7 @@ try {
     $monthSummary['transactions'] = intval($monthData['transactions'] ?? 0);
 
     $monthCOGS = $db->fetchOne("
-        SELECT COALESCE(SUM(si.quantity * p.average_cost), 0) as total_cogs
+        SELECT COALESCE(SUM({$costLine}), 0) as total_cogs
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN products p ON si.product_id = p.id
