@@ -1443,9 +1443,9 @@ function processPayment(Database $db, mixed $id)
         $amountDue = floatval($sale['amount_due']);
         $payment = min($amount, $amountDue, $availableDeposit);
 
-        if ($payment < $amount) {
-            $_SESSION['flash_warning'] = "Only " . formatMoney($payment) . " available in deposit. Partial payment applied.";
-        }
+        // Only when the deposit was what ran short — not when the amount
+        // was merely capped at what's still owed on the sale
+        $depositShortfall = $availableDeposit < min($amount, $amountDue) - 0.005;
 
         $amount = $payment; // Use the adjusted amount
     }
@@ -1580,6 +1580,17 @@ function processPayment(Database $db, mixed $id)
         }
 
         $db->commit();
+
+        // One flash slot, so a deposit shortfall replaces the plain success
+        // message rather than being set somewhere nothing displays it
+        if (!empty($depositShortfall)) {
+            redirect(
+                BASE_URL . '/sales/view/' . $id,
+                'warning',
+                'Only ' . formatMoney($payment) . ' was available in the customer\'s deposit, so that much was applied. '
+                    . formatMoney(max(0, $newAmountDue)) . ' is still owed on this sale.'
+            );
+        }
         redirect(
             BASE_URL . '/sales/view/' . $id,
             'success',
