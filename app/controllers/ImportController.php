@@ -354,30 +354,20 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
                 return ['valid' => false, 'error' => 'Unit cost must be a positive number'];
             }
 
-            $method = strtolower(trim($row['payment_method'] ?? 'credit'));
-            if (!empty($method) && !in_array($method, ['cash', 'mobile', 'bank', 'credit', 'cheque'])) {
+            $method = strtolower(trim($row['payment_method'] ?? '')) ?: 'credit';
+            if (!in_array($method, ['cash', 'mobile', 'bank', 'credit', 'cheque'])) {
                 return ['valid' => false, 'error' => "Invalid payment method '{$method}' (must be cash, mobile, bank, credit, cheque)"];
             }
 
-            $accountVal = trim($row['payment_account'] ?? '');
-            if (!empty($accountVal)) {
-                $account = $db->fetchOne("SELECT id FROM accounts WHERE (account_number = ? OR name = ?) AND is_active = 1", [$accountVal, $accountVal]);
+            // Same resolver the final import step uses, so anything that
+            // would fail there is caught here in the preview instead.
+            if ($method !== 'credit') {
+                $accountVal = trim($row['payment_account'] ?? '');
+                $account = resolveImportPaymentAccount($db, $method, $accountVal);
                 if (!$account) {
-                    return ['valid' => false, 'error' => "Payment account/number '{$accountVal}' not found or inactive"];
-                }
-            } elseif (!empty($method) && $method !== 'credit') {
-                $expectedType = [
-                    'cash' => 'cash',
-                    'mobile' => 'mobile_money',
-                    'bank' => 'bank',
-                    'cheque' => 'bank'
-                ][$method] ?? 'cash';
-                $acct = $db->fetchOne("SELECT id FROM accounts WHERE type = ? AND is_active = 1 LIMIT 1", [$expectedType]);
-                if (!$acct) {
-                    $fallback = $db->fetchOne("SELECT id FROM accounts WHERE type = 'cash' AND is_active = 1 LIMIT 1");
-                    if (!$fallback) {
-                        return ['valid' => false, 'error' => "No active account of type '{$expectedType}' or fallback 'cash' found for payment method '{$method}'"];
-                    }
+                    return ['valid' => false, 'error' => $accountVal !== ''
+                        ? "Payment account '{$accountVal}' not found, inactive, or not available at your branch"
+                        : "No active account available at your branch for payment method '{$method}'"];
                 }
             }
 
@@ -675,6 +665,41 @@ function downloadTemplate(mixed $type)
 }
 
 /**
+ * The account an imported purchase's payment is drawn from, or null.
+ * Shared by preview validation and the final import so they can never
+ * disagree. Never the suspense account, and only accounts the importing
+ * user can use (their branch's, or company-wide). A named account
+ * (payment_account column: name or account number) must resolve exactly;
+ * blank falls back by payment-method type, then cash — preferring the
+ * active branch's account and the default, like recordAccountTransaction().
+ */
+function resolveImportPaymentAccount(Database $db, mixed $method, mixed $accountVal)
+{
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $base = "SELECT * FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql";
+    $branchId = activeBranchId();
+
+    if ($accountVal !== '') {
+        return $db->fetchOne(
+            "$base AND (account_number = ? OR name = ?) ORDER BY (branch_id = ?) DESC LIMIT 1",
+            array_merge($scopeParams, [$accountVal, $accountVal, $branchId])
+        ) ?: null;
+    }
+
+    $expectedType = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank', 'cheque' => 'bank'][$method] ?? 'cash';
+    foreach (array_unique([$expectedType, 'cash']) as $type) {
+        $account = $db->fetchOne(
+            "$base AND type = ? ORDER BY (branch_id = ?) DESC, is_default DESC, id ASC LIMIT 1",
+            array_merge($scopeParams, [$type, $branchId])
+        );
+        if ($account) {
+            return $account;
+        }
+    }
+    return null;
+}
+
+/**
  * Process purchases import
  */
 function processPurchasesImport(Database $db, mixed $data)
@@ -726,7 +751,7 @@ function processPurchasesImport(Database $db, mixed $data)
             $groups[$groupKey] = [
                 'supplier_id' => $supplier['id'],
                 'invoice_number' => $invoiceNum,
-                'payment_method' => strtolower(trim($row['payment_method'] ?? 'credit')),
+                'payment_method' => strtolower(trim($row['payment_method'] ?? '')) ?: 'credit',
                 'payment_account' => trim($row['payment_account'] ?? ''),
                 'purchase_date' => !empty(trim($row['purchase_date'] ?? '')) ? date('Y-m-d H:i:s', strtotime(trim($row['purchase_date']))) : date('Y-m-d H:i:s'),
                 'notes' => trim($row['notes'] ?? ''),
@@ -800,33 +825,14 @@ function importPurchaseGroup(Database $db, mixed $group)
     $amountDue = max(0, $totalAmount - $amountPaid);
     $paymentStatus = ($amountPaid >= $totalAmount) ? 'paid' : (($amountPaid > 0) ? 'partial' : 'unpaid');
 
-    // 1. Resolve account
-    $accountId = null;
+    // 1. Resolve account (preview already validated this with the same
+    // resolver — fail the group rather than silently skip the payment
+    // posting if something changed in between)
+    $account = null;
     if ($amountPaid > 0 && $paymentMethod !== 'credit') {
-        $expectedType = [
-            'cash' => 'cash',
-            'mobile' => 'mobile_money',
-            'bank' => 'bank',
-            'cheque' => 'bank'
-        ][$paymentMethod] ?? 'cash';
-
-        if (!empty($paymentAccount)) {
-            $acct = $db->fetchOne("SELECT id FROM accounts WHERE (account_number = ? OR name = ?) AND is_active = 1", [$paymentAccount, $paymentAccount]);
-            if ($acct) {
-                $accountId = $acct['id'];
-            }
-        }
-
-        if (!$accountId) {
-            $acct = $db->fetchOne("SELECT id FROM accounts WHERE type = ? AND is_active = 1 LIMIT 1", [$expectedType]);
-            if ($acct) {
-                $accountId = $acct['id'];
-            } else {
-                $acct = $db->fetchOne("SELECT id FROM accounts WHERE type = 'cash' AND is_active = 1 LIMIT 1");
-                if ($acct) {
-                    $accountId = $acct['id'];
-                }
-            }
+        $account = resolveImportPaymentAccount($db, $paymentMethod, $paymentAccount);
+        if (!$account) {
+            return ['success' => false, 'message' => "Payment account for '{$paymentMethod}' is no longer available"];
         }
     }
 
@@ -839,8 +845,8 @@ function importPurchaseGroup(Database $db, mixed $group)
             (purchase_number, supplier_id, purchase_date, subtotal, discount_percent,
              discount_amount, vat_percent, vat_amount, total_amount,
              payment_status, payment_method, amount_paid, amount_due,
-             invoice_number, notes, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             invoice_number, notes, user_id, branch_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ", [
         $purchaseNumber,
         $supplierId,
@@ -857,7 +863,8 @@ function importPurchaseGroup(Database $db, mixed $group)
         $amountDue,
         $invoiceNumber ?: null,
         $notes ?: null,
-        $userId
+        $userId,
+        activeBranchId()
     ]);
 
     $purchaseId = $db->lastInsertId();
@@ -991,26 +998,32 @@ function importPurchaseGroup(Database $db, mixed $group)
         WHERE id = ?
     ", [$netEffect, $totalAmount, $supplierId]);
 
-    // 5. Record withdrawal from financial account
-    if ($amountPaid > 0 && $paymentMethod !== 'credit' && $accountId > 0) {
+    // 5. Record withdrawal from financial account. Written directly (not
+    // via recordAccountTransaction()) only so created_at can carry the
+    // imported purchase date; columns match that helper's insert.
+    if ($account) {
+        // Re-read the balance: an earlier group in this same import may
+        // have already drawn on this account.
+        $balanceBefore = floatval($db->fetchOne("SELECT balance FROM accounts WHERE id = ?", [$account['id']])['balance']);
+        $balanceAfter  = $balanceBefore - $amountPaid;
+
+        $db->query("UPDATE accounts SET balance = ? WHERE id = ?", [$balanceAfter, $account['id']]);
+
         $db->query("
             INSERT INTO account_transactions
-                (account_id, transaction_type, amount, reference_type, reference_id, description, user_id, created_at)
-            VALUES (?, 'withdrawal', ?, 'purchase', ?, ?, ?, ?)
+                (account_id, transaction_type, amount, balance_before, balance_after,
+                 reference_type, reference_id, notes, user_id, created_at)
+            VALUES (?, 'withdrawal', ?, ?, ?, 'purchase', ?, ?, ?, ?)
         ", [
-            $accountId,
+            $account['id'],
             $amountPaid,
+            $balanceBefore,
+            $balanceAfter,
             $purchaseId,
             "Purchase #{$purchaseNumber} payment to {$supplier['company_name']}",
             $userId,
             $purchaseDate
         ]);
-
-        $db->query("
-            UPDATE accounts
-            SET balance = balance - ?
-            WHERE id = ?
-        ", [$amountPaid, $accountId]);
     }
 
     return ['success' => true];
