@@ -1254,7 +1254,11 @@ untouched until received, so it can never go negative on the way back.
 can only dispatch *from* a branch you're assigned to; anyone can pick any destination" —
 about *choosing* a destination at dispatch time. Confirming receipt is a different,
 physical-location action, so:
-- **Receive** requires assignment to the **destination** branch (or company-wide).
+- **Receive** requires actual assignment to the **destination** branch — company-wide
+  scope alone is *not* enough — and the user who dispatched the transfer can never
+  receive it, even if assigned to both branches. Receipt is the destination's independent
+  confirmation that goods arrived, so it must come from someone else, at that branch
+  (`receiveDeniedReason()`).
 - **Cancel** requires assignment to the **source** branch (or company-wide) — the same
   right as dispatching, since cancelling undoes a dispatch.
 
@@ -1294,6 +1298,10 @@ loss-investigation workflow around a shortfall beyond making it visible.
 - [ ] As a user assigned only to the source branch, confirm the "Receive Transfer"
       action is unavailable on an in-transit transfer they can otherwise see; confirm
       the reverse (no "Cancel Transfer") for a destination-only user.
+- [ ] As the user who dispatched a transfer (even if assigned to the destination too, or
+      company-wide), confirm "Receive Transfer" is hidden and hitting
+      `/transfers/receive/{id}` directly redirects with an error. Same for a company-wide
+      user not assigned to the destination branch.
 - [ ] Cancel an in-transit transfer; confirm the source branch's stock is fully
       restored, status becomes `🚫 Cancelled`, and neither action remains available.
 - [ ] Confirm a `completed` or `cancelled` transfer offers neither Receive nor Cancel,

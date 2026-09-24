@@ -258,9 +258,10 @@ function viewTransfer(Database $db, mixed $id)
     ", [$id]);
 
     // Receive/cancel are each restricted to the branch that action is
-    // physically about — receiving to the destination, cancelling a
-    // dispatch to the source (or company-wide, either way).
-    $canReceive = $transfer['status'] === 'in_transit' && userCanActOnBranch($transfer['to_branch_id']);
+    // physically about — receiving to someone actually assigned to the
+    // destination (other than whoever dispatched it), cancelling a
+    // dispatch to the source (or company-wide).
+    $canReceive = $transfer['status'] === 'in_transit' && receiveDeniedReason($transfer) === null;
     $canCancel  = $transfer['status'] === 'in_transit' && userCanActOnBranch($transfer['from_branch_id']);
 
     $pageTitle = 'Transfer: ' . $transfer['transfer_number'];
@@ -269,7 +270,8 @@ function viewTransfer(Database $db, mixed $id)
 
 /**
  * Is the current user allowed to act on a given branch — assigned to
- * it, or company-wide? Shared by receive/cancel's access checks.
+ * it, or company-wide? Used by cancel's access check (receive uses the
+ * stricter receiveDeniedReason()).
  */
 function userCanActOnBranch(mixed $branchId)
 {
@@ -278,6 +280,25 @@ function userCanActOnBranch(mixed $branchId)
     }
     $assignedIds = array_column(userBranches($_SESSION['user_id']), 'id');
     return in_array((int) $branchId, $assignedIds, true);
+}
+
+/**
+ * Why the current user may not receive this transfer, or null if they
+ * may. Stricter than userCanActOnBranch(): receipt is a confirmation by
+ * the destination that the goods physically arrived, so the dispatcher
+ * can never confirm their own transfer, and company-wide scope alone
+ * isn't enough — the receiver must be assigned to the destination branch.
+ */
+function receiveDeniedReason(array $transfer): ?string
+{
+    if ((int) $transfer['user_id'] === (int) $_SESSION['user_id']) {
+        return 'You dispatched this transfer, so it must be received by someone at the destination branch.';
+    }
+    $assignedIds = array_column(userBranches($_SESSION['user_id']), 'id');
+    if (!in_array((int) $transfer['to_branch_id'], $assignedIds, true)) {
+        return 'You are not assigned to the destination branch for this transfer.';
+    }
+    return null;
 }
 
 function showReceiveForm(Database $db, mixed $id)
@@ -289,8 +310,8 @@ function showReceiveForm(Database $db, mixed $id)
     if ($transfer['status'] !== 'in_transit') {
         redirect(BASE_URL . '/transfers/view/' . $id, 'error', 'This transfer is not awaiting receipt.');
     }
-    if (!userCanActOnBranch($transfer['to_branch_id'])) {
-        redirect(BASE_URL . '/transfers/view/' . $id, 'error', 'You are not assigned to the destination branch for this transfer.');
+    if ($reason = receiveDeniedReason($transfer)) {
+        redirect(BASE_URL . '/transfers/view/' . $id, 'error', $reason);
     }
 
     $items = $db->fetchAll("
@@ -318,8 +339,8 @@ function receiveTransfer(Database $db, mixed $id)
     if ($transfer['status'] !== 'in_transit') {
         redirect(BASE_URL . '/transfers/view/' . $id, 'error', 'This transfer is not awaiting receipt.');
     }
-    if (!userCanActOnBranch($transfer['to_branch_id'])) {
-        redirect(BASE_URL . '/transfers/view/' . $id, 'error', 'You are not assigned to the destination branch for this transfer.');
+    if ($reason = receiveDeniedReason($transfer)) {
+        redirect(BASE_URL . '/transfers/view/' . $id, 'error', $reason);
     }
 
     $items = $db->fetchAll("SELECT * FROM stock_transfer_items WHERE transfer_id = ?", [$id]);
