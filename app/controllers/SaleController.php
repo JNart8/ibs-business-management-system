@@ -1061,6 +1061,35 @@ function updateSale(Database $db, mixed $id)
     $customerId = $sale['customer_id'];
     $paymentDifference = $amountPaid - $oldAmountPaid;
 
+    // Moving a sale onto or off "From Deposit" can't use the generic
+    // "difference = new money" adjustment below: deposit-paid amounts
+    // never moved money and never changed the balance (the sale already
+    // took its full total off it). Instead, work out how much REAL money
+    // (cash/mobile/bank) the sale should hold after the edit, and move the
+    // balance and accounts by the change in that alone.
+    $depositEdit = ($paymentMethod === 'deposit' || $oldPaymentMethod === 'deposit')
+        && ($paymentMethod !== $oldPaymentMethod || $paymentDifference != 0);
+    if ($depositEdit) {
+        $moneyOld = array_sum(saleAccountNet($db, $id));
+        $moneyNew = match ($paymentMethod) {
+            'deposit' => 0.0,
+            'credit'  => min($amountPaid, $moneyOld), // keep money already taken, never invent any
+            default   => $amountPaid,                 // cash/mobile/bank: all of it is real money
+        };
+
+        // Whatever isn't real money comes out of the customer's unspent
+        // deposit — which must cover it. Unspent deposit excluding this
+        // sale = unapplied now − this sale's money − its current due + its total.
+        $depositPortion   = max(0, $amountPaid - $moneyNew);
+        $availableDeposit = unappliedDeposit($db, $customerId, floatval($sale['customer_balance']))
+            - $moneyOld - $oldAmountDue + $totalAmount;
+        if ($depositPortion > $availableDeposit + 0.005) {
+            redirect(BASE_URL . '/sales/edit/' . $id, 'error',
+                'Not enough deposit: only ' . formatMoney(max(0, $availableDeposit)) . ' available to pay this sale from deposit.');
+            return;
+        }
+    }
+
     try {
         $db->beginTransaction();
 
@@ -1124,8 +1153,55 @@ function updateSale(Database $db, mixed $id)
             ]);
         }
 
+        if ($depositEdit) {
+            // Balance moves only by the change in real money received
+            $balanceDelta          = $moneyNew - $moneyOld;
+            $customerBalanceBefore = floatval($sale['customer_balance']);
+            $customerBalanceAfter  = $customerBalanceBefore + $balanceDelta;
+            if (abs($balanceDelta) > 0.005) {
+                $db->query("UPDATE customers SET current_balance = current_balance + ? WHERE id = ?", [$balanceDelta, $customerId]);
+            }
+            // Logged even when the balance doesn't move (e.g. credit →
+            // deposit), so the statement shows what the edit did.
+            $db->query("
+                INSERT INTO customer_transactions
+                    (customer_id, transaction_type, amount, balance_before,
+                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
+                VALUES (?, 'adjustment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)
+            ", [
+                $customerId,
+                $balanceDelta,
+                $customerBalanceBefore,
+                $customerBalanceAfter,
+                $id,
+                $paymentMethod,
+                "Sale payment adjusted: $changeLog. Reason: $editReason",
+                $userId,
+                $sale['branch_id'] ?? activeBranchId()
+            ]);
+
+            if ($moneyNew < $moneyOld - 0.005) {
+                // Money no longer counted as received (now paid from
+                // deposit, or reduced) — take it back out of the account(s)
+                // it actually went into, not wherever the new method points.
+                $toReturn = $moneyOld - $moneyNew;
+                foreach (saleAccountNet($db, $id) as $accountId => $net) {
+                    if ($toReturn <= 0.005) break;
+                    $take = min($toReturn, $net);
+                    recordAccountTransaction($db, $oldPaymentMethod, $take, 'withdrawal', 'sale', $id,
+                        "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
+                        $accountId);
+                    $toReturn -= $take;
+                }
+            } elseif ($moneyNew > $moneyOld + 0.005) {
+                // Now paid in real money (e.g. deposit → cash)
+                recordAccountTransaction($db, $paymentMethod, $moneyNew - $moneyOld, 'deposit', 'sale', $id,
+                    "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
+                    null, $sale['branch_id'] ?? null);
+            }
+        }
         // Update customer balance if payment changed
-        if ($paymentDifference != 0) {
+        elseif ($paymentDifference != 0) {
             // Get customer's current balance
             $customerBalanceBefore = floatval($sale['customer_balance']);
 
@@ -1272,6 +1348,12 @@ function showPaymentForm(Database $db, mixed $id)
         return;
     }
 
+    // What the customer can actually pay with from deposit — same figure
+    // recordPayment() caps at (see unappliedDeposit())
+    $sale['available_deposit'] = $sale['is_default'] == 1
+        ? 0.0
+        : max(0, unappliedDeposit($db, $sale['customer_id'], floatval($sale['current_balance'])));
+
     $pageTitle = 'Record Payment';
     include APP_PATH . '/views/sales/pay.php';
 }
@@ -1316,17 +1398,19 @@ function processPayment(Database $db, mixed $id)
             return;
         }
 
-        $customerBalance = floatval($sale['current_balance']);
+        // Unspent deposit, not the raw balance: this sale's full total is
+        // already off the balance, so the balance alone understates what's
+        // left to pay it with (see unappliedDeposit()).
+        $availableDeposit = unappliedDeposit($db, $sale['customer_id'], floatval($sale['current_balance']));
 
         // Allow partial payment if insufficient deposit
-        if ($customerBalance <= 0) {
+        if ($availableDeposit <= 0.005) {
             redirect(BASE_URL . '/sales/pay/' . $id, 'error', 'Customer has no deposit balance');
             return;
         }
 
         // Adjust payment amount if insufficient (partial payment)
         $amountDue = floatval($sale['amount_due']);
-        $availableDeposit = $customerBalance;
         $payment = min($amount, $amountDue, $availableDeposit);
 
         if ($payment < $amount) {
@@ -1357,11 +1441,15 @@ function processPayment(Database $db, mixed $id)
         $customer      = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$sale['customer_id']]);
         $balanceBefore = floatval($customer['current_balance']);
 
-        // If paying from deposit, deduct from customer balance
+        // Paying from deposit: the balance already reflects both the
+        // deposit (+) and this sale's full total (−), so applying one to the
+        // other changes nothing — it only marks the sale paid. Deducting
+        // here too took the money off twice. Same as processDeposit()'s
+        // auto-apply, which logs the payment without moving the balance.
         if ($paymentMethod === 'deposit') {
-            $balanceAfter = $balanceBefore - $payment; // Reduce deposit
+            $balanceAfter = $balanceBefore;
 
-            // Log transaction - negative amount to reduce deposit
+            // Log transaction - negative amount shows the deposit being used
             if (!empty($sale['sale_date'])) {
                 $db->query("
                 INSERT INTO customer_transactions
@@ -1393,11 +1481,6 @@ function processPayment(Database $db, mixed $id)
                     $sale['branch_id'] ?? activeBranchId()
                 ]);
             }
-            // Update customer balance - reduce deposit
-            $db->query(
-                "UPDATE customers SET current_balance = current_balance - ? WHERE id = ?",
-                [$payment, $sale['customer_id']]
-            );
         } else {
             // Regular payment (cash/mobile/bank) - increases balance
             $balanceAfter = $balanceBefore + $payment;

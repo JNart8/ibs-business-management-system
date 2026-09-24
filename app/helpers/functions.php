@@ -820,6 +820,48 @@ function activeBranchId()
 }
 
 /**
+ * How much of a customer's deposit is still unspent.
+ *
+ * current_balance = deposits + cash/mobile/bank payments − sale totals
+ * (every sale takes its FULL total off the balance, whatever the payment
+ * method; applying a deposit to a sale then only marks the sale paid —
+ * see processDeposit()'s auto-apply). So the balance alone understates
+ * the deposit when sales still have amounts owing: unspent deposit =
+ * balance + everything still owed on (non-voided) sales.
+ */
+function unappliedDeposit(Database $db, mixed $customerId, float $balance): float
+{
+    $row = $db->fetchOne(
+        "SELECT COALESCE(SUM(amount_due), 0) AS due FROM sales
+         WHERE customer_id = ? AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')",
+        [$customerId]
+    );
+    return $balance + floatval($row['due'] ?? 0);
+}
+
+/**
+ * Net money a sale has put into each financial account so far (its
+ * original payment, later /pay receipts, and any edit adjustments), as
+ * [account_id => amount], largest first. Deposit-paid amounts never
+ * appear here — no money moved when a deposit was applied.
+ */
+function saleAccountNet(Database $db, mixed $saleId): array
+{
+    $rows = $db->fetchAll("
+        SELECT account_id,
+               SUM(CASE WHEN transaction_type = 'deposit' THEN amount
+                        WHEN transaction_type = 'withdrawal' THEN -amount
+                        ELSE 0 END) AS net
+        FROM account_transactions
+        WHERE reference_type = 'sale' AND reference_id = ?
+        GROUP BY account_id
+        HAVING net > 0.005
+        ORDER BY net DESC
+    ", [$saleId]);
+    return array_column($rows, 'net', 'account_id');
+}
+
+/**
  * Credit-limit check for a sale that leaves something owing. Returns an
  * error message, or null if the sale is within the customer's limit.
  *

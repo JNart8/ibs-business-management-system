@@ -54,12 +54,12 @@
         <?php if ($sale['is_default'] != 1): ?>
             <div class="mt-4 pt-4 border-t">
                 <div class="flex items-center justify-between">
-                    <div class="text-sm text-gray-600">Customer Deposit Balance:</div>
-                    <div class="text-lg font-bold <?= $sale['current_balance'] > 0 ? 'text-green-600' : 'text-gray-400' ?>">
-                        <?= formatMoney($sale['current_balance']) ?>
+                    <div class="text-sm text-gray-600">Available Deposit:</div>
+                    <div class="text-lg font-bold <?= $sale['available_deposit'] > 0 ? 'text-green-600' : 'text-gray-400' ?>">
+                        <?= formatMoney($sale['available_deposit']) ?>
                     </div>
                 </div>
-                <?php if ($sale['current_balance'] > 0): ?>
+                <?php if ($sale['available_deposit'] > 0): ?>
                     <div class="text-xs text-green-600 mt-1">
                         ✓ Customer can pay from deposit
                     </div>
@@ -140,9 +140,9 @@
 
                     <!-- Deposit Option (only if not walk-in and has balance) -->
                     <?php if ($sale['is_default'] != 1): ?>
-                        <label class="relative <?= $sale['current_balance'] <= 0 ? 'opacity-50' : '' ?>">
+                        <label class="relative <?= $sale['available_deposit'] <= 0 ? 'opacity-50' : '' ?>">
                             <input type="radio" name="payment_method" value="deposit"
-                                <?= $sale['current_balance'] <= 0 ? 'disabled' : '' ?>
+                                <?= $sale['available_deposit'] <= 0 ? 'disabled' : '' ?>
                                 class="peer sr-only">
                             <div class="px-4 py-3 border-2 border-gray-300 rounded-lg cursor-pointer
                                         hover:border-blue-400 peer-checked:border-blue-600 peer-checked:bg-blue-50
@@ -150,9 +150,9 @@
                                         transition text-center">
                                 <div class="text-2xl mb-1">💰</div>
                                 <div class="text-sm font-semibold text-gray-700">Deposit</div>
-                                <?php if ($sale['current_balance'] > 0): ?>
+                                <?php if ($sale['available_deposit'] > 0): ?>
                                     <div class="text-xs text-green-600 mt-1">
-                                        <?= formatMoney($sale['current_balance']) ?>
+                                        <?= formatMoney($sale['available_deposit']) ?>
                                     </div>
                                 <?php else: ?>
                                     <div class="text-xs text-red-500 mt-1">
@@ -186,8 +186,8 @@
         <h3 class="font-semibold text-blue-800 mb-2">💡 Payment Options</h3>
         <ul class="text-sm text-blue-700 space-y-1">
             <li>• <strong>Cash/Mobile/Bank:</strong> Direct payment methods</li>
-            <?php if ($sale['is_default'] != 1 && $sale['current_balance'] > 0): ?>
-                <li>• <strong>Deposit:</strong> Pay from customer's deposit balance (available: <?= formatMoney($sale['current_balance']) ?>)</li>
+            <?php if ($sale['is_default'] != 1 && $sale['available_deposit'] > 0): ?>
+                <li>• <strong>Deposit:</strong> Pay from customer's deposit balance (available: <?= formatMoney($sale['available_deposit']) ?>)</li>
                 <li>• Partial payments allowed if deposit insufficient</li>
             <?php endif; ?>
             <li>• Payment cannot exceed amount due</li>
