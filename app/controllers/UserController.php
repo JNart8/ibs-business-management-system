@@ -80,6 +80,11 @@ function listUsers(Database $db)
     // multi-branch not active for this install) see everyone, same as
     // every other branchScopeSql() consumer.
     [$scopeSql, $scopeParams] = branchScopeSql('', 'branch_id');
+    // ...and never company-wide users, even ones whose active branch is
+    // theirs — see canManageUser().
+    if (hasMultiBranch() && !isCompanyWide()) {
+        $scopeSql .= " AND branch_scope <> 'all'";
+    }
 
     $users = $db->fetchAll("
         SELECT id, username, full_name, role, role_id, branch_scope, branch_id, is_active,
@@ -196,7 +201,7 @@ function showEditUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
-    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canManageUser($user)) redirect(BASE_URL . '/users', 'error', 'User not found');
     $roles = assignableRoles();
     $branches = hasMultiBranch()
         ? manageableBranches($db)
@@ -210,7 +215,7 @@ function updateUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
-    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canManageUser($user)) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     $fullName    = trim($_POST['full_name'] ?? '');
     $roleId      = intval($_POST['role_id'] ?? 0);
@@ -314,11 +319,27 @@ function saveUserBranches(Database $db, mixed $userId, mixed $branchId)
     }
 }
 
+/**
+ * Can the current user manage (edit, reset password, (de)activate,
+ * unlock) this user? Branch-scoped admins only for users at their own
+ * branch — and never a company-wide user: users.branch_id is just a
+ * company-wide admin's *active* branch (they can switch to any), and
+ * letting a branch admin reset their password would be a straight
+ * escalation to company-wide access.
+ */
+function canManageUser(array $user): bool
+{
+    if (hasMultiBranch() && !isCompanyWide() && ($user['branch_scope'] ?? 'assigned') === 'all') {
+        return false;
+    }
+    return canAccessBranch($user['branch_id']);
+}
+
 function showPasswordForm(Database $db, mixed $id)
 {
-    $user = $db->fetchOne("SELECT id, username, full_name, branch_id FROM users WHERE id = ?", [$id]);
+    $user = $db->fetchOne("SELECT id, username, full_name, branch_id, branch_scope FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
-    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canManageUser($user)) redirect(BASE_URL . '/users', 'error', 'User not found');
     $pageTitle = 'Change Password';
     include APP_PATH . '/views/users/password.php';
 }
@@ -327,7 +348,7 @@ function updatePassword(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
-    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canManageUser($user)) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     $newPassword     = $_POST['password']         ?? '';
     $confirmPassword = $_POST['password_confirm'] ?? '';
@@ -363,7 +384,7 @@ function deleteUser(Database $db, mixed $id)
 
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
-    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canManageUser($user)) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     if ($user['role'] === 'admin') {
         $adminCount = $db->fetchOne("SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND is_active = 1");
@@ -386,7 +407,7 @@ function activateUser(Database $db, mixed $id)
     if (!$user) {
         redirect(BASE_URL . '/users', 'error', 'User not found');
     }
-    if (!canAccessBranch($user['branch_id'])) {
+    if (!canManageUser($user)) {
         redirect(BASE_URL . '/users', 'error', 'User not found');
     }
 
@@ -413,7 +434,7 @@ function unlockUser(Database $db, mixed $id)
 {
     $user = $db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
     if (!$user) redirect(BASE_URL . '/users', 'error', 'User not found');
-    if (!canAccessBranch($user['branch_id'])) redirect(BASE_URL . '/users', 'error', 'User not found');
+    if (!canManageUser($user)) redirect(BASE_URL . '/users', 'error', 'User not found');
 
     // Guard against unlocking a user that isn't actually locked
     $isLocked = $user['locked_until'] && strtotime($user['locked_until']) > time();
