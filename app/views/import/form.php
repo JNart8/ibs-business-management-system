@@ -136,9 +136,9 @@
                 <div class="text-sm space-y-1 text-gray-600">
                     <?php
                     $optional = [
-                        'categories' => ['None - name is all you need'],
+                        'categories' => ['description'],
                         'products' => ['cost_price', 'current_stock', 'reorder_level', 'unit', 'barcode'],
-                        'suppliers' => ['contact_name', 'phone', 'email', 'address'],
+                        'suppliers' => ['phone (required for new suppliers)', 'contact_name', 'email', 'address'],
                         'customers' => ['email', 'address', 'credit_limit'],
                         'purchases' => ['invoice_number', 'payment_method', 'payment_account', 'purchase_date', 'notes', 'discount_percent', 'vat_percent']
                     ];
@@ -153,24 +153,38 @@
             <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                 <h3 class="font-bold text-gray-800 mb-2">💡 Tips</h3>
                 <ul class="text-xs text-gray-600 space-y-1">
-                    <li>• Use the template to avoid errors</li>
-                    <li>• First row must be column headers</li>
-                    <li>• Remove any empty rows</li>
+                    <li>• Use the template to avoid errors — its sample rows show every accepted variation. Replace them with your own data.</li>
+                    <li>• First row must be column headers; optional columns can be left out entirely or left blank</li>
+                    <li>• Numbers only in number columns (no currency symbols or thousands separators)</li>
+                    <li>• Blank lines and "CSV UTF-8" files saved from Excel are fine</li>
+                    <?php if (in_array($type, ['categories', 'suppliers', 'customers'])): ?>
+                        <li>• With <strong>Update Existing</strong>, blank cells keep the current value — they never erase it</li>
+                    <?php endif; ?>
+                    <?php if ($type === 'categories'): ?>
+                        <li>• Matched by name. Updating only changes the description.</li>
+                    <?php endif; ?>
                     <?php if ($type === 'products'): ?>
-                        <li>• SKU must be unique</li>
-                        <li>• Prices should be numbers (no currency symbols)</li>
+                        <li>• SKU must be unique; existing SKUs are skipped</li>
+                        <li>• Barcode is optional but must not belong to another product</li>
                         <li>• <strong>Create categories and suppliers first</strong> - they must exist before importing products</li>
-                        <li>• Category and supplier names must match exactly</li>
+                        <li>• Category must match by name; supplier by company name or supplier code</li>
+                        <li>• <strong>current_stock</strong> is set at your active branch (<?= e(activeBranchName()) ?>)</li>
+                        <li>• Blank cost_price = 0, reorder_level = 10, unit = pcs</li>
+                    <?php endif; ?>
+                    <?php if ($type === 'suppliers'): ?>
+                        <li>• Matched by company name. A phone number is required for a new supplier and can't be one another supplier already uses.</li>
                     <?php endif; ?>
                     <?php if ($type === 'customers'): ?>
-                        <li>• Phone must be unique</li>
+                        <li>• Phone must be unique — customers are matched by phone</li>
                     <?php endif; ?>
                     <?php if ($type === 'purchases'): ?>
-                        <li>• <strong>Invoice Number grouping</strong>: Rows sharing same supplier and invoice_number will group into a single invoice.</li>
+                        <li>• <strong>Invoice Number grouping</strong>: Rows sharing same supplier and invoice_number will group into a single invoice (payment details come from its first row).</li>
                         <li>• Leave <strong>invoice_number</strong> empty if you want each row imported as separate purchase transaction.</li>
-                        <li>• <strong>payment_method</strong> can be credit, cash, mobile, bank, cheque. Defaults to credit.</li>
-                        <li>• <strong>payment_account</strong>: Account name to pay from. If empty, defaults to the primary account for the payment method.</li>
-                        <li>• <strong>purchase_date</strong> format: YYYY-MM-DD HH:MM:SS or left empty for now.</li>
+                        <li>• <strong>supplier</strong>: company name or supplier code.</li>
+                        <li>• <strong>payment_method</strong> can be credit, cash, mobile, bank, cheque. Blank means credit.</li>
+                        <li>• <strong>payment_account</strong>: account name <em>or</em> account number to pay from. If empty, uses your branch's account for the payment method. The suspense account can't be used.</li>
+                        <li>• <strong>purchase_date</strong>: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS, or empty for now.</li>
+                        <li>• Stock is received at your active branch (<?= e(activeBranchName()) ?>).</li>
                     <?php endif; ?>
                 </ul>
             </div>

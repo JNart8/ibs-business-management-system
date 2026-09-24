@@ -711,46 +711,68 @@ function importCustomer(Database $db, mixed $row, mixed $mode, mixed $userId)
 
 /**
  * Download CSV template
+ *
+ * The samples form one consistent set — import categories, then
+ * suppliers, then products, then customers/purchases, and every row
+ * resolves. Each template's rows deliberately cover the variations that
+ * importer accepts (full vs. minimal rows, blank optional cells, quoted
+ * commas, unit aliases, every payment method, account by name vs.
+ * number, date with/without time) so the template doubles as reference.
  */
 function downloadTemplate(mixed $type)
 {
     $templates = [
         'categories' => [
-            'headers' => ['name'],
+            'headers' => ['name', 'description'],
             'sample' => [
-                ['Electronics'],
-                ['Clothing'],
-                ['Food & Beverages'],
-            ]
-        ],
-        'products' => [
-            'headers' => ['sku', 'name', 'category', 'supplier', 'selling_price', 'cost_price', 'current_stock', 'reorder_level', 'unit', 'barcode'],
-            'sample' => [
-                ['PROD-001', 'Laptop Dell XPS 13', 'Electronics', 'Tech Supplies Ltd', '1200.00', '900.00', '10', '5', 'pcs', '123456789'],
-                ['PROD-002', 'Wireless Mouse', 'Electronics', 'Tech Supplies Ltd', '25.50', '15.00', '50', '10', 'pcs', '987654321'],
-                ['PROD-003', 'USB Cable 2m', 'Electronics', 'Global Electronics', '5.00', '3.00', '100', '20', 'pcs', ''],
+                ['Electronics', 'Phones, computers and accessories'],   // with description
+                ['Clothing', ''],                                        // name only
+                ['Food & Beverages', 'Drinks, snacks, groceries'],       // & and commas are fine
+                ['Frozen Foods', ''],
             ]
         ],
         'suppliers' => [
             'headers' => ['company_name', 'contact_name', 'phone', 'email', 'address'],
             'sample' => [
-                ['Tech Supplies Ltd', 'John Doe', '+265999123456', 'john@techsupplies.com', 'Blantyre, Malawi'],
-                ['Global Electronics', 'Jane Smith', '+265888654321', 'jane@global.com', 'Lilongwe, Malawi'],
+                ['Tech Supplies Ltd', 'John Mensah', '0244123456', 'john@techsupplies.com', 'Ring Road, Accra'],   // all columns
+                ['Global Electronics', 'Jane Owusu', '+233201234567', 'jane@global.com', ''],                       // international number, no address
+                ['Cold Store Direct', '', '0551234567', '', ''],                                                    // minimal: name + phone
+            ]
+        ],
+        'products' => [
+            'headers' => ['sku', 'name', 'category', 'supplier', 'selling_price', 'cost_price', 'current_stock', 'reorder_level', 'unit', 'barcode'],
+            'sample' => [
+                ['PROD-001', 'Laptop Dell XPS 13', 'Electronics', 'Tech Supplies Ltd', '1200.00', '900.00', '10', '5', 'pcs', '123456789'],   // all columns
+                ['PROD-002', 'Wireless Mouse', 'Electronics', 'Tech Supplies Ltd', '25.50', '15.00', '50', '10', 'piece', '987654321'],       // "piece" is stored as pcs
+                ['PROD-003', 'USB Cable, 2m', 'Electronics', 'Global Electronics', '5.00', '3.00', '100', '20', 'pcs', ''],                   // comma in name, no barcode
+                ['PROD-004', 'Frozen Chicken Wings', 'Frozen Foods', 'Cold Store Direct', '45.00', '38.50', '120.5', '25', 'kg', ''],        // decimal stock, weight unit
+                ['PROD-005', 'Bottled Water 500ml', 'Food & Beverages', 'Cold Store Direct', '3.00', '', '', '', '', ''],                    // minimal: optional cells blank (cost 0, stock 0, reorder 10, pcs)
             ]
         ],
         'customers' => [
             'headers' => ['full_name', 'phone', 'email', 'address', 'credit_limit'],
             'sample' => [
-                ['Alice Johnson', '+265991234567', 'alice@email.com', '123 Main St', '500.00'],
-                ['Bob Wilson', '+265998765432', 'bob@email.com', '456 Oak Ave', '1000.00'],
+                ['Alice Johnson', '0241234567', 'alice@email.com', '12 Oxford St, Osu', '500.00'],   // all columns
+                ['Bob Wilson', '+233209876543', '', 'Kasoa', '1000'],                                // no email, whole-number limit
+                ['Kwame Asante', '0501112222', '', '', ''],                                          // minimal: name + phone (limit 0)
             ]
         ],
         'purchases' => [
             'headers' => ['supplier', 'sku', 'quantity', 'unit_cost', 'invoice_number', 'payment_method', 'payment_account', 'purchase_date', 'notes', 'discount_percent', 'vat_percent'],
             'sample' => [
-                ['Tech Supplies Ltd', 'PROD-001', '50', '850.00', 'INV-2026-001', 'credit', '', '2026-06-18 10:00:00', 'Bulk restock', '0', '0'],
-                ['Tech Supplies Ltd', 'PROD-002', '20', '12.50', 'INV-2026-001', 'credit', '', '2026-06-18 10:00:00', 'Bulk restock', '0', '0'],
-                ['Global Electronics', 'PROD-003', '10', '4.00', 'INV-2026-002', 'cash', 'Cash Account', '2026-06-18 11:30:00', 'Urgent purchase', '5', '0'],
+                // Two lines, same supplier + invoice number => one purchase, on credit
+                ['Tech Supplies Ltd', 'PROD-001', '5', '880.00', 'INV-2026-001', 'credit', '', '2026-06-18 10:00:00', 'Bulk restock', '0', '0'],
+                ['Tech Supplies Ltd', 'PROD-002', '20', '14.00', 'INV-2026-001', 'credit', '', '2026-06-18 10:00:00', 'Bulk restock', '0', '0'],
+                // Cash, no account named => your branch's cash account; date without time
+                ['Global Electronics', 'PROD-003', '40', '2.80', 'INV-2026-002', 'cash', '', '2026-06-19', 'Paid at counter', '0', '0'],
+                // Account chosen by NAME, with discount and VAT
+                ['Cold Store Direct', 'PROD-004', '50', '37.00', 'INV-2026-003', 'cash', 'Cash Account', '2026-06-20 09:15:00', '', '5', '15'],
+                // Account chosen by ACCOUNT NUMBER (replace with one of your own)
+                ['Cold Store Direct', 'PROD-005', '200', '2.10', 'INV-2026-004', 'mobile', '0240000000', '2026-06-20', 'MoMo payment', '0', '0'],
+                // Bank transfer, no invoice number => imported as its own purchase
+                ['Tech Supplies Ltd', 'PROD-002', '10', '14.00', '', 'bank', '', '', '', '0', '0'],
+                // Payment method left blank => credit; blank date => today
+                ['Global Electronics', 'PROD-003', '15', '2.80', 'INV-2026-005', '', '', '', '', '', ''],
             ]
         ]
     ];
