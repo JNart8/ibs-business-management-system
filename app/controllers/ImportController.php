@@ -187,8 +187,11 @@ function parseCSV(mixed $file, mixed $type, mixed $mode, Database $db)
         return ['success' => false, 'message' => 'CSV file is empty'];
     }
 
-    // Trim and lowercase headers
-    $headers = array_map(fn($h) => strtolower(trim($h)), $headers);
+    // Strip a UTF-8 byte-order mark (Excel's "CSV UTF-8" adds one), which
+    // would otherwise glue itself onto the first header name and make it
+    // look missing. Then trim and lowercase headers.
+    $headers[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string) $headers[0]);
+    $headers = array_map(fn($h) => strtolower(trim((string) $h)), $headers);
 
     // Validate required headers
     $required = getRequiredHeaders($type);
@@ -207,15 +210,24 @@ function parseCSV(mixed $file, mixed $type, mixed $mode, Database $db)
     $errors = [];
     $rowNum = 1; // Start at 1 (header is row 0)
 
+    $invalid = 0;
+
     while (($row = fgetcsv($handle)) !== false) {
         $rowNum++;
 
-        if (count($row) !== count($headers)) {
-            $errors[] = "Row $rowNum: Column count mismatch";
+        // Skip fully blank lines (spreadsheets often leave some at the end)
+        if (implode('', array_map(fn($v) => trim((string) $v), $row)) === '') {
             continue;
         }
 
-        $rowData = array_combine($headers, $row);
+        if (count($row) !== count($headers)) {
+            $errors[] = "Row $rowNum: Column count mismatch";
+            $invalid++;
+            continue;
+        }
+
+        // Trim every cell once here, so "blank" means '' everywhere below
+        $rowData = array_combine($headers, array_map(fn($v) => trim((string) $v), $row));
         $rowData['_row_num'] = $rowNum;
 
         // Validate row
@@ -224,6 +236,7 @@ function parseCSV(mixed $file, mixed $type, mixed $mode, Database $db)
         if (!$validation['valid']) {
             $rowData['_error'] = $validation['error'];
             $errors[] = "Row $rowNum: {$validation['error']}";
+            $invalid++;
         }
 
         $data[] = $rowData;
@@ -231,13 +244,17 @@ function parseCSV(mixed $file, mixed $type, mixed $mode, Database $db)
 
     fclose($handle);
 
+    // Column-count-mismatch rows never make it into $data, so count
+    // valid rows directly rather than as data minus errors.
+    $valid = count(array_filter($data, fn($r) => empty($r['_error'])));
+
     return [
         'success' => true,
         'data' => $data,
         'errors' => $errors,
-        'total' => count($data),
-        'valid' => count($data) - count($errors),
-        'invalid' => count($errors)
+        'total' => $valid + $invalid,
+        'valid' => $valid,
+        'invalid' => $invalid
     ];
 }
 
@@ -280,7 +297,7 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
             }
             // Check if product SKU already exists
             $existing = $db->fetchOne("SELECT id FROM products WHERE sku = ?", [trim($row['sku'])]);
-            if ($existing) {
+            if ($existing && $mode === 'skip') {
                 return ['valid' => false, 'error' => "Product SKU '" . trim($row['sku']) . "' already exists"];
             }
             if (empty(trim($row['name']))) {
@@ -297,19 +314,48 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
             if (!$category) {
                 return ['valid' => false, 'error' => "Category '{$row['category']}' not found. Create it first."];
             }
-            // Check if supplier exists
-            $supplier = $db->fetchOne("SELECT id FROM suppliers WHERE company_name = ? AND is_active = 1", [trim($row['supplier'])]);
-            if (!$supplier) {
+            // Check if supplier exists (by name or supplier code, same as purchases)
+            if (!findImportSupplier($db, $row['supplier'])) {
                 return ['valid' => false, 'error' => "Supplier '{$row['supplier']}' not found. Create it first."];
             }
             if (!isset($row['selling_price']) || !is_numeric($row['selling_price']) || floatval($row['selling_price']) <= 0) {
                 return ['valid' => false, 'error' => 'Valid selling price is required'];
+            }
+            // Optional numbers: blank is fine (default / keep existing),
+            // anything else must be a non-negative number rather than
+            // silently becoming 0.
+            foreach (['cost_price', 'current_stock', 'reorder_level'] as $numCol) {
+                if (importHasValue($row, $numCol) && (!is_numeric($row[$numCol]) || floatval($row[$numCol]) < 0)) {
+                    return ['valid' => false, 'error' => ucwords(str_replace('_', ' ', $numCol)) . " must be a number of 0 or more"];
+                }
+            }
+            if (importHasValue($row, 'barcode')) {
+                $barcodeOwner = $db->fetchOne("SELECT sku FROM products WHERE barcode = ?", [$row['barcode']]);
+                if ($barcodeOwner && $barcodeOwner['sku'] !== trim($row['sku'])) {
+                    return ['valid' => false, 'error' => "Barcode '{$row['barcode']}' is already used by product '{$barcodeOwner['sku']}'"];
+                }
             }
             break;
 
         case 'suppliers':
             if (empty(trim($row['company_name']))) {
                 return ['valid' => false, 'error' => 'Company name is required'];
+            }
+            // Phone is required and unique, same as the supplier form —
+            // required only for a new supplier, since an update with a
+            // blank phone just keeps the existing one.
+            $existingSupplier = $db->fetchOne("SELECT id FROM suppliers WHERE company_name = ?", [$row['company_name']]);
+            if ($existingSupplier && $mode === 'skip') {
+                break; // will be skipped at import; nothing else to check
+            }
+            if (!$existingSupplier && !importHasValue($row, 'phone')) {
+                return ['valid' => false, 'error' => 'Phone is required for a new supplier'];
+            }
+            if (importHasValue($row, 'phone')) {
+                $phoneOwner = $db->fetchOne("SELECT id, company_name FROM suppliers WHERE phone = ?", [$row['phone']]);
+                if ($phoneOwner && (!$existingSupplier || $phoneOwner['id'] != $existingSupplier['id'])) {
+                    return ['valid' => false, 'error' => "Phone '{$row['phone']}' is already used by supplier '{$phoneOwner['company_name']}'"];
+                }
             }
             break;
 
@@ -324,6 +370,9 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
             $existingPhone = $db->fetchOne("SELECT id, full_name FROM customers WHERE phone = ?", [trim($row['phone'])]);
             if ($existingPhone && $mode === 'skip') {
                 return ['valid' => false, 'error' => "Phone number '" . trim($row['phone']) . "' is already registered to customer '" . $existingPhone['full_name'] . "'"];
+            }
+            if (importHasValue($row, 'credit_limit') && (!is_numeric($row['credit_limit']) || floatval($row['credit_limit']) < 0)) {
+                return ['valid' => false, 'error' => 'Credit limit must be a number of 0 or more'];
             }
             break;
 
@@ -418,29 +467,54 @@ function importRow(Database $db, mixed $type, mixed $row, mixed $mode)
     return ['success' => false, 'message' => 'Unknown type'];
 }
 
+/**
+ * Is this optional CSV column present and non-blank? Cells are already
+ * trimmed by parseCSV(). Blank means "not provided": a default on
+ * create, and "keep the existing value" on update — never "wipe it".
+ */
+function importHasValue(mixed $row, mixed $key)
+{
+    return isset($row[$key]) && $row[$key] !== '';
+}
+
+/**
+ * Active supplier by company name or supplier code — the same match the
+ * purchases import has always used, so a sheet can use either.
+ */
+function findImportSupplier(Database $db, mixed $value)
+{
+    $value = trim((string) $value);
+    return $db->fetchOne(
+        "SELECT id FROM suppliers WHERE (company_name = ? OR supplier_code = ?) AND is_active = 1",
+        [$value, $value]
+    );
+}
+
 function importCategory(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
     $existing = $db->fetchOne("SELECT id FROM categories WHERE name = ?", [trim($row['name'])]);
+    $description = importHasValue($row, 'description') ? $row['description'] : null;
 
     if ($existing) {
-        if ($mode === 'skip') {
+        // Name is the match key, so description is the only thing an
+        // update can change — with none given there's nothing to do.
+        if ($mode === 'skip' || $description === null) {
             return ['success' => true, 'action' => 'skipped'];
         }
-        // Update
-        $db->query("UPDATE categories SET updated_at = NOW() WHERE id = ?", [$existing['id']]);
+        $db->query("UPDATE categories SET description = ? WHERE id = ?", [$description, $existing['id']]);
         return ['success' => true, 'action' => 'updated'];
     }
 
     // Create
-    $db->query("INSERT INTO categories (name, is_active) VALUES (?, 1)", [trim($row['name'])]);
+    $db->query("INSERT INTO categories (name, description, is_active) VALUES (?, ?, 1)", [trim($row['name']), $description]);
     return ['success' => true, 'action' => 'created'];
 }
 
 function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
-    // Look up category and supplier IDs by name
+    // Look up category and supplier IDs (supplier by name or code)
     $category = $db->fetchOne("SELECT id FROM categories WHERE name = ? AND is_active = 1", [trim($row['category'])]);
-    $supplier = $db->fetchOne("SELECT id FROM suppliers WHERE company_name = ? AND is_active = 1", [trim($row['supplier'])]);
+    $supplier = findImportSupplier($db, $row['supplier']);
 
     if (!$category || !$supplier) {
         return ['success' => false, 'message' => 'Category or supplier not found'];
@@ -448,21 +522,26 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
 
     $categoryId = $category['id'];
     $supplierId = $supplier['id'];
+    // Blank barcode must be NULL, not '' — barcode is UNIQUE, and a
+    // second product with an empty-string barcode would collide.
+    $barcode = importHasValue($row, 'barcode') ? $row['barcode'] : null;
 
-    $existing = $db->fetchOne("SELECT id FROM products WHERE sku = ?", [trim($row['sku'])]);
-    $importedStock = isset($row['current_stock']) ? floatval($row['current_stock']) : 0;
+    $existing = $db->fetchOne("SELECT * FROM products WHERE sku = ?", [trim($row['sku'])]);
 
     if ($existing) {
         if ($mode === 'skip') {
             return ['success' => true, 'action' => 'skipped'];
         }
-        // Update — current_stock is deliberately NOT set directly here; it's
-        // maintained automatically by setBranchStock() below, which keeps
-        // products.current_stock in sync as the sum across all branches.
-        // A CSV import continues to mean "set stock to exactly this value",
-        // now applied at the importer's active branch specifically.
+        // Update — optional columns left blank keep their current value.
+        // current_stock is deliberately NOT set directly here; it's
+        // maintained automatically by setBranchStock() (via
+        // setImportedStock()), which keeps products.current_stock in sync
+        // as the sum across all branches. A CSV import continues to mean
+        // "set stock to exactly this value", applied at the importer's
+        // active branch specifically.
+        $costPrice = importHasValue($row, 'cost_price') ? floatval($row['cost_price']) : floatval($existing['cost_price']);
         $db->query("
-            UPDATE products 
+            UPDATE products
             SET name = ?, category_id = ?, supplier_id = ?, selling_price = ?, cost_price = ?,
                 average_cost = CASE
                     WHEN COALESCE(average_cost, 0) = 0 THEN ?
@@ -475,23 +554,24 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
             $categoryId,
             $supplierId,
             floatval($row['selling_price']),
-            isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-            isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-            isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
-            normalizeUnit($row['unit'] ?? 'pcs'),
-            $row['barcode'] ?? null,
+            $costPrice,
+            $costPrice,
+            importHasValue($row, 'reorder_level') ? floatval($row['reorder_level']) : $existing['reorder_level'],
+            importHasValue($row, 'unit') ? normalizeUnit($row['unit']) : $existing['unit'],
+            $barcode ?? $existing['barcode'],
             $existing['id']
         ]);
-        if (isset($row['current_stock'])) {
-            setBranchStock($db, $existing['id'], activeBranchId(), $importedStock);
+        if (importHasValue($row, 'current_stock')) {
+            setImportedStock($db, $existing['id'], floatval($row['current_stock']), 'adjustment', $userId);
         }
         return ['success' => true, 'action' => 'updated'];
     }
 
-    // Create — same reasoning: current_stock is set via setBranchStock()
+    // Create — same reasoning: current_stock is set via setImportedStock()
     // after the insert, not as a direct column value.
+    $costPrice = importHasValue($row, 'cost_price') ? floatval($row['cost_price']) : 0;
     $db->query("
-        INSERT INTO products 
+        INSERT INTO products
             (sku, name, category_id, supplier_id, selling_price, cost_price,
              average_cost, reorder_level, unit, barcode, is_active)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
@@ -501,77 +581,112 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
         $categoryId,
         $supplierId,
         floatval($row['selling_price']),
-        isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-        isset($row['cost_price']) ? floatval($row['cost_price']) : 0,
-        isset($row['reorder_level']) ? floatval($row['reorder_level']) : 10,
-        normalizeUnit($row['unit'] ?? 'pcs'),
-        $row['barcode'] ?? null
+        $costPrice,
+        $costPrice,
+        importHasValue($row, 'reorder_level') ? floatval($row['reorder_level']) : 10,
+        normalizeUnit($row['unit'] ?? ''),
+        $barcode
     ]);
     $newProductId = $db->lastInsertId();
+    $importedStock = importHasValue($row, 'current_stock') ? floatval($row['current_stock']) : 0;
     if ($importedStock > 0) {
-        setBranchStock($db, $newProductId, activeBranchId(), $importedStock);
+        setImportedStock($db, $newProductId, $importedStock, 'opening', $userId);
     }
     return ['success' => true, 'action' => 'created'];
 }
 
+/**
+ * Set a product's stock at the importer's active branch to an exact
+ * quantity and log the change as a stock movement, so stock history can
+ * explain where imported stock came from ('opening' for a new product,
+ * 'adjustment' when an update changes it).
+ */
+function setImportedStock(Database $db, mixed $productId, float $newQty, string $referenceType, mixed $userId)
+{
+    $branchId = activeBranchId();
+    $prevQty  = getBranchStock($productId, $branchId);
+    if (abs($newQty - $prevQty) < 0.0005) {
+        return;
+    }
+    setBranchStock($db, $productId, $branchId, $newQty);
+
+    $db->query("
+        INSERT INTO stock_movements
+            (product_id, movement_type, quantity, reference_type,
+             previous_stock, new_stock, notes, user_id, branch_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ", [
+        $productId,
+        $newQty > $prevQty ? 'in' : 'out',
+        abs($newQty - $prevQty),
+        $referenceType,
+        $prevQty,
+        $newQty,
+        'Stock set by CSV import',
+        $userId,
+        $branchId
+    ]);
+}
+
 function importSupplier(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
-    $existing = $db->fetchOne("SELECT id FROM suppliers WHERE company_name = ?", [trim($row['company_name'])]);
+    $existing = $db->fetchOne("SELECT * FROM suppliers WHERE company_name = ?", [trim($row['company_name'])]);
 
     if ($existing) {
         if ($mode === 'skip') {
             return ['success' => true, 'action' => 'skipped'];
         }
-        // Update
+        // Update — blank cells keep the existing value
+        $keep = fn($col) => importHasValue($row, $col) ? $row[$col] : $existing[$col];
         $db->query("
-            UPDATE suppliers 
+            UPDATE suppliers
             SET contact_name = ?, phone = ?, email = ?, address = ?, updated_at = NOW()
             WHERE id = ?
         ", [
-            $row['contact_name'] ?? null,
-            $row['phone'] ?? null,
-            $row['email'] ?? null,
-            $row['address'] ?? null,
+            $keep('contact_name'),
+            $keep('phone'),
+            $keep('email'),
+            $keep('address'),
             $existing['id']
         ]);
         return ['success' => true, 'action' => 'updated'];
     }
 
-    // Create - generate supplier_code
+    // Create - generate supplier_code (phone is guaranteed by validateRow())
     $code = 'SUP-' . strtoupper(substr(md5(trim($row['company_name'])), 0, 8));
     $db->query("
-        INSERT INTO suppliers 
+        INSERT INTO suppliers
             (supplier_code, company_name, contact_name, phone, email, address, is_active)
         VALUES (?, ?, ?, ?, ?, ?, 1)
     ", [
         $code,
         trim($row['company_name']),
-        $row['contact_name'] ?? null,
-        $row['phone'] ?? null,
-        $row['email'] ?? null,
-        $row['address'] ?? null
+        importHasValue($row, 'contact_name') ? $row['contact_name'] : null,
+        $row['phone'],
+        importHasValue($row, 'email') ? $row['email'] : null,
+        importHasValue($row, 'address') ? $row['address'] : null
     ]);
     return ['success' => true, 'action' => 'created'];
 }
 
 function importCustomer(Database $db, mixed $row, mixed $mode, mixed $userId)
 {
-    $existing = $db->fetchOne("SELECT id FROM customers WHERE phone = ?", [trim($row['phone'])]);
+    $existing = $db->fetchOne("SELECT * FROM customers WHERE phone = ?", [trim($row['phone'])]);
 
     if ($existing) {
         if ($mode === 'skip') {
             return ['success' => true, 'action' => 'skipped'];
         }
-        // Update
+        // Update — blank cells keep the existing value
         $db->query("
-            UPDATE customers 
+            UPDATE customers
             SET full_name = ?, email = ?, address = ?, credit_limit = ?, updated_at = NOW()
             WHERE id = ?
         ", [
             trim($row['full_name']),
-            $row['email'] ?? null,
-            $row['address'] ?? null,
-            isset($row['credit_limit']) ? floatval($row['credit_limit']) : 0,
+            importHasValue($row, 'email') ? $row['email'] : $existing['email'],
+            importHasValue($row, 'address') ? $row['address'] : $existing['address'],
+            importHasValue($row, 'credit_limit') ? floatval($row['credit_limit']) : $existing['credit_limit'],
             $existing['id']
         ]);
         return ['success' => true, 'action' => 'updated'];
@@ -580,16 +695,16 @@ function importCustomer(Database $db, mixed $row, mixed $mode, mixed $userId)
     // Create
     $code = 'CUST-' . strtoupper(substr(md5(trim($row['phone'])), 0, 8));
     $db->query("
-        INSERT INTO customers 
+        INSERT INTO customers
             (customer_code, full_name, phone, email, address, credit_limit, is_active)
         VALUES (?, ?, ?, ?, ?, ?, 1)
     ", [
         $code,
         trim($row['full_name']),
         trim($row['phone']),
-        $row['email'] ?? null,
-        $row['address'] ?? null,
-        isset($row['credit_limit']) ? floatval($row['credit_limit']) : 0
+        importHasValue($row, 'email') ? $row['email'] : null,
+        importHasValue($row, 'address') ? $row['address'] : null,
+        importHasValue($row, 'credit_limit') ? floatval($row['credit_limit']) : 0
     ]);
     return ['success' => true, 'action' => 'created'];
 }
