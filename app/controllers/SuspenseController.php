@@ -216,7 +216,9 @@ function resolveSuspense(Database $db)
     }
 
     // 2. Fetch customer
-    $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ? AND is_active = 1", [$customerId]);
+    // is_default = 0: the picker already hides the walk-in customer, but a
+    // direct POST could still name it — walk-ins can't hold a deposit.
+    $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ? AND is_active = 1 AND is_default = 0", [$customerId]);
     if (!$customer) {
         redirect(BASE_URL . '/suspense', 'error', 'Selected customer is invalid or inactive.');
         return;

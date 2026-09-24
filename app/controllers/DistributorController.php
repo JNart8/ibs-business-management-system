@@ -196,6 +196,14 @@ function completeDistributorDelivery(Database $db)
         return;
     }
 
+    // Walk-ins pay on the spot — no credit (same rule as POS)
+    if ($customer['is_default'] == 1 && in_array($customerPaymentMethod, ['credit', 'deposit'], true)) {
+        echo json_encode(['success' => false, 'message' => $customerPaymentMethod === 'credit'
+            ? 'Walk-in customers cannot buy on credit. Please select a registered customer or use cash/mobile payment.'
+            : 'Walk-in customers cannot pay from deposit.']);
+        return;
+    }
+
     // A customer holding a deposit spends it rather than running up
     // credit on top of it — same rule as POS (SaleController).
     if ($customerPaymentMethod === 'credit' && floatval($customer['current_balance']) > 0) {
@@ -207,15 +215,12 @@ function completeDistributorDelivery(Database $db)
     }
 
     // Pay from deposit — same rules as POS (SaleController): registered
-    // customers only, needs a positive balance, and draws at most what's
-    // there (the rest of the sale is left owing). No money moves into an
-    // account here; it already did when the deposit was made.
+    // customers only (walk-ins rejected above), needs a positive balance,
+    // and draws at most what's there (the rest of the sale is left owing,
+    // within the credit limit). No money moves into an account here; it
+    // already did when the deposit was made.
     $isDepositPayment = $customerPaymentMethod === 'deposit';
     if ($isDepositPayment) {
-        if ($customer['is_default'] == 1) {
-            echo json_encode(['success' => false, 'message' => 'Walk-in customers cannot pay from deposit.']);
-            return;
-        }
         if (floatval($customer['current_balance']) <= 0) {
             echo json_encode(['success' => false, 'message' => 'Customer has no deposit balance']);
             return;

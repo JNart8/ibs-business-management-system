@@ -157,6 +157,10 @@
                         'credit' => '📝 Credit',
                         'deposit' => '💰 From Deposit'
                     ];
+                    // Walk-ins have no deposit (updateSale() enforces this too)
+                    if (!empty($sale['is_walkin']) && $sale['payment_method'] !== 'deposit') {
+                        unset($methods['deposit']);
+                    }
                     foreach ($methods as $val => $label):
                     ?>
                         <option value="<?= $val ?>" <?= ($sale['payment_method'] === $val) ? 'selected' : '' ?>>

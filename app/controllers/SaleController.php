@@ -959,7 +959,8 @@ function updateSale(Database $db, mixed $id)
     $sale = $db->fetchOne("
         SELECT 
             s.*,
-            c.current_balance as customer_balance
+            c.current_balance as customer_balance,
+            c.is_default as is_walkin
         FROM sales s
         LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = ?
@@ -998,6 +999,11 @@ function updateSale(Database $db, mixed $id)
 
     if (!in_array($paymentMethod, ['cash', 'mobile', 'bank', 'credit', 'deposit'])) {
         $errors[] = 'Invalid payment method';
+    }
+
+    // Same rule as checkout: a walk-in has no deposit to draw from
+    if ($paymentMethod === 'deposit' && $paymentMethod !== $sale['payment_method'] && !empty($sale['is_walkin'])) {
+        $errors[] = 'Walk-in customers cannot pay from deposit';
     }
 
     if ($amountPaid < 0) {
