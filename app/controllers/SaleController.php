@@ -1130,16 +1130,24 @@ function updateSale(Database $db, mixed $id)
     $customerId = $sale['customer_id'];
     $paymentDifference = $amountPaid - $oldAmountPaid;
 
+    // New money on a credit sale belongs on the Pay screen, which asks
+    // how it was paid and posts it to the right account (or applies a
+    // deposit properly). Editing a credit sale can still LOWER the amount
+    // paid, to correct a payment recorded by mistake.
+    if ($paymentMethod === 'credit' && $oldPaymentMethod === 'credit' && $paymentDifference > 0.005) {
+        redirect(BASE_URL . '/sales/pay/' . $id, 'info',
+            'To record a new payment on a credit sale, use this screen: choose how the customer paid and it goes into the right account.');
+        return;
+    }
+
     // Any change to how the sale was paid — method, amount or account —
     // is settled by REAL money: work out how much cash/mobile/bank money
     // the sale should hold after the edit, and move the balance and the
     // accounts by that alone. Deposit-paid amounts never moved money or
     // the balance (the sale already took its full total off it), and a
     // method switch moves the money between accounts rather than leaving
-    // it in the old one. A credit sale that stays on credit keeps the
-    // generic adjustment further down.
-    $moneyEdit = ($paymentMethod !== $oldPaymentMethod || $paymentDifference != 0 || $accountChanged)
-        && !($paymentMethod === 'credit' && $oldPaymentMethod === 'credit');
+    // it in the old one.
+    $moneyEdit = $paymentMethod !== $oldPaymentMethod || $paymentDifference != 0 || $accountChanged;
     if ($moneyEdit) {
         $moneyNew = match ($paymentMethod) {
             'deposit' => 0.0,
@@ -1285,71 +1293,6 @@ function updateSale(Database $db, mixed $id)
                     recordAccountTransaction($db, $oldPaymentMethod, $take, 'withdrawal', 'sale', $id, $withdrawNote, $accountId);
                     $toReturn -= $take;
                 }
-            }
-        }
-        // Update customer balance if payment changed
-        elseif ($paymentDifference != 0) {
-            // Get customer's current balance
-            $customerBalanceBefore = floatval($sale['customer_balance']);
-
-            // Adjust customer balance
-            // If payment increased: customer balance increases (they paid more)
-            // If payment decreased: customer balance decreases (they owe more)
-            $db->query(
-                "UPDATE customers SET current_balance = current_balance + ? WHERE id = ?",
-                [$paymentDifference, $customerId]
-            );
-
-            $customerBalanceAfter = $customerBalanceBefore + $paymentDifference;
-
-            // Log customer transaction for the adjustment
-            $txnNotes = "Sale payment adjusted: $changeLog. Reason: $editReason";
-
-            $db->query("
-                INSERT INTO customer_transactions
-                    (customer_id, transaction_type, amount, balance_before,
-                     balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)
-                VALUES (?, 'adjustment', ?, ?, ?, 'sale', ?, ?, ?, ?, ?)
-            ", [
-                $customerId,
-                $paymentDifference,
-                $customerBalanceBefore,
-                $customerBalanceAfter,
-                $id,
-                $paymentMethod,
-                $txnNotes,
-                $userId,
-                $sale['branch_id'] ?? activeBranchId()
-            ]);
-
-            // Adjust financial account balance — resolve by the sale's own
-            // branch, not the editing admin's active branch, since cash
-            // accounts are branch-scoped (an admin editing a Kasoa sale
-            // while active at Main must still hit Kasoa's cash account).
-            if ($paymentDifference > 0) {
-                recordAccountTransaction(
-                    $db,
-                    $paymentMethod,
-                    $paymentDifference,
-                    'deposit',
-                    'sale',
-                    $id,
-                    "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
-                    null,
-                    $sale['branch_id'] ?? null
-                );
-            } else {
-                recordAccountTransaction(
-                    $db,
-                    $paymentMethod,
-                    abs($paymentDifference),
-                    'withdrawal',
-                    'sale',
-                    $id,
-                    "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
-                    null,
-                    $sale['branch_id'] ?? null
-                );
             }
         }
 

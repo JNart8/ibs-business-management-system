@@ -203,6 +203,7 @@
                     </span>
                     <input type="number"
                         name="amount_paid"
+                        id="edit-amount-paid"
                         step="0.01"
                         min="0"
                         max="<?= $sale['total_amount'] ?>"
@@ -213,8 +214,21 @@
                 </div>
                 <p class="text-xs text-gray-500 mt-1">
                     Current: <?= formatMoney($sale['amount_paid']) ?> |
-                    Maximum: <?= formatMoney($sale['total_amount']) ?>
+                    Maximum: <span id="edit-amount-max"><?= formatMoney($sale['total_amount']) ?></span>
                 </p>
+                <?php if ($sale['payment_method'] === 'credit' && $sale['payment_status'] !== 'paid'): ?>
+                    <p class="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1.5 mt-2 hidden" id="edit-credit-hint">
+                        To record a new payment on this credit sale, use
+                        <a href="<?= BASE_URL ?>/sales/pay/<?= $sale['id'] ?>" class="font-semibold underline">Record Payment</a>
+                        — it asks how the customer paid and puts the money in the right account.
+                        Here you can only lower the amount paid, to correct a mistake.
+                    </p>
+                <?php endif; ?>
+                <?php if ($sale['payment_method'] === 'credit' && $sale['payment_status'] === 'paid'): ?>
+                    <p class="text-xs text-gray-500 mt-2 hidden" id="edit-credit-hint">
+                        On credit, the amount paid can only be lowered here, to correct a mistake.
+                    </p>
+                <?php endif; ?>
             </div>
 
             <!-- Notes -->
@@ -386,6 +400,31 @@
                 if (firstMatch) firstMatch.selected = true;
             }
             none.classList.toggle('hidden', !!firstMatch);
+        }
+        method.addEventListener('change', sync);
+        sync();
+    })();
+
+    // A credit sale that stays on credit can only have its amount paid
+    // LOWERED here (updateSale() enforces it) — new payments go through
+    // Record Payment, which the hint links to.
+    (function () {
+        const method  = document.getElementById('edit-payment-method');
+        const amount  = document.getElementById('edit-amount-paid');
+        const maxText = document.getElementById('edit-amount-max');
+        const hint    = document.getElementById('edit-credit-hint');
+        const oldMethod = <?= json_encode($sale['payment_method']) ?>;
+        const paidNow   = <?= json_encode((float) $sale['amount_paid']) ?>;
+        const total     = <?= json_encode((float) $sale['total_amount']) ?>;
+        const fmt = (n) => <?= json_encode(CURRENCY_HOLDER) ?> + ' ' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        function sync() {
+            const creditOnly = oldMethod === 'credit' && method.value === 'credit';
+            const max = creditOnly ? paidNow : total;
+            amount.max = max;
+            maxText.textContent = fmt(max);
+            if (hint) hint.classList.toggle('hidden', !creditOnly);
+            if (parseFloat(amount.value) > max) amount.value = max.toFixed(2);
         }
         method.addEventListener('change', sync);
         sync();

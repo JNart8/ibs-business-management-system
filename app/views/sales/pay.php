@@ -2,6 +2,8 @@
 
 <div class="max-w-2xl mx-auto">
 
+    <?= flashMessage() ?>
+
     <!-- Header -->
     <div class="mb-6">
         <div class="flex items-center gap-2 text-sm text-gray-500 mb-2">
