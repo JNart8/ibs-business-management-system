@@ -450,17 +450,21 @@ function viewProduct(Database $db, mixed $id)
     // Line revenue net of the whole-cart discount (see saleItemNetSql()).
     $netLine = saleItemNetSql();
 
-    // Get sales summary
+    // Sales summary and recent sales are this branch's only — like the
+    // stock level and movements on the same page, so the figures agree.
+    // Voided sales don't count towards the summary (as in every report).
+    $branchId = activeBranchId();
     $salesSummary = $db->fetchOne("
-        SELECT 
+        SELECT
             COUNT(DISTINCT si.sale_id) as total_sales,
             COALESCE(SUM(si.quantity), 0) as units_sold,
             COALESCE(SUM({$netLine}), 0) as revenue_generated,
             MAX(s.sale_date) as last_sale
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
-        WHERE si.product_id = ?
-    ", [$id]) ?? [
+        WHERE si.product_id = ? AND s.branch_id = ?
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    ", [$id, $branchId]) ?? [
         'total_sales' => 0,
         'units_sold' => 0,
         'revenue_generated' => 0,
@@ -483,12 +487,13 @@ function viewProduct(Database $db, mixed $id)
         INNER JOIN sales s ON si.sale_id = s.id
         INNER JOIN customers c ON s.customer_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
-        WHERE si.product_id = ?
+        WHERE si.product_id = ? AND s.branch_id = ?
         ORDER BY s.sale_date DESC
         LIMIT 20
-    ", [$id]);
+    ", [$id, $branchId]);
 
-    // Get stock movement history (last 30)
+    // Get stock movement history (last 30) — this branch's only, matching
+    // the branch stock level shown on the same page
     $stockMovements = $db->fetchAll("
         SELECT 
             sm.movement_type,
@@ -504,10 +509,10 @@ function viewProduct(Database $db, mixed $id)
         FROM stock_movements sm
         LEFT JOIN users u ON sm.user_id = u.id
         LEFT JOIN suppliers s ON sm.supplier_id = s.id
-        WHERE sm.product_id = ?
+        WHERE sm.product_id = ? AND sm.branch_id = ?
         ORDER BY sm.created_at DESC
         LIMIT 30
-    ", [$id]);
+    ", [$id, $branchId]);
 
     // Prepare view data
     $pageTitle = $product['name'];

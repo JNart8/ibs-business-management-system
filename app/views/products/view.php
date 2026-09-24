@@ -39,7 +39,7 @@
                 <span>💰 Cost (Last): <?= formatMoney($product['cost_price']) ?></span>
                 <span>📈 Cost (WMA): <?= formatMoney($product['average_cost']) ?></span>
                 <?php if ($viewingBranchName ?? null): ?>
-                    <span>🏬 Stock at: <strong><?= e($viewingBranchName) ?></strong></span>
+                    <span>🏬 Figures for: <strong><?= e($viewingBranchName) ?></strong></span>
                 <?php endif; ?>
                 <span>💵 Sell: <?= formatMoney($product['selling_price']) ?></span>
                 <span>📊 Margin: <?= number_format($summary['margin_percent'], 1) ?>%</span>
@@ -106,7 +106,9 @@
     <div class="bg-white rounded-lg shadow overflow-hidden">
         <div class="px-5 py-4 border-b flex justify-between items-center">
             <h2 class="font-bold text-gray-700">Recent Sales</h2>
-            <span class="text-xs text-gray-400">Last 20 transactions</span>
+            <span class="text-xs text-gray-400">
+                Last 20 transactions<?php if ($viewingBranchName ?? null): ?> at <?= e($viewingBranchName) ?><?php endif; ?>
+            </span>
         </div>
         <?php if (empty($recentSales)): ?>
             <div class="p-10 text-center text-gray-400">
@@ -162,7 +164,9 @@
     <div class="bg-white rounded-lg shadow overflow-hidden">
         <div class="px-5 py-4 border-b flex justify-between items-center">
             <h2 class="font-bold text-gray-700">Stock Movement History</h2>
-            <span class="text-xs text-gray-400">Last 30 movements</span>
+            <span class="text-xs text-gray-400">
+                Last 30 movements<?php if ($viewingBranchName ?? null): ?> at <?= e($viewingBranchName) ?><?php endif; ?>
+            </span>
         </div>
         <?php if (empty($stockMovements)): ?>
             <div class="p-10 text-center text-gray-400">

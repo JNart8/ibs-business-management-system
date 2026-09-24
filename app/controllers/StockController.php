@@ -498,8 +498,10 @@ function listMovements(Database $db)
     $type   = $_GET['type']   ?? '';
     $search = trim($_GET['search'] ?? '');
 
-    $params = [];
-    $where  = "WHERE 1=1";
+    // Only this branch's movements — the same branch whose stock levels
+    // the stock pages show (switch branch to see another's history)
+    $params = [activeBranchId()];
+    $where  = "WHERE sm.branch_id = ?";
 
     if (!empty($type) && in_array($type, ['in', 'out', 'adjustment'])) {
         $where   .= " AND sm.movement_type = ?";
@@ -544,6 +546,7 @@ function listMovements(Database $db)
     ", array_merge($params, [$limit, $offset]));
 
     $pageTitle = 'Stock Movements';
+    $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
     include APP_PATH . '/views/stock/movements.php';
 }
 
@@ -593,16 +596,21 @@ function productMovements(Database $db, mixed $id)
         return;
     }
 
+    // This branch's movements and totals only (see listMovements()) — and
+    // this branch's stock in place of p.*'s company-wide total, so the
+    // figures on the page agree with each other
+    $branchId = activeBranchId();
+    $product['current_stock'] = getBranchStock($product['id'], $branchId);
     $movements = $db->fetchAll("
         SELECT
             sm.*,
             u.full_name AS user_name
         FROM stock_movements sm
         LEFT JOIN users u ON sm.user_id = u.id
-        WHERE sm.product_id = ?
+        WHERE sm.product_id = ? AND sm.branch_id = ?
         ORDER BY sm.created_at DESC
         LIMIT 50
-    ", [$id]);
+    ", [$id, $branchId]);
 
     // Stock summary for this product
     $summary = $db->fetchOne("
@@ -610,9 +618,10 @@ function productMovements(Database $db, mixed $id)
             COALESCE(SUM(CASE WHEN movement_type = 'in'  THEN quantity ELSE 0 END), 0) AS total_in,
             COALESCE(SUM(CASE WHEN movement_type = 'out' THEN quantity ELSE 0 END), 0) AS total_out
         FROM stock_movements
-        WHERE product_id = ?
-    ", [$id]);
+        WHERE product_id = ? AND branch_id = ?
+    ", [$id, $branchId]);
 
     $pageTitle = 'Stock History: ' . $product['name'];
+    $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
     include APP_PATH . '/views/stock/product-movements.php';
 }

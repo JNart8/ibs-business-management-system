@@ -16,6 +16,9 @@
                 <?php if (!empty($product['barcode'])): ?>
                     · Barcode: <?= e($product['barcode']) ?>
                 <?php endif; ?>
+                <?php if ($viewingBranchName ?? null): ?>
+                    · History at <strong><?= e($viewingBranchName) ?></strong>
+                <?php endif; ?>
             </div>
         </div>
         <div class="flex gap-2">
