@@ -179,7 +179,9 @@ if ($totalAlerts > 0):
                 <div>
                     <div class="text-xs text-gray-500 mb-1">Deposits Held</div>
                     <div class="text-xl font-bold text-green-600"><?= formatMoney($financialHealth['customer_deposits']) ?></div>
-                    <div class="text-xs text-gray-500 mt-1">Customer prepayments</div>
+                    <div class="text-xs text-gray-500 mt-1">
+                        Customer prepayments<?= !empty($financialHealth['deposits_shared']) ? ' · all branches (shared)' : '' ?>
+                    </div>
                 </div>
                 <div class="text-3xl">💰</div>
             </div>

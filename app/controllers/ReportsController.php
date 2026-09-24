@@ -1164,13 +1164,17 @@ function topSellingReport(Database $db)
     $params = array_merge($params, $scopeParams);
 
     // ── Top Products by Quantity ────────────────────────────
+    // Stock shown is at the same branches as the sales (not the company-
+    // wide products.current_stock), so the columns describe one place
+    [$bsScopeSql, $bsScopeParams] = branchScopeSql('bs');
     $topByQuantity = $db->fetchAll("
         SELECT
             p.id,
             p.name,
             p.sku,
             p.unit,
-            p.current_stock,
+            (SELECT COALESCE(SUM(bs.quantity), 0) FROM branch_stock bs
+             WHERE bs.product_id = p.id $bsScopeSql) AS current_stock,
             p.selling_price,
             p.average_cost,
             c.name AS category_name,
@@ -1190,10 +1194,10 @@ function topSellingReport(Database $db)
         WHERE DATE(s.sale_date) BETWEEN ? AND ?
           AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
         $whereCategory
-        GROUP BY si.product_id, p.id, p.name, p.sku, p.unit, p.current_stock, p.selling_price, p.average_cost, c.name
+        GROUP BY si.product_id, p.id, p.name, p.sku, p.unit, p.selling_price, p.average_cost, c.name
         ORDER BY total_quantity DESC
         LIMIT ?
-    ", array_merge($params, [(int)$limit]));
+    ", array_merge($bsScopeParams, $params, [(int)$limit]));
 
     // ── Top Products by Revenue ─────────────────────────────
     $topByRevenue = $db->fetchAll("

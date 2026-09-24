@@ -73,7 +73,9 @@ $balanceColor   = $balance < 0 ? 'red' : ($balance > 0 ? 'green' : 'gray');
         </div>
     </div>
     <div class="bg-white p-5 rounded-lg shadow">
-        <div class="text-gray-400 text-xs mb-1">Total Orders</div>
+        <div class="text-gray-400 text-xs mb-1">
+            Total Orders<?= ($salesScopeLabel ?? null) ? ' at ' . e($salesScopeLabel) : '' ?>
+        </div>
         <div class="text-xl font-bold text-gray-800"><?= safeInt($salesSummary['total_orders']) ?></div>
         <?php if (!empty($salesSummary['last_purchase'])): ?>
             <div class="text-xs text-gray-400 mt-1">
@@ -183,7 +185,11 @@ $balanceColor   = $balance < 0 ? 'red' : ($balance > 0 ? 'green' : 'gray');
     <!-- Recent Sales -->
     <div class="bg-white rounded-lg shadow overflow-hidden">
         <div class="px-5 py-4 border-b flex justify-between items-center">
-            <h2 class="font-bold text-gray-700">Recent Sales</h2>
+            <h2 class="font-bold text-gray-700">
+                Recent Sales<?php if ($salesScopeLabel ?? null): ?>
+                    <span class="text-xs font-normal text-gray-400">at <?= e($salesScopeLabel) ?></span>
+                <?php endif; ?>
+            </h2>
             <a href="<?= BASE_URL ?>/sales?customer=<?= $customer['id'] ?>"
                 class="text-xs text-blue-600 hover:underline">View all →</a>
         </div>

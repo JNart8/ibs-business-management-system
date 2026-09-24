@@ -120,6 +120,9 @@ function listSuppliers(Database $db)
     $totalCount = intval($total['cnt'] ?? 0);
     $totalPages = max(1, ceil($totalCount / $limit));
 
+    // Deliveries counted at the visible branches only — filtered inside the
+    // join so suppliers with no deliveries there still list
+    [$smScopeSql, $smScopeParams] = branchScopeSql('sm');
     $suppliers = $db->fetchAll("
         SELECT
             s.*,
@@ -131,11 +134,12 @@ function listSuppliers(Database $db)
         LEFT JOIN products p      ON p.supplier_id   = s.id
         LEFT JOIN stock_movements sm ON sm.supplier_id = s.id
                                     AND sm.movement_type = 'in'
+                                    $smScopeSql
         $where
         GROUP BY s.id
         ORDER BY s.company_name ASC
         LIMIT ? OFFSET ?
-    ", array_merge($params, [$limit, $offset]));
+    ", array_merge($smScopeParams, $params, [$limit, $offset]));
 
     // Summary stats
     $stats = $db->fetchOne("
@@ -243,7 +247,9 @@ function viewSupplier(Database $db, mixed $id)
         ORDER BY p.name ASC
     ", [activeBranchId(), $id]);
 
-    // Purchase history (from purchases table)
+    // Purchase history and summary — the visible branches' purchases only
+    // (suppliers are shared, their purchases belong to a branch)
+    [$purScopeSql, $purScopeParams] = branchScopeSql('p');
     $purchases = $db->fetchAll("
         SELECT 
             p.id,
@@ -259,19 +265,19 @@ function viewSupplier(Database $db, mixed $id)
             u.full_name AS created_by
         FROM purchases p
         LEFT JOIN users u ON p.user_id = u.id
-        WHERE p.supplier_id = ?
+        WHERE p.supplier_id = ? $purScopeSql
         ORDER BY p.purchase_date DESC
         LIMIT 30
-    ", [$id]);
+    ", array_merge([$id], $purScopeParams));
 
     // Summary stats
     $summary = $db->fetchOne("
         SELECT
-            COUNT(id) AS total_purchases_count,
-            MAX(purchase_date) AS last_purchase_date
-        FROM purchases
-        WHERE supplier_id = ?
-    ", [$id]);
+            COUNT(p.id) AS total_purchases_count,
+            MAX(p.purchase_date) AS last_purchase_date
+        FROM purchases p
+        WHERE p.supplier_id = ? $purScopeSql
+    ", array_merge([$id], $purScopeParams));
 
     // Supplier transaction history (payments, deposits, adjustments)
     $transactions = $db->fetchAll("

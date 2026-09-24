@@ -80,20 +80,34 @@ $financialHealth = [
 ];
 
 try {
-    // Outstanding Receivables (customers owe us)
+    // Outstanding Receivables (customers owe us) — unpaid invoices at the
+    // branches this viewer can see, exactly as the Receivables report
+    // computes it, so the card and the report it links to always agree.
+    // (Customer balances are company-wide and can't be split by branch.)
+    [$recScopeSql, $recScopeParams] = branchScopeSql('s');
     $receivables = $db->fetchOne("
-        SELECT COALESCE(SUM(ABS(current_balance)), 0) as total
-        FROM customers
-        WHERE current_balance < 0 AND is_active = 1 AND is_default = 0
-    ");
+        SELECT COALESCE(SUM(s.total_amount - COALESCE(s.amount_paid, 0)), 0) as total
+        FROM sales s
+        JOIN customers c ON c.id = s.customer_id
+        WHERE c.is_active = 1 AND c.is_default = 0
+          AND s.payment_status IN ('unpaid', 'partial')
+          AND (s.total_amount - COALESCE(s.amount_paid, 0)) > 0.01
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+          $recScopeSql
+    ", $recScopeParams);
     $financialHealth['receivables'] = floatval($receivables['total'] ?? 0);
 
-    // Outstanding Payables (we owe suppliers)
+    // Outstanding Payables (we owe suppliers) — unpaid purchases at the
+    // visible branches, as the Payables report computes it
+    [$payScopeSql, $payScopeParams] = branchScopeSql('p');
     $payables = $db->fetchOne("
-        SELECT COALESCE(SUM(ABS(current_balance)), 0) as total
-        FROM suppliers
-        WHERE current_balance < 0 AND is_active = 1
-    ");
+        SELECT COALESCE(SUM(p.amount_due), 0) as total
+        FROM purchases p
+        JOIN suppliers sp ON sp.id = p.supplier_id
+        WHERE sp.is_active = 1
+          AND p.payment_status IN ('unpaid', 'partial')
+          $payScopeSql
+    ", $payScopeParams);
     $financialHealth['payables'] = floatval($payables['total'] ?? 0);
 
     // Total Stock Value (at average cost) — summed across the branches
@@ -111,7 +125,10 @@ try {
     ", $dashScopeParams);
     $financialHealth['stock_value'] = floatval($stockValue['total'] ?? 0);
 
-    // Customer Deposits Held
+    // Customer Deposits Held — deliberately company-wide: a deposit is the
+    // customer's to spend at any branch, so there's no per-branch figure.
+    // The card says so when the rest of the dashboard is branch-limited.
+    $financialHealth['deposits_shared'] = hasMultiBranch() && !isCompanyWide();
     $deposits = $db->fetchOne("
         SELECT COALESCE(SUM(current_balance), 0) as total
         FROM customers
@@ -165,36 +182,36 @@ try {
     ", $alertScopeParams);
     $alerts['low_stock'] = intval($result['count'] ?? 0);
 
-    // Overdue receivables (90+ days)
+    // Overdue receivables (90+ days) — customers with an invoice unpaid
+    // for 90+ days at a branch this viewer can see (same basis as the
+    // Receivables card above)
+    [$odScopeSql, $odScopeParams] = branchScopeSql('s');
     $result = $db->fetchOne("
-        SELECT COUNT(*) as count
-        FROM customers c
-        WHERE c.current_balance < 0 
-        AND c.is_active = 1 
-        AND c.is_default = 0
-        AND DATEDIFF(CURDATE(), (
-            SELECT MIN(DATE(sale_date)) 
-            FROM sales 
-            WHERE customer_id = c.id 
-            AND payment_status IN ('unpaid', 'partial')
-            AND (notes IS NULL OR notes NOT LIKE '%[VOIDED]%')
-        )) > 90
-    ");
+        SELECT COUNT(DISTINCT s.customer_id) as count
+        FROM sales s
+        JOIN customers c ON c.id = s.customer_id
+        WHERE c.is_active = 1 AND c.is_default = 0
+          AND s.payment_status IN ('unpaid', 'partial')
+          AND (s.total_amount - COALESCE(s.amount_paid, 0)) > 0.01
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+          AND DATEDIFF(CURDATE(), DATE(s.sale_date)) > 90
+          $odScopeSql
+    ", $odScopeParams);
     $alerts['overdue_receivables'] = intval($result['count'] ?? 0);
 
-    // Overdue payables (30+ days)
+    // Overdue payables (30+ days) — suppliers with a purchase unpaid for
+    // 30+ days at a visible branch
+    [$opScopeSql, $opScopeParams] = branchScopeSql('p');
     $result = $db->fetchOne("
-        SELECT COUNT(*) as count
-        FROM suppliers s
-        WHERE s.current_balance < 0 
-        AND s.is_active = 1
-        AND DATEDIFF(CURDATE(), (
-            SELECT MIN(DATE(purchase_date)) 
-            FROM purchases 
-            WHERE supplier_id = s.id 
-            AND payment_status IN ('unpaid', 'partial')
-        )) > 30
-    ");
+        SELECT COUNT(DISTINCT p.supplier_id) as count
+        FROM purchases p
+        JOIN suppliers sp ON sp.id = p.supplier_id
+        WHERE sp.is_active = 1
+          AND p.payment_status IN ('unpaid', 'partial')
+          AND p.amount_due > 0.01
+          AND DATEDIFF(CURDATE(), DATE(p.purchase_date)) > 30
+          $opScopeSql
+    ", $opScopeParams);
     $alerts['overdue_payables'] = intval($result['count'] ?? 0);
 } catch (Exception $e) {
     error_log('Dashboard alerts error: ' . $e->getMessage());

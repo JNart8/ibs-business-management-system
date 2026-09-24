@@ -214,25 +214,29 @@ function exportProducts(Database $db, mixed $output)
         'barcode'
     ]);
 
-    // Fetch all active products with category and supplier names
+    // Fetch all active products with category and supplier names.
+    // current_stock is the active branch's quantity, not the company-wide
+    // total: this file round-trips with the products import, which sets
+    // stock at the importer's active branch.
     $products = $db->fetchAll("
-        SELECT 
+        SELECT
             p.sku,
             p.name,
             c.name as category_name,
             s.company_name as supplier_name,
             p.selling_price,
             p.cost_price,
-            p.current_stock,
+            COALESCE(bs.quantity, 0) AS current_stock,
             p.reorder_level,
             p.unit,
             p.barcode
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN suppliers s ON p.supplier_id = s.id
+        LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         WHERE p.is_active = 1
         ORDER BY p.sku
-    ");
+    ", [activeBranchId()]);
 
     // Write data rows
     foreach ($products as $prod) {

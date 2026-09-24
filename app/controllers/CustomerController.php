@@ -157,7 +157,10 @@ function listCustomers(Database $db)
     $totalCount = intval($total['cnt'] ?? 0);
     $totalPages = max(1, ceil($totalCount / $limit));
 
-    // Fetch customers
+    // Fetch customers — orders / last purchase counted at the visible
+    // branches only (filtered in the join, so every customer still lists;
+    // balances stay company-wide — they're shared across branches)
+    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
     $customers = $db->fetchAll("
         SELECT
             c.id,
@@ -174,12 +177,12 @@ function listCustomers(Database $db)
             COUNT(s.id)                     AS total_orders,
             MAX(s.sale_date)                AS last_purchase
         FROM customers c
-        LEFT JOIN sales s ON s.customer_id = c.id
+        LEFT JOIN sales s ON s.customer_id = c.id $salesScopeSql
         $where
         GROUP BY c.id
         ORDER BY c.full_name ASC
         LIMIT ? OFFSET ?
-    ", array_merge($params, [$limit, $offset]));
+    ", array_merge($salesScopeParams, $params, [$limit, $offset]));
 
     // Summary stats
     $stats = $db->fetchOne("
@@ -292,7 +295,10 @@ function viewCustomer(Database $db, mixed $id)
         LIMIT 30
     ", [$id]);
 
-    // Recent sales
+    // Recent sales and sales summary — the visible branches' sales only.
+    // The balance and transaction ledger above stay company-wide: the
+    // balance is shared across branches, so its ledger must be whole.
+    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
     $recentSales = $db->fetchAll("
         SELECT
             s.id,
@@ -304,23 +310,25 @@ function viewCustomer(Database $db, mixed $id)
             s.notes,
             s.sale_date
         FROM sales s
-        WHERE s.customer_id = ?
+        WHERE s.customer_id = ? $salesScopeSql
         ORDER BY s.sale_date DESC
         LIMIT 10
-    ", [$id]);
+    ", array_merge([$id], $salesScopeParams));
 
-    // Sales summary
+    // Voided sales don't count towards the summary (as in every report)
     $salesSummary = $db->fetchOne("
         SELECT
-            COUNT(*)                            AS total_orders,
-            COALESCE(SUM(total_amount),  0)     AS total_spent,
-            COALESCE(SUM(amount_paid),   0)     AS total_paid,
-            COALESCE(SUM(amount_due),    0)     AS total_outstanding,
-            COALESCE(AVG(total_amount),  0)     AS avg_order_value,
-            MAX(sale_date)                      AS last_purchase
-        FROM sales
-        WHERE customer_id = ?
-    ", [$id]);
+            COUNT(*)                              AS total_orders,
+            COALESCE(SUM(s.total_amount),  0)     AS total_spent,
+            COALESCE(SUM(s.amount_paid),   0)     AS total_paid,
+            COALESCE(SUM(s.amount_due),    0)     AS total_outstanding,
+            COALESCE(AVG(s.total_amount),  0)     AS avg_order_value,
+            MAX(s.sale_date)                      AS last_purchase
+        FROM sales s
+        WHERE s.customer_id = ? $salesScopeSql
+          AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
+    ", array_merge([$id], $salesScopeParams));
+    $salesScopeLabel = hasMultiBranch() && !isCompanyWide() ? activeBranchName() : null;
 
     $pageTitle = 'Customer: ' . $customer['full_name'];
     include APP_PATH . '/views/customers/view.php';
