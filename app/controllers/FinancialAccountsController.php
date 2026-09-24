@@ -75,15 +75,24 @@ function listAccounts(Database $db)
             : userBranches(currentUser()['id']);
     }
 
+    // Only transfers touching an account this user can see (either side) —
+    // account_transfers has no branch of its own. accountBranchScopeSql()
+    // returns " AND (...)"; strip the " AND " to OR the two sides together.
+    [$fromScopeSql, $fromScopeParams] = accountBranchScopeSql('f');
+    [$toScopeSql, $toScopeParams]     = accountBranchScopeSql('to_acc');
+    $transferScopeSql = $fromScopeSql
+        ? ' AND (' . substr($fromScopeSql, 5) . ' OR ' . substr($toScopeSql, 5) . ')'
+        : '';
     $recentTransfers = $db->fetchAll("
         SELECT t.*, f.name as from_account_name, to_acc.name as to_account_name, u.full_name as user_name
         FROM account_transfers t
         JOIN accounts f ON t.from_account_id = f.id
         JOIN accounts to_acc ON t.to_account_id = to_acc.id
         LEFT JOIN users u ON t.user_id = u.id
+        WHERE 1=1 $transferScopeSql
         ORDER BY t.created_at DESC
         LIMIT 10
-    ");
+    ", array_merge($fromScopeParams, $toScopeParams));
 
     $pageTitle = 'Financial Accounts';
     include APP_PATH . '/views/financial_accounts/index.php';

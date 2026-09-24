@@ -865,15 +865,34 @@ function generateStatement(Database $db, mixed $id)
     include APP_PATH . '/views/customers/statement.php';
 }
 /**
+ * A deposit transaction the current user may change, or redirect away.
+ * The deposit's branch is where its money landed (depositBranchId()), so
+ * staff can only edit or delete their own branch's deposits — the same
+ * "not found" as a missing one, so another branch's can't be probed.
+ */
+function fetchEditableDeposit(Database $db, mixed $txId): array
+{
+    $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
+    if (!$tx || !canAccessBranch($tx['branch_id'])) {
+        redirect(BASE_URL . '/customers', 'error', 'Deposit transaction not found');
+    }
+    return $tx;
+}
+
+/**
  * Revert and delete a customer deposit
  */
 function deleteCustomerDeposit(Database $db, mixed $txId)
 {
-    $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
-    if (!$tx) {
-        redirect(BASE_URL . '/customers', 'error', 'Deposit transaction not found');
+    // POST + CSRF only: this used to be a plain GET link, so any page
+    // could trigger it for a logged-in user via a crafted link or image
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST'
+        || !isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        redirect(BASE_URL . '/customers', 'error', 'Invalid request');
         return;
     }
+
+    $tx = fetchEditableDeposit($db, $txId);
 
     $customerId = $tx['customer_id'];
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$customerId]);
@@ -940,11 +959,7 @@ function deleteCustomerDeposit(Database $db, mixed $txId)
  */
 function showEditCustomerDepositForm(Database $db, mixed $txId)
 {
-    $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
-    if (!$tx) {
-        redirect(BASE_URL . '/customers', 'error', 'Deposit transaction not found');
-        return;
-    }
+    $tx = fetchEditableDeposit($db, $txId);
 
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$tx['customer_id']]);
     if (!$customer) {
@@ -998,11 +1013,7 @@ function updateCustomerDeposit(Database $db, mixed $txId)
         return;
     }
 
-    $tx = $db->fetchOne("SELECT * FROM customer_transactions WHERE id = ? AND transaction_type = 'deposit'", [$txId]);
-    if (!$tx) {
-        redirect(BASE_URL . '/customers', 'error', 'Deposit transaction not found');
-        return;
-    }
+    $tx = fetchEditableDeposit($db, $txId);
 
     $customerId = $tx['customer_id'];
     $customer = $db->fetchOne("SELECT * FROM customers WHERE id = ?", [$customerId]);

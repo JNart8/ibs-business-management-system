@@ -153,12 +153,14 @@ $balanceColor   = $balance < 0 ? 'red' : ($balance > 0 ? 'green' : 'gray');
                             <?php if (!empty($t['notes'])): ?>
                                 <div class="text-xs text-gray-400 italic"><?= e($t['notes']) ?></div>
                             <?php endif; ?>
-                            <?php if ($t['transaction_type'] === 'deposit'): ?>
-                                <div class="mt-1 text-xs space-x-2">
+                            <?php if ($t['transaction_type'] === 'deposit' && canAccessBranch($t['branch_id'])): ?>
+                                <div class="mt-1 text-xs space-x-2 flex items-center">
                                     <a href="<?= BASE_URL ?>/customers/edit-deposit/<?= $t['id'] ?>" class="text-blue-600 hover:underline">✏️ Edit</a>
-                                    <a href="<?= BASE_URL ?>/customers/delete-deposit/<?= $t['id'] ?>" 
-                                       onclick="return confirm('Are you sure you want to delete this deposit? This will revert the customer balance and financial account balance.')" 
-                                       class="text-red-600 hover:underline">🗑️ Delete</a>
+                                    <form method="POST" action="<?= BASE_URL ?>/customers/delete-deposit/<?= $t['id'] ?>" class="inline"
+                                        onsubmit="return confirm('Are you sure you want to delete this deposit? This will revert the customer balance and financial account balance.')">
+                                        <?= csrfField() ?>
+                                        <button type="submit" class="text-red-600 hover:underline">🗑️ Delete</button>
+                                    </form>
                                 </div>
                             <?php endif; ?>
                         </div>

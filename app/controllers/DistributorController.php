@@ -66,7 +66,10 @@ function listDistributorDeliveries(Database $db)
     $limit = ITEMS_PER_PAGE;
     $offset = ($page - 1) * $limit;
 
-    $total = $db->fetchOne("SELECT COUNT(*) as cnt FROM sales WHERE purchase_id IS NOT NULL")['cnt'];
+    // Branch-scoped users see their own branches' deliveries only
+    [$scopeSql, $scopeParams] = branchScopeSql('s');
+
+    $total = $db->fetchOne("SELECT COUNT(*) as cnt FROM sales s WHERE s.purchase_id IS NOT NULL $scopeSql", $scopeParams)['cnt'];
     $totalPages = ceil($total / $limit);
 
     $deliveries = $db->fetchAll("
@@ -88,10 +91,10 @@ function listDistributorDeliveries(Database $db)
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN suppliers sup ON p.supplier_id = sup.id
         LEFT JOIN users u ON s.user_id = u.id
-        WHERE s.purchase_id IS NOT NULL
+        WHERE s.purchase_id IS NOT NULL $scopeSql
         ORDER BY s.id DESC
         LIMIT ? OFFSET ?
-    ", [$limit, $offset]);
+    ", array_merge($scopeParams, [$limit, $offset]));
 
     $pageTitle = 'Distributor Direct Deliveries';
     include APP_PATH . '/views/distributor/index.php';
@@ -617,7 +620,9 @@ function viewDistributorDelivery(Database $db, mixed $saleId)
         WHERE s.id = ? AND s.purchase_id IS NOT NULL
     ", [$saleId]);
 
-    if (!$sale) {
+    // Same "not found" for another branch's delivery as for a missing one
+    // — opening it by URL mustn't get round the branch-scoped list
+    if (!$sale || !canAccessBranch($sale['branch_id'])) {
         redirect(BASE_URL . '/distributor', 'error', 'Delivery transaction not found');
     }
 
