@@ -1162,6 +1162,14 @@ branch, since no such single account is guaranteed to exist.
 type is stamped going forward — `payment`/`sale`/`refund`/`adjustment` rows don't need it, since
 the report's redemption side reads `sales.branch_id` directly (already reliable).
 
+**Corrected (2026-09-24):** stamping deposits with `activeBranchId()` was wrong — that's the
+*recording user's* branch, not where the money went. A company-wide admin (home branch Main)
+recording a deposit into Kasoa's cash account tagged it Main, so the report showed Main as the
+issuing branch regardless of where customers deposited. Deposits (direct and resolved-suspense)
+now use `depositBranchId($account)` — the receiving account's `branch_id`, falling back to
+`activeBranchId()` only for company-wide (NULL-branch) bank/MoMo accounts.
+`2026_09_24_deposit_branch_from_account.sql` re-tags existing deposit rows the same way.
+
 **Report definition, deliberately not FIFO/lot-traced (per §5.5):**
 - **Issuance per branch** — `SUM(customer_transactions.amount)` where `transaction_type='deposit'`,
   grouped by the new `branch_id`, for the selected period.
@@ -1207,8 +1215,9 @@ this closes the ambiguity in the code/docs, not a behavior change for any real t
 - [ ] At a single-branch install (or with multi-branch off), confirm the "Customer Credit
       Settlement" nav link and the `/reports/customer-credit` route are both hidden/403 even
       with `advanced_reports` on the plan.
-- [ ] Enable multi-branch, create a 2nd branch. Deposit money for a customer while your active
-      branch is Branch A; confirm the new deposit's `customer_transactions.branch_id = A`.
+- [ ] Enable multi-branch, create a 2nd branch. Deposit money for a customer into Branch A's
+      cash account; confirm the new deposit's `customer_transactions.branch_id = A` — including
+      when recorded by a company-wide admin whose active branch is a different one.
 - [ ] Switch active branch to Branch B; complete a sale for that same customer using payment
       method "deposit" (spending the balance); confirm `sales.branch_id = B`.
 - [ ] View the report as a company-wide user for a date range covering both actions; confirm

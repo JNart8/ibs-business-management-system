@@ -535,7 +535,7 @@ function processDeposit(Database $db, mixed $id)
                 VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $id,
-                activeBranchId(),
+                depositBranchId($account),
                 $amount,
                 $balanceBefore,
                 $balanceAfterDeposit,
@@ -552,7 +552,7 @@ function processDeposit(Database $db, mixed $id)
                 VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?, ?)
             ", [
                 $id,
-                activeBranchId(),
+                depositBranchId($account),
                 $amount,
                 $balanceBefore,
                 $balanceAfterDeposit,

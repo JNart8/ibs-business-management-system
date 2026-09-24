@@ -820,6 +820,20 @@ function activeBranchId()
 }
 
 /**
+ * The branch a customer deposit should be recorded against — the branch
+ * that owns the account the money physically landed in (e.g. a branch's
+ * cash account), not whoever keyed it in: a company-wide admin whose home
+ * branch is Main recording a deposit into Kasoa's cash drawer is a Kasoa
+ * deposit. Falls back to activeBranchId() only for company-wide accounts
+ * (branch_id NULL — shared bank/MoMo), where the account says nothing
+ * about location. Drives the customer credit settlement report.
+ */
+function depositBranchId(?array $account)
+{
+    return $account['branch_id'] ?? activeBranchId();
+}
+
+/**
  * Display name for the current user's active branch.
  */
 function activeBranchName()

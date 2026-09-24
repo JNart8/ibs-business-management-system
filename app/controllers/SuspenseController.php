@@ -281,7 +281,7 @@ function resolveSuspense(Database $db)
             $financialMethod,
             "Resolved suspense deposit (Ref: " . ($suspenseTx['reference_no'] ?: 'N/A') . ")",
             $userId,
-            activeBranchId()
+            depositBranchId($financialAccount ?: null)
         ]);
 
         $db->query("UPDATE customers SET current_balance = current_balance + ? WHERE id = ?", [$amount, $customerId]);
@@ -561,7 +561,7 @@ function updateSuspense(Database $db, mixed $txId)
                 $paymentMethod,
                 "Resolved suspense deposit (Ref: " . ($newReferenceNo ?: 'N/A') . ")",
                 $userId,
-                activeBranchId()
+                depositBranchId($newFinancialAccount)
             ]);
 
             // Re-debit Suspense (withdrawing)
