@@ -100,7 +100,8 @@ function updatePassword(Database $db)
 /**
  * Change the current user's active branch (the one POS/sales record
  * against, no picker shown elsewhere) — only to a branch they're
- * actually assigned to, so this can't be used to spoof another
+ * actually assigned to (any active branch for company-wide users; see
+ * switchableBranches()), so this can't be used to spoof another
  * branch's activity.
  */
 function switchBranch(Database $db)
@@ -114,9 +115,9 @@ function switchBranch(Database $db)
     }
 
     $branchId = intval($_POST['branch_id'] ?? 0);
-    $assigned = array_column(userBranches($_SESSION['user_id']), 'id');
+    $allowed  = array_map('intval', array_column(switchableBranches(), 'id'));
 
-    if (!in_array($branchId, $assigned, true)) {
+    if (!in_array($branchId, $allowed, true)) {
         redirect(BASE_URL . '/', 'error', 'You are not assigned to that branch.');
     }
 

@@ -820,6 +820,23 @@ function activeBranchId()
 }
 
 /**
+ * Branches the current user may make their active branch via the
+ * header switcher. Company-wide users can work "as" any active branch
+ * (their user_branches row is just a home default); branch-scoped users
+ * only their assigned ones. Switching changes users.branch_id (what
+ * activeBranchId() reads) — never user_branches, so it grants no extra
+ * access: assignment-based checks like receiving a transfer still go
+ * by the real assignment.
+ */
+function switchableBranches()
+{
+    if (isCompanyWide()) {
+        return Database::getInstance()->fetchAll("SELECT id, name FROM branches WHERE is_active = 1 ORDER BY name ASC");
+    }
+    return userBranches($_SESSION['user_id']);
+}
+
+/**
  * The branch a customer deposit should be recorded against — the branch
  * that owns the account the money physically landed in (e.g. a branch's
  * cash account), not whoever keyed it in: a company-wide admin whose home

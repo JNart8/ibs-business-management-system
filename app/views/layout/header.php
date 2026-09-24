@@ -389,7 +389,7 @@
                 <!-- Right Side: User + Mobile Button -->
                 <div class="flex items-center space-x-3">
                     <?php if (isLoggedIn()): ?>
-                        <?php if (hasMultiBranch()): $myBranches = userBranches($_SESSION['user_id']); ?>
+                        <?php if (hasMultiBranch()): $myBranches = switchableBranches(); ?>
                             <?php if (count($myBranches) > 1): ?>
                             <form action="<?= BASE_URL ?>/account/switch-branch" method="POST"
                                 class="hidden md:block" onchange="this.submit()">
@@ -738,7 +738,7 @@
                     <?php endif; ?>
 
                     <?php if (isLoggedIn()): ?>
-                        <?php if (hasMultiBranch()): $myBranchesMobile = userBranches($_SESSION['user_id']); ?>
+                        <?php if (hasMultiBranch()): $myBranchesMobile = switchableBranches(); ?>
                             <?php if (count($myBranchesMobile) > 1): ?>
                             <div class="pt-2 border-t border-blue-500">
                                 <p class="text-xs text-blue-200 px-1 mb-1">Active branch</p>
