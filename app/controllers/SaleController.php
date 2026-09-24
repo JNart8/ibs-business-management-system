@@ -912,10 +912,15 @@ function showEditForm(Database $db, mixed $id)
 
     // Get sale items
     $items = $db->fetchAll("
-        SELECT * FROM sale_items 
-        WHERE sale_id = ? 
+        SELECT * FROM sale_items
+        WHERE sale_id = ?
         ORDER BY id ASC
     ", [$id]);
+
+    // Accounts the payment can be recorded in, and the one currently
+    // holding most of the sale's money (preselected when its type fits)
+    $editAccounts     = saleEditAccounts($db, $sale);
+    $currentAccountId = array_key_first(saleAccountNet($db, $id));
 
     // Get edit history
     $editHistory = $db->fetchAll("
@@ -937,6 +942,51 @@ function showEditForm(Database $db, mixed $id)
 /**
  * Update sale
  */
+/**
+ * Accounts a sale's cash/mobile/bank payment can be moved into on edit:
+ * active, not suspense, owned by the sale's own branch or company-wide,
+ * and within the editing user's account scope — plus whichever accounts
+ * already hold this sale's money, so an older sale paid into an account
+ * outside those rules can be edited without its money being moved.
+ */
+function saleEditAccounts(Database $db, array $sale): array
+{
+    [$scopeSql, $scopeParams] = accountBranchScopeSql();
+    $holders = array_map('intval', array_keys(saleAccountNet($db, $sale['id'])));
+    $holderSql = $holders ? ' OR id IN (' . implode(',', $holders) . ')' : '';
+    return $db->fetchAll("
+        SELECT id, name, type, branch_id, is_default FROM accounts
+        WHERE is_active = 1 AND is_suspense = 0
+          AND (((branch_id = ? OR branch_id IS NULL) $scopeSql) $holderSql)
+        ORDER BY (branch_id IS NULL), is_default DESC, name ASC
+    ", array_merge([$sale['branch_id'] ?? activeBranchId()], $scopeParams));
+}
+
+/**
+ * The account an edited sale's cash/mobile/bank payment should sit in:
+ * the one chosen on the form (checked against saleEditAccounts() and the
+ * method's type), or — none chosen — the sale branch's account of that
+ * type (its default first). Returns [account|null, error|null]. Unlike
+ * recordAccountTransaction()'s auto-resolve, this never falls back to a
+ * cash account for a mobile/bank payment.
+ */
+function resolveSaleEditAccount(Database $db, array $sale, string $method, int $accountId): array
+{
+    $type  = ['cash' => 'cash', 'mobile' => 'mobile_money', 'bank' => 'bank'][$method];
+    $label = ['cash' => 'cash', 'mobile' => 'mobile money', 'bank' => 'bank'][$method];
+    $candidates = array_values(array_filter(saleEditAccounts($db, $sale), fn($a) => $a['type'] === $type));
+
+    if ($accountId > 0) {
+        foreach ($candidates as $a) {
+            if ((int) $a['id'] === $accountId) return [$a, null];
+        }
+        return [null, "The selected account isn't a $label account available for this sale's branch."];
+    }
+    return $candidates
+        ? [$candidates[0], null]
+        : [null, "No active $label account is available for this sale's branch. Add one, or pick another payment method."];
+}
+
 function updateSale(Database $db, mixed $id)
 {
     // CSRF check
@@ -1046,10 +1096,29 @@ function updateSale(Database $db, mixed $id)
     $oldSaleDateStr = date('Y-m-d', strtotime($sale['sale_date']));
     $newSaleDateStr = $newSaleDate ?: $oldSaleDateStr;
 
+    // Where the sale's real money (cash/mobile/bank) sits now, and — for a
+    // cash/mobile/bank payment — which account it should sit in after the
+    // edit: the one picked on the form, or this branch's account of that
+    // type. Never a silent fallback to the cash account.
+    $moneyByAccount = saleAccountNet($db, $id);
+    $moneyOld       = array_sum($moneyByAccount);
+    $targetAccount  = null;
+    if (in_array($paymentMethod, ['cash', 'mobile', 'bank'], true) && $amountPaid > 0) {
+        [$targetAccount, $accountError] = resolveSaleEditAccount($db, $sale, $paymentMethod, intval($_POST['account_id'] ?? 0));
+        if ($accountError) {
+            redirect(BASE_URL . '/sales/edit/' . $id, 'error', $accountError);
+            return;
+        }
+    }
+    // Moving the money to a different account is a change on its own
+    $accountChanged = $targetAccount
+        && ($moneyOld - ($moneyByAccount[$targetAccount['id']] ?? 0)) > 0.005;
+
     // Check if anything actually changed
     if (
         $amountPaid == $oldAmountPaid &&
         $paymentMethod == $oldPaymentMethod &&
+        !$accountChanged &&
         $notes == $sale['notes'] &&
         $newSaleDateStr == $oldSaleDateStr
     ) {
@@ -1061,16 +1130,17 @@ function updateSale(Database $db, mixed $id)
     $customerId = $sale['customer_id'];
     $paymentDifference = $amountPaid - $oldAmountPaid;
 
-    // Moving a sale onto or off "From Deposit" can't use the generic
-    // "difference = new money" adjustment below: deposit-paid amounts
-    // never moved money and never changed the balance (the sale already
-    // took its full total off it). Instead, work out how much REAL money
-    // (cash/mobile/bank) the sale should hold after the edit, and move the
-    // balance and accounts by the change in that alone.
-    $depositEdit = ($paymentMethod === 'deposit' || $oldPaymentMethod === 'deposit')
-        && ($paymentMethod !== $oldPaymentMethod || $paymentDifference != 0);
-    if ($depositEdit) {
-        $moneyOld = array_sum(saleAccountNet($db, $id));
+    // Any change to how the sale was paid — method, amount or account —
+    // is settled by REAL money: work out how much cash/mobile/bank money
+    // the sale should hold after the edit, and move the balance and the
+    // accounts by that alone. Deposit-paid amounts never moved money or
+    // the balance (the sale already took its full total off it), and a
+    // method switch moves the money between accounts rather than leaving
+    // it in the old one. A credit sale that stays on credit keeps the
+    // generic adjustment further down.
+    $moneyEdit = ($paymentMethod !== $oldPaymentMethod || $paymentDifference != 0 || $accountChanged)
+        && !($paymentMethod === 'credit' && $oldPaymentMethod === 'credit');
+    if ($moneyEdit) {
         $moneyNew = match ($paymentMethod) {
             'deposit' => 0.0,
             'credit'  => min($amountPaid, $moneyOld), // keep money already taken, never invent any
@@ -1100,6 +1170,9 @@ function updateSale(Database $db, mixed $id)
         }
         if ($paymentMethod != $oldPaymentMethod) {
             $changes[] = "Payment method: $oldPaymentMethod → $paymentMethod";
+        }
+        if ($targetAccount && ($accountChanged || $paymentMethod != $oldPaymentMethod)) {
+            $changes[] = "Paid into: " . $targetAccount['name'];
         }
         if ($notes != $sale['notes']) {
             $changes[] = "Notes updated";
@@ -1153,7 +1226,7 @@ function updateSale(Database $db, mixed $id)
             ]);
         }
 
-        if ($depositEdit) {
+        if ($moneyEdit) {
             // Balance moves only by the change in real money received
             $balanceDelta          = $moneyNew - $moneyOld;
             $customerBalanceBefore = floatval($sale['customer_balance']);
@@ -1180,24 +1253,38 @@ function updateSale(Database $db, mixed $id)
                 $sale['branch_id'] ?? activeBranchId()
             ]);
 
-            if ($moneyNew < $moneyOld - 0.005) {
-                // Money no longer counted as received (now paid from
-                // deposit, or reduced) — take it back out of the account(s)
-                // it actually went into, not wherever the new method points.
+            $withdrawNote = "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")";
+            $depositNote  = "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")";
+
+            if ($targetAccount) {
+                // Paid by cash/mobile/bank: ALL of the sale's money ends up
+                // in the target account. Money sitting in any other account
+                // (the old method's, or a different one of the same type)
+                // comes back out of it; the target is topped up or reduced
+                // by the difference, so an unchanged amount in the same
+                // account moves nothing.
+                foreach ($moneyByAccount as $accountId => $net) {
+                    if ($accountId != $targetAccount['id']) {
+                        recordAccountTransaction($db, $oldPaymentMethod, $net, 'withdrawal', 'sale', $id, $withdrawNote, $accountId);
+                    }
+                }
+                $targetDelta = $moneyNew - ($moneyByAccount[$targetAccount['id']] ?? 0);
+                if ($targetDelta > 0.005) {
+                    recordAccountTransaction($db, $paymentMethod, $targetDelta, 'deposit', 'sale', $id, $depositNote, $targetAccount['id']);
+                } elseif ($targetDelta < -0.005) {
+                    recordAccountTransaction($db, $paymentMethod, -$targetDelta, 'withdrawal', 'sale', $id, $withdrawNote, $targetAccount['id']);
+                }
+            } elseif ($moneyNew < $moneyOld - 0.005) {
+                // Now deposit, credit or unpaid: money no longer counted as
+                // received comes back out of the account(s) it actually went
+                // into, largest first — whatever remains stays put.
                 $toReturn = $moneyOld - $moneyNew;
-                foreach (saleAccountNet($db, $id) as $accountId => $net) {
+                foreach ($moneyByAccount as $accountId => $net) {
                     if ($toReturn <= 0.005) break;
                     $take = min($toReturn, $net);
-                    recordAccountTransaction($db, $oldPaymentMethod, $take, 'withdrawal', 'sale', $id,
-                        "Adjustment withdrawal for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
-                        $accountId);
+                    recordAccountTransaction($db, $oldPaymentMethod, $take, 'withdrawal', 'sale', $id, $withdrawNote, $accountId);
                     $toReturn -= $take;
                 }
-            } elseif ($moneyNew > $moneyOld + 0.005) {
-                // Now paid in real money (e.g. deposit → cash)
-                recordAccountTransaction($db, $paymentMethod, $moneyNew - $moneyOld, 'deposit', 'sale', $id,
-                    "Adjustment deposit for Sale #" . $sale['sale_number'] . " (Reason: " . $editReason . ")",
-                    null, $sale['branch_id'] ?? null);
             }
         }
         // Update customer balance if payment changed

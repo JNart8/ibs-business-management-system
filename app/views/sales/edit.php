@@ -147,7 +147,7 @@
                 <label class="block text-sm font-semibold text-gray-700 mb-2">
                     Payment Method *
                 </label>
-                <select name="payment_method" required
+                <select name="payment_method" id="edit-payment-method" required
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                     <?php
                     $methods = [
@@ -168,6 +168,28 @@
                         </option>
                     <?php endforeach; ?>
                 </select>
+            </div>
+
+            <!-- Account (cash / mobile / bank only) -->
+            <div class="mb-4" id="edit-account-wrap">
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    Paid Into Account *
+                </label>
+                <select name="account_id" id="edit-account"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <?php foreach ($editAccounts as $acc): ?>
+                        <option value="<?= $acc['id'] ?>" data-type="<?= e($acc['type']) ?>"
+                            <?= (int) $acc['id'] === (int) $currentAccountId ? 'selected' : '' ?>>
+                            <?= e($acc['name']) ?><?= $acc['branch_id'] === null ? ' (company-wide)' : '' ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="text-xs text-gray-500 mt-1" id="edit-account-hint">
+                    Changing the method or account moves the money out of the account it's in now and into this one.
+                </p>
+                <p class="text-xs text-red-600 mt-1 hidden" id="edit-account-none">
+                    No account of this type is available for this sale's branch.
+                </p>
             </div>
 
             <!-- Amount Paid -->
@@ -337,5 +359,37 @@
     </div>
 
 </div>
+
+<script>
+    // Show only accounts matching the chosen method; hide the picker for
+    // credit / deposit, which don't pay into an account.
+    (function () {
+        const method = document.getElementById('edit-payment-method');
+        const wrap   = document.getElementById('edit-account-wrap');
+        const select = document.getElementById('edit-account');
+        const none   = document.getElementById('edit-account-none');
+        const typeFor = { cash: 'cash', mobile: 'mobile_money', bank: 'bank' };
+
+        function sync() {
+            const type = typeFor[method.value];
+            wrap.style.display = type ? '' : 'none';
+            select.disabled = !type; // not submitted for credit/deposit
+            if (!type) return;
+            let firstMatch = null;
+            for (const opt of select.options) {
+                const match = opt.dataset.type === type;
+                opt.hidden = !match;
+                opt.disabled = !match;
+                if (match && !firstMatch) firstMatch = opt;
+            }
+            if (!select.selectedOptions[0] || select.selectedOptions[0].disabled) {
+                if (firstMatch) firstMatch.selected = true;
+            }
+            none.classList.toggle('hidden', !!firstMatch);
+        }
+        method.addEventListener('change', sync);
+        sync();
+    })();
+</script>
 
 <?php include APP_PATH . '/views/layout/footer.php'; ?>
