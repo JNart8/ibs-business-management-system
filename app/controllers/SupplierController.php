@@ -122,7 +122,7 @@ function listSuppliers(Database $db)
 
     // Deliveries counted at the visible branches only — filtered inside the
     // join so suppliers with no deliveries there still list
-    [$smScopeSql, $smScopeParams] = branchScopeSql('sm');
+    [$smScopeSql, $smScopeParams] = branchViewSql('sm');
     $suppliers = $db->fetchAll("
         SELECT
             s.*,
@@ -249,7 +249,7 @@ function viewSupplier(Database $db, mixed $id)
 
     // Purchase history and summary — the visible branches' purchases only
     // (suppliers are shared, their purchases belong to a branch)
-    [$purScopeSql, $purScopeParams] = branchScopeSql('p');
+    [$purScopeSql, $purScopeParams] = branchViewSql('p');
     $purchases = $db->fetchAll("
         SELECT 
             p.id,

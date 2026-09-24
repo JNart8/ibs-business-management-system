@@ -15,8 +15,8 @@ $db = Database::getInstance();
 // profit, trends, top products, recent activity). Empty for company-wide
 // users, so their view is unchanged. Customer/supplier balances are left
 // company-wide on purpose: those records are shared across branches.
-[$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
-[$purchScopeSql, $purchScopeParams] = branchScopeSql('p');
+[$salesScopeSql, $salesScopeParams] = branchViewSql('s');
+[$purchScopeSql, $purchScopeParams] = branchViewSql('p');
 
 // Line COGS at the cost snapshotted at time of sale (see saleItemCostSql()).
 $costLine = saleItemCostSql();
@@ -84,7 +84,7 @@ try {
     // branches this viewer can see, exactly as the Receivables report
     // computes it, so the card and the report it links to always agree.
     // (Customer balances are company-wide and can't be split by branch.)
-    [$recScopeSql, $recScopeParams] = branchScopeSql('s');
+    [$recScopeSql, $recScopeParams] = branchViewSql('s');
     $receivables = $db->fetchOne("
         SELECT COALESCE(SUM(s.total_amount - COALESCE(s.amount_paid, 0)), 0) as total
         FROM sales s
@@ -99,7 +99,7 @@ try {
 
     // Outstanding Payables (we owe suppliers) — unpaid purchases at the
     // visible branches, as the Payables report computes it
-    [$payScopeSql, $payScopeParams] = branchScopeSql('p');
+    [$payScopeSql, $payScopeParams] = branchViewSql('p');
     $payables = $db->fetchOne("
         SELECT COALESCE(SUM(p.amount_due), 0) as total
         FROM purchases p
@@ -115,7 +115,7 @@ try {
     // their own for a branch-scoped one), via branch_stock rather than
     // products.current_stock directly, so this respects branch visibility
     // the same way every other report in the app does.
-    [$dashScopeSql, $dashScopeParams] = branchScopeSql('bs');
+    [$dashScopeSql, $dashScopeParams] = branchViewSql('bs');
     $stockValue = $db->fetchOne("
         SELECT COALESCE(SUM(bs.quantity * p.average_cost), 0) as total
         FROM branch_stock bs
@@ -128,7 +128,7 @@ try {
     // Customer Deposits Held — deliberately company-wide: a deposit is the
     // customer's to spend at any branch, so there's no per-branch figure.
     // The card says so when the rest of the dashboard is branch-limited.
-    $financialHealth['deposits_shared'] = hasMultiBranch() && !isCompanyWide();
+    $financialHealth['deposits_shared'] = viewBranchIds() !== null;
     $deposits = $db->fetchOne("
         SELECT COALESCE(SUM(current_balance), 0) as total
         FROM customers
@@ -151,7 +151,7 @@ $alerts = [
 ];
 
 try {
-    [$alertScopeSql, $alertScopeParams] = branchScopeSql('bs');
+    [$alertScopeSql, $alertScopeParams] = branchViewSql('bs');
 
     // Out of stock items — a product counts as out of stock if the total
     // across this viewer's visible branches is zero.
@@ -185,7 +185,7 @@ try {
     // Overdue receivables (90+ days) — customers with an invoice unpaid
     // for 90+ days at a branch this viewer can see (same basis as the
     // Receivables card above)
-    [$odScopeSql, $odScopeParams] = branchScopeSql('s');
+    [$odScopeSql, $odScopeParams] = branchViewSql('s');
     $result = $db->fetchOne("
         SELECT COUNT(DISTINCT s.customer_id) as count
         FROM sales s
@@ -201,7 +201,7 @@ try {
 
     // Overdue payables (30+ days) — suppliers with a purchase unpaid for
     // 30+ days at a visible branch
-    [$opScopeSql, $opScopeParams] = branchScopeSql('p');
+    [$opScopeSql, $opScopeParams] = branchViewSql('p');
     $result = $db->fetchOne("
         SELECT COUNT(DISTINCT p.supplier_id) as count
         FROM purchases p
@@ -240,7 +240,7 @@ if (can('audit.view')) {
         $sinceSql = $lastSeen ? "AND created_at >= ?" : "";
         $sinceParams = $lastSeen ? [$lastSeen] : [];
 
-        [$scopeSql, $scopeParams] = branchScopeSql('');
+        [$scopeSql, $scopeParams] = branchViewSql('');
         $rows = $db->fetchAll("
             SELECT * FROM audit_log
             WHERE action IN ('role.permissions_changed', 'role.delete', 'sale.void', 'sale.edit', 'product.price_change')
@@ -417,7 +417,7 @@ $recentPurchases = $db->fetchAll("
 // LOW STOCK PRODUCTS (TOP 10 CRITICAL)
 // ══════════════════════════════════════════════════════════════════════════════
 
-[$topLowScopeSql, $topLowScopeParams] = branchScopeSql('bs');
+[$topLowScopeSql, $topLowScopeParams] = branchViewSql('bs');
 $lowStockProducts = $db->fetchAll("
     SELECT 
         p.id, 

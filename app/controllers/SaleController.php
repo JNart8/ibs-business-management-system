@@ -750,7 +750,7 @@ function listSales(Database $db)
 
     // Branch visibility — company-wide users (or single-branch installs)
     // see everything; branch-scoped users only see their own branch(es).
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
     $where .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -812,7 +812,7 @@ function listSales(Database $db)
 
     // Daily summary (always today, not affected by filters, but still
     // branch-scoped — a branch admin shouldn't see company-wide totals)
-    [$dailyScopeSql, $dailyScopeParams] = branchScopeSql('');
+    [$dailyScopeSql, $dailyScopeParams] = branchViewSql('');
     $todayStats = $db->fetchOne("
         SELECT
             COALESCE(SUM(total_amount), 0) AS total_sales,

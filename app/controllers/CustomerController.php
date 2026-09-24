@@ -160,7 +160,7 @@ function listCustomers(Database $db)
     // Fetch customers — orders / last purchase counted at the visible
     // branches only (filtered in the join, so every customer still lists;
     // balances stay company-wide — they're shared across branches)
-    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+    [$salesScopeSql, $salesScopeParams] = branchViewSql('s');
     $customers = $db->fetchAll("
         SELECT
             c.id,
@@ -298,7 +298,7 @@ function viewCustomer(Database $db, mixed $id)
     // Recent sales and sales summary — the visible branches' sales only.
     // The balance and transaction ledger above stay company-wide: the
     // balance is shared across branches, so its ledger must be whole.
-    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+    [$salesScopeSql, $salesScopeParams] = branchViewSql('s');
     $recentSales = $db->fetchAll("
         SELECT
             s.id,
@@ -328,7 +328,7 @@ function viewCustomer(Database $db, mixed $id)
         WHERE s.customer_id = ? $salesScopeSql
           AND (s.notes IS NULL OR s.notes NOT LIKE '%[VOIDED]%')
     ", array_merge([$id], $salesScopeParams));
-    $salesScopeLabel = hasMultiBranch() && !isCompanyWide() ? activeBranchName() : null;
+    $salesScopeLabel = viewBranchIds() !== null ? viewingBranchLabel() : null;
 
     $pageTitle = 'Customer: ' . $customer['full_name'];
     include APP_PATH . '/views/customers/view.php';

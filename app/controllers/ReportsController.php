@@ -107,7 +107,7 @@ function salesReport(Database $db)
 
     // Branch visibility — applies to every sub-query below, since they
     // all reuse this same $where/$params.
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
     $where .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -313,7 +313,7 @@ function stockValuationReport(Database $db)
     // slice of — the sum across visible branches genuinely is the answer
     // to "how much stock do I have", so no partial-view warning is needed
     // here, just a plain "showing: X" label for clarity.
-    [$scopeSql, $scopeParams] = branchScopeSql('bs');
+    [$scopeSql, $scopeParams] = branchViewSql('bs');
 
     // ── Get products with stock value ──────────────────────
     $products = $db->fetchAll("
@@ -456,7 +456,7 @@ function receivablesReport(Database $db)
     // real company-wide balance (customers are shared across branches by
     // design, see ARCHITECTURE.md §5.3). The view flags this explicitly
     // rather than letting a partial number pass as the whole picture.
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
     $unpaidInvoices = $db->fetchAll("
         SELECT 
             c.id AS customer_id,
@@ -681,7 +681,7 @@ function receivablesReport(Database $db)
     }
 
     $pageTitle = 'Outstanding Receivables';
-    $isPartialView = hasMultiBranch() && !isCompanyWide();
+    $isPartialView = viewBranchIds() !== null; // one branch (or a branch user's own) — not the whole company
     include APP_PATH . '/views/reports/receivables.php';
 }
 
@@ -704,7 +704,7 @@ function payablesReport(Database $db)
     // number bigger than "what my branch owes." Summing scoped invoices
     // instead makes this a genuine partial view rather than a mislabeled
     // company-wide one.
-    [$scopeSql, $scopeParams] = branchScopeSql('');
+    [$scopeSql, $scopeParams] = branchViewSql('');
     $suppliers = $db->fetchAll("
         SELECT
             s.id,
@@ -768,7 +768,7 @@ function payablesReport(Database $db)
     ];
 
     // ── Get unpaid purchases for detail ────────────────────
-    [$detailScopeSql, $detailScopeParams] = branchScopeSql('p');
+    [$detailScopeSql, $detailScopeParams] = branchViewSql('p');
     $unpaidPurchases = $db->fetchAll("
         SELECT
             p.id,
@@ -789,7 +789,7 @@ function payablesReport(Database $db)
     ", $detailScopeParams);
 
     $pageTitle = 'Outstanding Payables';
-    $isPartialView = hasMultiBranch() && !isCompanyWide();
+    $isPartialView = viewBranchIds() !== null; // one branch (or a branch user's own) — not the whole company
     include APP_PATH . '/views/reports/payables.php';
 }
 
@@ -1016,7 +1016,7 @@ function profitLossReport(Database $db)
     $costLine = saleItemCostSql();
 
     // ── Revenue (Sales) ─────────────────────────────────────
-    [$scopeSql, $scopeParams] = branchScopeSql('');
+    [$scopeSql, $scopeParams] = branchViewSql('');
     $revenue = $db->fetchOne("
         SELECT
             COALESCE(SUM(subtotal), 0) AS total_sales,
@@ -1029,7 +1029,7 @@ function profitLossReport(Database $db)
     ", array_merge([$dateFrom, $dateTo], $scopeParams));
 
     // ── Cost of Goods Sold (COGS) ──────────────────────────
-    [$scopeSqlS, $scopeParamsS] = branchScopeSql('s');
+    [$scopeSqlS, $scopeParamsS] = branchViewSql('s');
     $cogs = $db->fetchOne("
         SELECT
             COALESCE(SUM({$costLine}), 0) AS total_cogs
@@ -1159,14 +1159,14 @@ function topSellingReport(Database $db)
 
     // Branch visibility — appended to $whereCategory since all 3 queries
     // below reuse it, and $params is the shared base each one extends.
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
     $whereCategory .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
     // ── Top Products by Quantity ────────────────────────────
     // Stock shown is at the same branches as the sales (not the company-
     // wide products.current_stock), so the columns describe one place
-    [$bsScopeSql, $bsScopeParams] = branchScopeSql('bs');
+    [$bsScopeSql, $bsScopeParams] = branchViewSql('bs');
     $topByQuantity = $db->fetchAll("
         SELECT
             p.id,
@@ -1304,7 +1304,7 @@ function lowStockReport(Database $db)
     }
 
     // Branch visibility — matches every other report.
-    [$scopeSql, $scopeParams] = branchScopeSql('bs');
+    [$scopeSql, $scopeParams] = branchViewSql('bs');
 
     // ── Low Stock Products ──────────────────────────────────
     $products = $db->fetchAll("
@@ -1340,7 +1340,7 @@ function lowStockReport(Database $db)
     // Sales velocity is scoped to the same visible branches as the stock
     // figure above — comparing branch-specific stock against company-wide
     // sales velocity would give a misleading projection.
-    [$velocityScopeSql, $velocityScopeParams] = branchScopeSql('sa');
+    [$velocityScopeSql, $velocityScopeParams] = branchViewSql('sa');
     foreach ($products as &$product) {
         $avgDaily = $db->fetchOne("
             SELECT AVG(daily_qty) as avg_daily
@@ -1404,8 +1404,8 @@ function deadStockReport(Database $db)
     // Branch 1 — that's exactly the case this report exists to catch, so
     // both need to agree on the same branch scope, not mix a
     // branch-specific stock figure with company-wide sales history).
-    [$stockScopeSql, $stockScopeParams] = branchScopeSql('bs');
-    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+    [$stockScopeSql, $stockScopeParams] = branchViewSql('bs');
+    [$salesScopeSql, $salesScopeParams] = branchViewSql('s');
 
     // Build WHERE clause (category only — stock-derived conditions move to HAVING)
     $whereCategory = '';
@@ -1534,8 +1534,8 @@ function profitMarginReport(Database $db)
     // — cost accounting doesn't differ per branch, same reasoning as the
     // weighted-average-cost calculation in Purchase/Sale controllers. Only
     // the stock quantity and 30-day sales velocity below are branch-scoped.
-    [$stockScopeSql, $stockScopeParams] = branchScopeSql('bs');
-    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+    [$stockScopeSql, $stockScopeParams] = branchViewSql('bs');
+    [$salesScopeSql, $salesScopeParams] = branchViewSql('s');
 
     // ── Products with Margin Analysis ───────────────────────
     $products = $db->fetchAll("

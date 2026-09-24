@@ -84,7 +84,7 @@ function listTransactions(Database $db)
     // Branch visibility — the list, its count and the summary cards all
     // reuse $whereClause/$params, so one scope covers all three. Customers
     // stay shared across branches; it's the transaction's branch that's scoped.
-    [$scopeSql, $scopeParams] = branchScopeSql('ct');
+    [$scopeSql, $scopeParams] = branchViewSql('ct');
     $whereClause .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 

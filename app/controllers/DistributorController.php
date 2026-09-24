@@ -67,7 +67,7 @@ function listDistributorDeliveries(Database $db)
     $offset = ($page - 1) * $limit;
 
     // Branch-scoped users see their own branches' deliveries only
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
 
     $total = $db->fetchOne("SELECT COUNT(*) as cnt FROM sales s WHERE s.purchase_id IS NOT NULL $scopeSql", $scopeParams)['cnt'];
     $totalPages = ceil($total / $limit);

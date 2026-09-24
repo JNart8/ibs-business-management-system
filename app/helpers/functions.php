@@ -1215,6 +1215,72 @@ function branchScopeSql(mixed $alias = '', mixed $column = 'branch_id')
 }
 
 /**
+ * Is a company-wide user looking at every branch combined? Picked with
+ * "All branches" in the header branch switcher; otherwise their lists
+ * and reports follow the branch selected there (see viewBranchIds()).
+ * Session-only, so each login starts on a single branch.
+ */
+function isViewingAllBranches(): bool
+{
+    return hasMultiBranch() && isCompanyWide() && !empty($_SESSION['view_all_branches']);
+}
+
+/**
+ * Which branches LISTS, REPORTS and DASHBOARDS show — as opposed to
+ * visibleBranchIds(), which is what a user may ACCESS. For a company-wide
+ * user they differ: they can open any branch's record, but their lists
+ * follow the branch selected in the header (or every branch with "All
+ * branches"), so the figures on screen always describe one clear place.
+ * Branch-scoped users see their own branches either way. null = no filter.
+ */
+function viewBranchIds()
+{
+    if (!hasMultiBranch()) {
+        return null;
+    }
+    if (isCompanyWide()) {
+        return isViewingAllBranches() ? null : [(int) activeBranchId()];
+    }
+    return visibleBranchIds();
+}
+
+/**
+ * branchScopeSql()'s counterpart for lists/reports/dashboards: filters to
+ * viewBranchIds(). Keep branchScopeSql() for guarding access to a single
+ * record by id (view/edit/pay/void) — a company-wide admin looking at
+ * Kasoa must still be able to open a Main sale linked from elsewhere.
+ */
+function branchViewSql(mixed $alias = '', mixed $column = 'branch_id')
+{
+    $branchIds = viewBranchIds();
+    if ($branchIds === null) {
+        return ['', []];
+    }
+    if (empty($branchIds)) {
+        return [' AND 1=0', []];
+    }
+    $prefix = $alias ? "$alias." : '';
+    $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
+    return [" AND {$prefix}{$column} IN ($placeholders)", $branchIds];
+}
+
+/**
+ * What lists and reports are currently showing, for page labels: a branch
+ * name, "All branches", or null when multi-branch isn't on.
+ */
+function viewingBranchLabel(): ?string
+{
+    if (!hasMultiBranch()) {
+        return null;
+    }
+    $ids = viewBranchIds();
+    if ($ids === null) {
+        return 'All branches';
+    }
+    return count($ids) === 1 ? branchName($ids[0]) : 'Your branches';
+}
+
+/**
  * Same idea as branchScopeSql(), but for accounts specifically: a
  * branch-scoped user must still see every company-wide account
  * (branch_id IS NULL — a shared bank account, the suspense account)

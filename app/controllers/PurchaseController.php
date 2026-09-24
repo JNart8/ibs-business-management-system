@@ -537,7 +537,7 @@ function listPurchases(Database $db)
     $where  = "WHERE 1=1";
 
     // Branch visibility — same rule as sales history.
-    [$scopeSql, $scopeParams] = branchScopeSql('p');
+    [$scopeSql, $scopeParams] = branchViewSql('p');
     $where .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -581,7 +581,7 @@ function listPurchases(Database $db)
     ", array_merge($params, [$limit, $offset]));
 
     // Today's stats — also branch-scoped, same reasoning as sales' daily summary.
-    [$dailyScopeSql, $dailyScopeParams] = branchScopeSql('');
+    [$dailyScopeSql, $dailyScopeParams] = branchViewSql('');
     $todayStats = $db->fetchOne("
         SELECT
             COUNT(*)                        AS total_purchases,

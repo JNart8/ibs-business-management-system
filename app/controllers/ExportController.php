@@ -374,7 +374,7 @@ function exportSales(Database $db, mixed $output)
     $where  = "WHERE 1=1";
 
     // Branch visibility — same rule as the on-screen sales list this mirrors.
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
     $where .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -587,7 +587,7 @@ function exportTransactions(Database $db, mixed $output)
     }
 
     // Branch visibility — same rule as the on-screen transactions list.
-    [$scopeSql, $scopeParams] = branchScopeSql('ct');
+    [$scopeSql, $scopeParams] = branchViewSql('ct');
     $whereClause .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -782,7 +782,7 @@ function exportAuditLog(Database $db, mixed $output)
     $where  = "WHERE 1=1";
     $params = [];
 
-    [$scopeSql, $scopeParams] = branchScopeSql('');
+    [$scopeSql, $scopeParams] = branchViewSql('');
     $where .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -877,7 +877,7 @@ function exportStockValuation(Database $db, mixed $output)
 
     // Branch visibility — matches the on-screen report exactly (all
     // branches for company-wide, just their own for branch-scoped).
-    [$scopeSql, $scopeParams] = branchScopeSql('bs');
+    [$scopeSql, $scopeParams] = branchViewSql('bs');
 
     // Fetch data
     $products = $db->fetchAll("
@@ -1002,7 +1002,7 @@ function exportReceivables(Database $db, mixed $output)
     // in ReportsController.php: customers are shared company-wide, so a
     // branch-scoped user's export must show the same partial figure the
     // screen shows them, not the full company-wide balance.
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
 
     $where = "WHERE c.is_active = 1 AND c.is_default = 0";
     $params = [];
@@ -1162,7 +1162,7 @@ function exportPayables(Database $db, mixed $output)
     // amount_owed is summed from branch-scoped unpaid purchases, not read
     // from suppliers.current_balance — matches payablesReport() and the
     // same reasoning as exportReceivables() above.
-    [$scopeSql, $scopeParams] = branchScopeSql('');
+    [$scopeSql, $scopeParams] = branchViewSql('');
 
     // Fetch suppliers
     $suppliers = $db->fetchAll("
@@ -1401,7 +1401,7 @@ function exportSalesReport(Database $db, mixed $output)
     $dateTo = $dates['to'];
 
     // Fetch one row per sold item. Sale fields intentionally repeat for Excel analysis.
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
     $salesItems = $db->fetchAll("
         SELECT
             s.id AS sale_id,
@@ -1557,7 +1557,7 @@ function exportProfitLoss(Database $db, mixed $output)
     $dateTo = $dates['to'];
 
     // ── Revenue ─────────────────────────────────────────────
-    [$scopeSql, $scopeParams] = branchScopeSql('');
+    [$scopeSql, $scopeParams] = branchViewSql('');
     $revenue = $db->fetchOne("
         SELECT
             COALESCE(SUM(subtotal), 0) AS total_sales,
@@ -1571,7 +1571,7 @@ function exportProfitLoss(Database $db, mixed $output)
 
     // ── COGS ────────────────────────────────────────────────
     $costLine = saleItemCostSql(); // cost snapshotted at time of sale (see saleItemCostSql())
-    [$scopeSqlS, $scopeParamsS] = branchScopeSql('s');
+    [$scopeSqlS, $scopeParamsS] = branchViewSql('s');
     $cogs = $db->fetchOne("
         SELECT
             COALESCE(SUM({$costLine}), 0) AS total_cogs
@@ -1696,7 +1696,7 @@ function exportTopSelling(Database $db, mixed $output)
     }
 
     // Branch visibility — same rule as the on-screen report.
-    [$scopeSql, $scopeParams] = branchScopeSql('s');
+    [$scopeSql, $scopeParams] = branchViewSql('s');
     $whereCategory .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -1817,7 +1817,7 @@ function exportLowStock(Database $db, mixed $output)
     }
 
     // Branch visibility — matches the on-screen report exactly.
-    [$scopeSql, $scopeParams] = branchScopeSql('bs');
+    [$scopeSql, $scopeParams] = branchViewSql('bs');
 
     // Fetch products
     $products = $db->fetchAll("
@@ -1907,8 +1907,8 @@ function exportDeadStock(Database $db, mixed $output)
     // Branch visibility — matches deadStockReport() exactly: both the
     // stock figure and the sales-history subqueries must agree on the
     // same branch scope.
-    [$stockScopeSql, $stockScopeParams] = branchScopeSql('bs');
-    [$salesScopeSql, $salesScopeParams] = branchScopeSql('s');
+    [$stockScopeSql, $stockScopeParams] = branchViewSql('bs');
+    [$salesScopeSql, $salesScopeParams] = branchViewSql('s');
 
     $whereCategory = '';
     $categoryParams = [];
@@ -2053,7 +2053,7 @@ function exportProfitMargin(Database $db, mixed $output)
     // Margin stays company-wide (correct — cost accounting doesn't differ
     // per branch); only stock quantity is branch-scoped, matching the
     // on-screen report exactly.
-    [$scopeSql, $scopeParams] = branchScopeSql('bs');
+    [$scopeSql, $scopeParams] = branchViewSql('bs');
 
     // Fetch products
     $products = $db->fetchAll("

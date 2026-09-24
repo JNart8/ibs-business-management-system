@@ -70,7 +70,14 @@ function listTransfers(Database $db)
     // two branch columns and either one being visible is enough.
     $where  = "WHERE 1=1";
     $params = [];
-    if (!isCompanyWide()) {
+    // A company-wide user's list follows the header branch like every
+    // other list (see viewBranchIds()), unless they picked "All branches"
+    $viewIds = viewBranchIds();
+    if (isCompanyWide() && $viewIds !== null) {
+        $placeholders = implode(',', array_fill(0, count($viewIds), '?'));
+        $where .= " AND (t.from_branch_id IN ($placeholders) OR t.to_branch_id IN ($placeholders))";
+        $params = array_merge($params, $viewIds, $viewIds);
+    } elseif (!isCompanyWide()) {
         $visibleIds = array_column(userBranches($_SESSION['user_id']), 'id');
         if (empty($visibleIds)) {
             $where .= " AND 1=0";

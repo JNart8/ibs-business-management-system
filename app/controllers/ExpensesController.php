@@ -56,11 +56,11 @@ function listExpenses(Database $db)
     $params = [$dateFrom, $dateTo];
 
     // Branch visibility — use the 'e.' alias since accounts also has a
-    // branch_id column and this query joins both tables. branchScopeSql()
+    // branch_id column and this query joins both tables. branchViewSql()
     // returns a " AND ..." fragment meant to be appended directly to a
     // WHERE clause; strip that leading " AND " here since this function
     // builds its WHERE from an array joined with " AND " instead.
-    [$scopeSql, $scopeParams] = branchScopeSql('e');
+    [$scopeSql, $scopeParams] = branchViewSql('e');
     if ($scopeSql !== '') {
         $where[] = substr($scopeSql, strlen(' AND '));
         $params = array_merge($params, $scopeParams);

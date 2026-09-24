@@ -57,7 +57,7 @@ function listAuditLog(Database $db)
     $where  = "WHERE 1=1";
     $params = [];
 
-    [$scopeSql, $scopeParams] = branchScopeSql('');
+    [$scopeSql, $scopeParams] = branchViewSql('');
     $where .= $scopeSql;
     $params = array_merge($params, $scopeParams);
 
@@ -98,7 +98,7 @@ function listAuditLog(Database $db)
     // to keep the common case's dropdown options relevant; an archived-only
     // action/entity value can still be filtered by editing the URL, it just
     // won't appear as a dropdown option.
-    [$distinctScopeSql, $distinctScopeParams] = branchScopeSql('');
+    [$distinctScopeSql, $distinctScopeParams] = branchViewSql('');
     $distinctActions = $db->fetchAll("SELECT DISTINCT action FROM audit_log WHERE 1=1 $distinctScopeSql ORDER BY action ASC", $distinctScopeParams);
     $distinctEntities = $db->fetchAll("SELECT DISTINCT entity_type FROM audit_log WHERE entity_type IS NOT NULL $distinctScopeSql ORDER BY entity_type ASC", $distinctScopeParams);
     $users = $db->fetchAll("SELECT id, full_name FROM users ORDER BY full_name ASC");

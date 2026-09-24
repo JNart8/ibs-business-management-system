@@ -395,12 +395,18 @@
                                 class="hidden md:block" onchange="this.submit()">
                                 <?= csrfField() ?>
                                 <select name="branch_id"
+                                    title="<?= isViewingAllBranches() ? e('Lists and reports show all branches. New sales and stock changes use ' . activeBranchName() . '.') : 'Branch you are working at — lists and reports show this branch' ?>"
                                     class="text-sm bg-blue-700 hover:bg-blue-800 text-white border-0 rounded-full px-3 py-1 focus:ring-2 focus:ring-white">
                                     <?php foreach ($myBranches as $mb): ?>
-                                        <option value="<?= $mb['id'] ?>" <?= activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
+                                        <option value="<?= $mb['id'] ?>" <?= !isViewingAllBranches() && activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
                                             🏢 <?= e($mb['name']) ?>
                                         </option>
                                     <?php endforeach; ?>
+                                    <?php if (isCompanyWide()): ?>
+                                        <option value="all" <?= isViewingAllBranches() ? 'selected' : '' ?>>
+                                            🌐 All branches
+                                        </option>
+                                    <?php endif; ?>
                                 </select>
                             </form>
                             <?php elseif (count($myBranches) === 1): ?>
@@ -747,12 +753,20 @@
                                     <select name="branch_id"
                                         class="w-full text-sm bg-blue-700 text-white border border-blue-400 rounded-lg px-3 py-2">
                                         <?php foreach ($myBranchesMobile as $mb): ?>
-                                            <option value="<?= $mb['id'] ?>" <?= activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
+                                            <option value="<?= $mb['id'] ?>" <?= !isViewingAllBranches() && activeBranchId() == $mb['id'] ? 'selected' : '' ?>>
                                                 🏢 <?= e($mb['name']) ?>
                                             </option>
                                         <?php endforeach; ?>
+                                        <?php if (isCompanyWide()): ?>
+                                            <option value="all" <?= isViewingAllBranches() ? 'selected' : '' ?>>
+                                                🌐 All branches
+                                            </option>
+                                        <?php endif; ?>
                                     </select>
                                 </form>
+                                <?php if (isViewingAllBranches()): ?>
+                                    <p class="text-xs text-blue-200 px-1 mt-1">New sales and stock changes use <?= e(activeBranchName()) ?></p>
+                                <?php endif; ?>
                             </div>
                             <?php elseif (count($myBranchesMobile) === 1): ?>
                             <div class="pt-2 border-t border-blue-500">

@@ -114,6 +114,21 @@ function switchBranch(Database $db)
         redirect(BASE_URL . '/', 'error', 'Multi-branch is not enabled for this account.');
     }
 
+    // "All branches" (company-wide users only): lists and reports combine
+    // every branch. The active branch — what POS, stock and new records
+    // use — is left as it was, since those always need one real branch.
+    if (($_POST['branch_id'] ?? '') === 'all') {
+        if (!isCompanyWide()) {
+            redirect(BASE_URL . '/', 'error', 'Only company-wide users can view all branches.');
+        }
+        $_SESSION['view_all_branches'] = true;
+        logAudit('user.switch_branch', 'user', $_SESSION['user_id'], [
+            'from' => activeBranchName(),
+            'to'   => 'All branches (viewing)',
+        ]);
+        redirect(BASE_URL . '/', 'success', 'Showing all branches. New sales and stock changes still use ' . activeBranchName() . '.');
+    }
+
     $branchId = intval($_POST['branch_id'] ?? 0);
     $allowed  = array_map('intval', array_column(switchableBranches(), 'id'));
 
@@ -124,7 +139,7 @@ function switchBranch(Database $db)
     $previousBranchName = activeBranchName();
 
     $db->query("UPDATE users SET branch_id = ? WHERE id = ?", [$branchId, $_SESSION['user_id']]);
-    unset($_SESSION['user_data']);
+    unset($_SESSION['user_data'], $_SESSION['view_all_branches']);
 
     $branchName = $db->fetchOne("SELECT name FROM branches WHERE id = ?", [$branchId]);
 
