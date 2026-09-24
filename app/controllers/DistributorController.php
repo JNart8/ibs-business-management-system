@@ -313,6 +313,14 @@ function completeDistributorDelivery(Database $db)
             $customerPaymentStatus = 'partial';
         }
 
+        // Credit limit — same rule as POS, against the balance this sale
+        // leaves (a deposit payment consumes the deposit; see step 6).
+        $customerBalanceAfter = floatval($customer['current_balance'])
+            - ($isDepositPayment ? $customerTotalAmount : $customerAmountDue);
+        if ($creditError = creditLimitError($customer, $customerBalanceAfter, $customerAmountDue)) {
+            throw new Exception($creditError);
+        }
+
         // 1. Generate Numbers
         $purchaseNumber = distributorGeneratePurchaseNumber($db);
         $saleNumber     = distributorGenerateSaleNumber($db);

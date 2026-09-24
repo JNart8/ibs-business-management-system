@@ -340,19 +340,16 @@ function completeSale(Database $db)
         $paymentStatus = 'partial';
     }
 
-    // Credit check for credit/partial sales
-    if ($amountDue > 0) {
-        $currentBalance  = floatval($customer['current_balance']);
-        $creditLimit     = floatval($customer['credit_limit']);
-        $availableCredit = $creditLimit + $currentBalance; // balance can be positive (has deposit)
-
-        if ($availableCredit < $amountDue && !$customer['is_default']) {
-            echo json_encode([
-                'success' => false,
-                'message' => "Insufficient credit. Available: " . formatMoney($availableCredit) . ", Required: " . formatMoney($amountDue)
-            ]);
-            return;
-        }
+    // Credit check for credit/partial sales — against the balance this
+    // sale actually leaves. Paying from deposit consumes the deposit, so
+    // it can't also count as available credit (see creditLimitError()).
+    $currentBalance = floatval($customer['current_balance']);
+    $balanceAfter   = $paymentMethod === 'deposit'
+        ? $currentBalance - $totalAmount
+        : $currentBalance - $amountDue;
+    if ($creditError = creditLimitError($customer, $balanceAfter, $amountDue)) {
+        echo json_encode(['success' => false, 'message' => $creditError]);
+        return;
     }
 
     // Generate sale number

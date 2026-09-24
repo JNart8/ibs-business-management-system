@@ -820,6 +820,34 @@ function activeBranchId()
 }
 
 /**
+ * Credit-limit check for a sale that leaves something owing. Returns an
+ * error message, or null if the sale is within the customer's limit.
+ *
+ * The rule: after the sale, the customer may owe at most their credit
+ * limit (balance_after >= -credit_limit). Callers pass the balance the
+ * sale will actually leave — for a "pay from deposit" sale that is
+ * balance - total (the deposit is consumed by this sale), otherwise
+ * balance - amount_due. Checking "limit + current balance >= due", as
+ * POS used to, counted a deposit twice when paying from it.
+ * Walk-in customers are exempt, as before (they can't take credit or
+ * use a deposit anyway — those are blocked separately).
+ */
+function creditLimitError(array $customer, float $balanceAfter, float $amountDue): ?string
+{
+    if ($amountDue <= 0 || !empty($customer['is_default'])) {
+        return null;
+    }
+    $creditLimit = floatval($customer['credit_limit']);
+    if ($balanceAfter >= -$creditLimit - 0.005) {
+        return null;
+    }
+    // Credit still open to this sale once any deposit it uses is spent
+    $available = max(0, $creditLimit + $balanceAfter + $amountDue);
+    return "Insufficient credit. Available: " . formatMoney($available) . ", Required: " . formatMoney($amountDue)
+        . " (credit limit " . formatMoney($creditLimit) . ")";
+}
+
+/**
  * Branches the current user may make their active branch via the
  * header switcher. Company-wide users can work "as" any active branch
  * (their user_branches row is just a home default); branch-scoped users
