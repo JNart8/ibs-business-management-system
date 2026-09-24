@@ -112,7 +112,7 @@ function showCreateDistributorDelivery(Database $db)
 
     // Active customers
     $customers = $db->fetchAll("
-        SELECT id, customer_code, full_name, current_balance
+        SELECT id, customer_code, full_name, current_balance, is_default
         FROM customers
         WHERE is_active = 1
         ORDER BY full_name ASC
@@ -191,6 +191,37 @@ function completeDistributorDelivery(Database $db)
         return;
     }
 
+    if (!in_array($customerPaymentMethod, ['credit', 'cash', 'mobile', 'bank', 'deposit'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Invalid customer payment method']);
+        return;
+    }
+
+    // A customer holding a deposit spends it rather than running up
+    // credit on top of it — same rule as POS (SaleController).
+    if ($customerPaymentMethod === 'credit' && floatval($customer['current_balance']) > 0) {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Customer has a deposit balance of ' . formatMoney($customer['current_balance']) . '. Please use "Deposit" or another payment method instead of credit.'
+        ]);
+        return;
+    }
+
+    // Pay from deposit — same rules as POS (SaleController): registered
+    // customers only, needs a positive balance, and draws at most what's
+    // there (the rest of the sale is left owing). No money moves into an
+    // account here; it already did when the deposit was made.
+    $isDepositPayment = $customerPaymentMethod === 'deposit';
+    if ($isDepositPayment) {
+        if ($customer['is_default'] == 1) {
+            echo json_encode(['success' => false, 'message' => 'Walk-in customers cannot pay from deposit.']);
+            return;
+        }
+        if (floatval($customer['current_balance']) <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Customer has no deposit balance']);
+            return;
+        }
+    }
+
     // Validate the two payment accounts (if money is actually moving) — the
     // picker feeding these is already branch-scoped, but a direct POST could
     // still name another branch's account without this check.
@@ -202,7 +233,7 @@ function completeDistributorDelivery(Database $db)
             return;
         }
     }
-    if ($customerAmountPaid > 0 && $customerAccountId > 0) {
+    if (!$isDepositPayment && $customerAmountPaid > 0 && $customerAccountId > 0) {
         $customerAccount = $db->fetchOne("SELECT id FROM accounts WHERE id = ? AND is_active = 1 AND is_suspense = 0 $acctScopeSql", array_merge([$customerAccountId], $acctScopeParams));
         if (!$customerAccount) {
             echo json_encode(['success' => false, 'message' => 'Selected customer payment account is invalid or inactive']);
@@ -266,6 +297,9 @@ function completeDistributorDelivery(Database $db)
         $customerTotalAmount    = $saleSubtotal - $customerDiscountAmount + $customerVatAmount;
 
         $customerAmountPaid     = ($customerPaymentMethod === 'credit') ? 0.00 : $customerAmountPaid;
+        if ($isDepositPayment) {
+            $customerAmountPaid = min($customerAmountPaid, floatval($customer['current_balance']), $customerTotalAmount);
+        }
         $customerAmountDue      = max(0.00, $customerTotalAmount - $customerAmountPaid);
         $customerPaymentStatus  = 'unpaid';
         if ($customerAmountPaid >= $customerTotalAmount) {
@@ -278,14 +312,19 @@ function completeDistributorDelivery(Database $db)
         $purchaseNumber = distributorGeneratePurchaseNumber($db);
         $saleNumber     = distributorGenerateSaleNumber($db);
 
+        // Both halves belong to the branch doing the delivery — without
+        // this they fell to the column default (Main), which also skewed
+        // the credit settlement report's redemption side (sales.branch_id).
+        $branchIdForDistrib = activeBranchId();
+
         // 2. Insert Purchase Header
         $db->query("
-            INSERT INTO purchases 
-                (purchase_number, supplier_id, purchase_date, subtotal, 
-                 discount_percent, discount_amount, vat_percent, vat_amount, 
-                 total_amount, payment_status, payment_method, amount_paid, 
-                 amount_due, invoice_number, notes, user_id)
-            VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO purchases
+                (purchase_number, supplier_id, purchase_date, subtotal,
+                 discount_percent, discount_amount, vat_percent, vat_amount,
+                 total_amount, payment_status, payment_method, amount_paid,
+                 amount_due, invoice_number, notes, user_id, branch_id)
+            VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ", [
             $purchaseNumber,
             $supplierId,
@@ -301,7 +340,8 @@ function completeDistributorDelivery(Database $db)
             $supplierAmountDue,
             'DD-AUTO-' . date('YmdHis'),
             "[Distributor Direct Delivery for $saleNumber] " . $notes,
-            $userId
+            $userId,
+            $branchIdForDistrib
         ]);
         $purchaseId = $db->lastInsertId();
 
@@ -310,9 +350,9 @@ function completeDistributorDelivery(Database $db)
             INSERT INTO sales 
                 (sale_number, customer_id, subtotal, discount_percent, 
                  discount_amount, tax_amount, total_amount, payment_status, 
-                 payment_method, amount_paid, amount_due, notes, user_id, 
-                 item_count, purchase_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 payment_method, amount_paid, amount_due, notes, user_id,
+                 item_count, purchase_id, branch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ", [
             $saleNumber,
             $customerId,
@@ -328,7 +368,8 @@ function completeDistributorDelivery(Database $db)
             "[Distributor Direct Delivery linked to $purchaseNumber] " . $notes,
             $userId,
             count($validatedItems),
-            $purchaseId
+            $purchaseId,
+            $branchIdForDistrib
         ]);
         $saleId = $db->lastInsertId();
 
@@ -375,7 +416,6 @@ function completeDistributorDelivery(Database $db)
             // an accurate before/after pair for the audit trail. Using this
             // branch's actual stock (not the company-wide total) so the
             // ledger reads correctly for whoever looks at this branch later.
-            $branchIdForDistrib = activeBranchId();
             $stockBefore = getBranchStock($p['id'], $branchIdForDistrib);
             
             // Movement IN from Purchase
@@ -480,7 +520,12 @@ function completeDistributorDelivery(Database $db)
         $custBalanceBefore = floatval($customer['current_balance']);
         // Customer total decreases customer balance (they owe us more)
         // Customer payments increase balance back towards zero/positive.
-        $netCustomerBalanceEffect = $customerAmountPaid - $customerTotalAmount;
+        // Paying from deposit is the exception: the deposit already sits in
+        // the balance, so the sale simply consumes it — the full total
+        // comes off, with no separate payment added back (as in POS).
+        $netCustomerBalanceEffect = $isDepositPayment
+            ? -$customerTotalAmount
+            : $customerAmountPaid - $customerTotalAmount;
 
         $db->query("
             INSERT INTO customer_transactions
@@ -497,7 +542,7 @@ function completeDistributorDelivery(Database $db)
             $branchIdForDistrib
         ]);
 
-        if ($customerAmountPaid > 0) {
+        if ($customerAmountPaid > 0 && !$isDepositPayment) {
             $db->query("
                 INSERT INTO customer_transactions
                     (customer_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, payment_method, notes, user_id, branch_id)

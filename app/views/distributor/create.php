@@ -52,7 +52,8 @@
                         <?php foreach ($customers as $c): ?>
                             <option value="<?= $c['id'] ?>"
                                 data-name="<?= e($c['full_name']) ?>"
-                                data-balance="<?= $c['current_balance'] ?>">
+                                data-balance="<?= $c['current_balance'] ?>"
+                                data-default="<?= (int) $c['is_default'] ?>">
                                 <?= e($c['full_name']) ?>
                                 (Bal: <?= formatMoney($c['current_balance']) ?>)
                             </option>
@@ -215,9 +216,11 @@
                 
                 <div>
                     <label class="block text-xs text-gray-500 mb-1">Payment Method</label>
-                    <div class="grid grid-cols-3 gap-1">
+                    <div class="grid grid-cols-4 gap-1">
                         <button type="button" @click="selectCustomerPaymentMethod('credit')"
-                            :class="customerPaymentMethod === 'credit' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'"
+                            :disabled="canPayFromDeposit()"
+                            :title="canPayFromDeposit() ? 'Customer has a deposit balance — use Deposit instead of credit' : ''"
+                            :class="customerPaymentMethod === 'credit' ? 'bg-blue-600 text-white' : (canPayFromDeposit() ? 'bg-gray-50 text-gray-300 cursor-not-allowed' : 'bg-gray-100 text-gray-600')"
                             class="py-1.5 px-2 rounded text-xs font-semibold text-center transition">Credit</button>
                         <button type="button" @click="selectCustomerPaymentMethod('cash')"
                             :class="customerPaymentMethod === 'cash' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'"
@@ -225,10 +228,30 @@
                         <button type="button" @click="selectCustomerPaymentMethod('mobile')"
                             :class="customerPaymentMethod === 'mobile' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'"
                             class="py-1.5 px-2 rounded text-xs font-semibold text-center transition">Mobile</button>
+                        <button type="button" @click="selectCustomerPaymentMethod('deposit')"
+                            :disabled="!canPayFromDeposit()"
+                            :title="canPayFromDeposit() ? 'Pay from customer deposit' : 'Selected customer has no deposit balance'"
+                            :class="customerPaymentMethod === 'deposit' ? 'bg-blue-600 text-white' : (canPayFromDeposit() ? 'bg-gray-100 text-gray-600' : 'bg-gray-50 text-gray-300 cursor-not-allowed')"
+                            class="py-1.5 px-2 rounded text-xs font-semibold text-center transition">Deposit</button>
                     </div>
+                    <p x-show="canPayFromDeposit()" class="text-xs text-green-700 mt-1">
+                        Deposit available: <span class="font-semibold" x-text="formatMoney(customerBalance())"></span>
+                    </p>
                 </div>
 
-                <div x-show="customerPaymentMethod !== 'credit'" class="space-y-3 pt-2">
+                <div x-show="customerPaymentMethod === 'deposit'" class="space-y-1 pt-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Drawn from deposit:</span>
+                        <span class="font-semibold text-gray-800" x-text="formatMoney(customerAmountPaid)"></span>
+                    </div>
+                    <p x-show="customerGrandTotal() > customerBalance()" class="text-xs text-orange-600">
+                        Deposit doesn't cover the full sale — the remaining
+                        <span class="font-semibold" x-text="formatMoney(customerGrandTotal() - customerBalance())"></span>
+                        will be owed by the customer.
+                    </p>
+                </div>
+
+                <div x-show="customerPaymentMethod !== 'credit' && customerPaymentMethod !== 'deposit'" class="space-y-3 pt-2">
                     <div>
                         <label class="block text-xs text-gray-500 mb-1">Amount Paid by Customer</label>
                         <input type="number" step="0.01" x-model.number="customerAmountPaid"
@@ -434,9 +457,20 @@
                 if (this.supplierPaymentMethod !== 'credit') {
                     this.supplierAmountPaid = this.supplierGrandTotal();
                 }
-                if (this.customerPaymentMethod !== 'credit') {
+                if (this.customerPaymentMethod === 'deposit') {
+                    // Capped at what's on deposit; server enforces the same
+                    this.customerAmountPaid = Math.round(Math.min(this.customerGrandTotal(), this.customerBalance()) * 100) / 100;
+                } else if (this.customerPaymentMethod !== 'credit') {
                     this.customerAmountPaid = this.customerGrandTotal();
                 }
+            },
+
+            customerBalance() {
+                return this.selectedCustomer ? this.selectedCustomer.balance : 0;
+            },
+
+            canPayFromDeposit() {
+                return !!this.selectedCustomer && !this.selectedCustomer.isDefault && this.selectedCustomer.balance > 0;
             },
 
             selectSupplier() {
@@ -448,7 +482,22 @@
             selectCustomer() {
                 const select = document.querySelector('select[x-model="customerId"]');
                 const option = select.options[select.selectedIndex];
-                this.selectedCustomer = option && option.value ? { id: option.value } : null;
+                this.selectedCustomer = option && option.value ? {
+                    id: option.value,
+                    balance: parseFloat(option.dataset.balance) || 0,
+                    isDefault: option.dataset.default === '1'
+                } : null;
+                // Switching to a customer without a deposit drops a
+                // previously chosen "Deposit" back to credit; switching to
+                // one WITH a deposit moves off credit (not allowed for
+                // them — see completeDistributorDelivery()) onto Deposit.
+                if (this.customerPaymentMethod === 'deposit' && !this.canPayFromDeposit()) {
+                    this.customerPaymentMethod = 'credit';
+                    this.customerAmountPaid = 0;
+                } else if (this.customerPaymentMethod === 'credit' && this.canPayFromDeposit()) {
+                    this.customerPaymentMethod = 'deposit';
+                }
+                this.updateAmounts();
             },
 
             selectSupplierPaymentMethod(method) {
@@ -459,6 +508,8 @@
             },
 
             selectCustomerPaymentMethod(method) {
+                if (method === 'deposit' && !this.canPayFromDeposit()) return;
+                if (method === 'credit' && this.canPayFromDeposit()) return;
                 this.customerPaymentMethod = method;
                 const list = this.accountsForMethod(method);
                 this.customerAccountId = list.length > 0 ? list[0].id : 0;
