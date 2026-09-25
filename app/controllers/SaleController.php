@@ -130,14 +130,24 @@ function showPOS(Database $db)
     );
 
     // Financial accounts for the payment account selector
-    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $financialAccounts = $db->fetchAll(
-        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
-        $acctScopeParams
-    );
+    $financialAccounts = posFinancialAccounts($db);
 
     $pageTitle = 'Point of Sale';
     include APP_PATH . '/views/sales/pos.php';
+}
+
+/**
+ * Accounts the POS can take a payment into — without their balances
+ * for a user who mustn't see them (canSeeAccountBalances()), so they
+ * aren't in the page source or the sale response either.
+ */
+function posFinancialAccounts(Database $db): array
+{
+    [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
+    return withoutHiddenAccountBalances($db->fetchAll(
+        "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
+        $acctScopeParams
+    ));
 }
 
 /**
@@ -718,11 +728,7 @@ function completeSale(Database $db)
         $saleDate = date('Y-m-d H:i:s');
 
         // Fetch updated financial accounts to update POS state
-        [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-        $financialAccounts = $db->fetchAll(
-            "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
-            $acctScopeParams
-        );
+        $financialAccounts = posFinancialAccounts($db);
 
         // Fetch updated customer details to update POS state
         $updatedCustomer = $db->fetchOne(

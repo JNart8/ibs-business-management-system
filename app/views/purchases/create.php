@@ -348,7 +348,7 @@
                             required>
                             <option value="0" disabled>-- Select Financial Account --</option>
                             <template x-for="acc in accountsForMethod(paymentMethod)" :key="acc.id">
-                                <option :value="acc.id" x-text="acc.name + ' (' + formatMoney(acc.balance) + ')'"></option>
+                                <option :value="acc.id" x-text="'balance' in acc ? acc.name + ' (' + formatMoney(acc.balance) + ')' : acc.name"></option>
                             </template>
                         </select>
                     </div>

@@ -263,7 +263,7 @@
                             class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-1 focus:ring-blue-500">
                             <option value="0">Default Account</option>
                             <template x-for="acc in accountsForMethod(customerPaymentMethod)" :key="acc.id">
-                                <option :value="acc.id" x-text="acc.name + ' (' + formatMoney(acc.balance) + ')'"></option>
+                                <option :value="acc.id" x-text="'balance' in acc ? acc.name + ' (' + formatMoney(acc.balance) + ')' : acc.name"></option>
                             </template>
                         </select>
                     </div>
@@ -301,7 +301,7 @@
                             class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-1 focus:ring-blue-500">
                             <option value="0">Default Account</option>
                             <template x-for="acc in accountsForMethod(supplierPaymentMethod)" :key="acc.id">
-                                <option :value="acc.id" x-text="acc.name + ' (' + formatMoney(acc.balance) + ')'"></option>
+                                <option :value="acc.id" x-text="'balance' in acc ? acc.name + ' (' + formatMoney(acc.balance) + ')' : acc.name"></option>
                             </template>
                         </select>
                     </div>

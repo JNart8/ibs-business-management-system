@@ -82,12 +82,14 @@
                                     <div class="text-xs text-gray-400"><?= $typeLabels[$acc['type']] ?? ucfirst($acc['type']) ?></div>
                                 </div>
                              </div>
+                             <?php if (isset($acc['balance'])): ?>
                              <div class="text-right">
                                  <div class="text-sm font-bold text-gray-800">
                                      <?= formatMoney($acc['balance']) ?>
                                  </div>
                                  <div class="text-xs text-gray-400">available</div>
                              </div>
+                             <?php endif; ?>
                         </label>
                     <?php endforeach; ?>
                 </div>

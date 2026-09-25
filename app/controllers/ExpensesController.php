@@ -107,7 +107,7 @@ function listExpenses(Database $db)
 function showExpenseForm(Database $db)
 {
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams);
+    $accounts = withoutHiddenAccountBalances($db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY name ASC", $acctScopeParams));
     $categories = $db->fetchAll("SELECT DISTINCT category FROM expenses ORDER BY category ASC");
     $pageTitle = 'Record Expense';
     include APP_PATH . '/views/expenses/create.php';

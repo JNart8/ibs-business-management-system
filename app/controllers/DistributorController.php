@@ -133,12 +133,12 @@ function showCreateDistributorDelivery(Database $db)
 
     // Financial accounts
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $financialAccounts = $db->fetchAll("
+    $financialAccounts = withoutHiddenAccountBalances($db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
         WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY name ASC
-    ", $acctScopeParams);
+    ", $acctScopeParams));
 
     $pageTitle = 'Direct Delivery Entry';
     include APP_PATH . '/views/distributor/create.php';

@@ -308,12 +308,12 @@ function showSupplierDepositForm(Database $db, mixed $id)
 
     // Load active financial accounts to pay from
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $accounts = $db->fetchAll("
+    $accounts = withoutHiddenAccountBalances($db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
         WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY type ASC, name ASC
-    ", $acctScopeParams);
+    ", $acctScopeParams));
 
     $pageTitle = 'Supplier Payment — ' . $supplier['company_name'];
     include APP_PATH . '/views/suppliers/deposit.php';
@@ -561,12 +561,12 @@ function showEditSupplierDepositForm(Database $db, mixed $txId)
     }
 
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $accounts = $db->fetchAll("
+    $accounts = withoutHiddenAccountBalances($db->fetchAll("
         SELECT id, name, type, balance
         FROM accounts
         WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql
         ORDER BY type ASC, name ASC
-    ", $acctScopeParams);
+    ", $acctScopeParams));
 
     // Find the linked account_transactions row
     // processSupplierDeposit() stored: reference_type='purchase', reference_id=supplier_id
