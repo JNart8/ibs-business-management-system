@@ -7,14 +7,23 @@ if (!defined('CURRENCY_FORMAT')) define('CURRENCY_FORMAT', 'before');
 
 require_once projectPath('app/helpers/functions.php');
 
-final class FakeDatabase
+// Helpers type-hint the app's Database class, but loading the real one
+// needs a .env and a live MySQL connection — and this suite deliberately
+// never touches the database. A bare stand-in lets FakeDatabase pass as one.
+if (!class_exists('Database')) {
+    class Database {}
+}
+
+final class FakeDatabase extends Database
 {
     public array $accounts = [];
     public array $queries = [];
 
     public function fetchOne(string $sql, array $params = []): ?array
     {
-        if (str_contains($sql, 'id = ?')) {
+        // "WHERE id = ?", not "id = ?" — the default-account lookups filter
+        // on "branch_id = ?" too
+        if (str_contains($sql, 'WHERE id = ?')) {
             $account = $this->accounts[(int) $params[0]] ?? null;
             return $account && (int) $account['is_active'] === 1 ? $account : null;
         }
@@ -120,6 +129,9 @@ function registerHelperTests(TestRunner $runner): void
     });
 
     $runner->test('withdrawal resolves payment-method default and cash fallback', function (): void {
+        // Logged out, so the default-account lookup uses the fallback branch
+        // rather than loading a user from the real database
+        $_SESSION = [];
         $db = new FakeDatabase();
         $db->accounts[1] = ['id' => 1, 'type' => 'cash', 'balance' => 80.0, 'is_default' => 1, 'is_active' => 1];
         assertTrue(recordAccountTransaction($db, 'unknown', 30, 'withdrawal', 'expense', 3, 'expense'));
@@ -127,6 +139,7 @@ function registerHelperTests(TestRunner $runner): void
     });
 
     $runner->test('account transaction fails when no usable account exists', function (): void {
+        $_SESSION = [];
         $db = new FakeDatabase();
         assertFalse(recordAccountTransaction($db, 'cash', 10, 'deposit', 'sale', 1, 'none'));
         assertSame([], $db->queries);

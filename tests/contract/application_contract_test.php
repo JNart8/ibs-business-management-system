@@ -14,7 +14,8 @@ function registerApplicationContractTests(TestRunner $runner): void
             $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root));
             foreach ($files as $file) {
                 if (!$file->isFile() || $file->getExtension() !== 'php') continue;
-                exec('php -l ' . escapeshellarg($file->getPathname()) . ' 2>&1', $output, $code);
+                // The PHP running the suite — "php" alone needn't be on PATH (XAMPP)
+                exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($file->getPathname()) . ' 2>&1', $output, $code);
                 if ($code !== 0) $errors[] = implode("\n", $output);
                 $output = [];
             }
@@ -47,7 +48,7 @@ function registerApplicationContractTests(TestRunner $runner): void
     });
 
     $runner->test('every controller dispatcher action has a case or intentional default', function () use ($controllerDir): void {
-        $withoutDispatch = ['DashboardController.php', 'ExportController.php', 'ImportController.php', 'SettingsController.php'];
+        $withoutDispatch = ['AuditController.php', 'DashboardController.php', 'ExportController.php', 'ImportController.php', 'LicenseController.php', 'SettingsController.php'];
         foreach (glob($controllerDir . '/*.php') as $controller) {
             if (in_array(basename($controller), $withoutDispatch, true)) continue;
             $source = file_get_contents($controller);
@@ -61,7 +62,8 @@ function registerApplicationContractTests(TestRunner $runner): void
         foreach (['users', 'settings', 'products', 'categories', 'stock', 'suppliers', 'customers', 'transactions', 'financial-accounts', 'expenses', 'distributor', 'suspense'] as $route) {
             assertContains("'/{$route}'", $front, "Missing role restriction for /{$route}");
         }
-        assertContains("'/users'      => ['admin']", $front);
+        // Access is by permission now, not a role list — see $permissionRestrictions
+        assertTrue((bool) preg_match("~'/users'\s*=>\s*'users\.manage'~", $front), "/users must require users.manage");
     });
 
     $runner->test('sale discount mode is configurable and retained on each sale', function (): void {
@@ -124,7 +126,10 @@ function registerApplicationContractTests(TestRunner $runner): void
         $imports = file_get_contents(projectPath('app/controllers/ImportController.php'));
 
         assertContains('cost_price, average_cost, selling_price', $products);
-        assertContains('average_cost, current_stock, reorder_level', $imports);
+        // A new product's average cost starts at its cost price; its stock is
+        // then set per branch as an 'opening' movement, not a products column
+        assertContains('average_cost, reorder_level, unit', $imports);
+        assertContains("setImportedStock(\$db, \$newProductId, \$importedStock, 'opening'", $imports);
         assertContains('WHEN COALESCE(average_cost, 0) = 0 THEN ?', $imports);
     });
 
