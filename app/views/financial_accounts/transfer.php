@@ -1,4 +1,16 @@
-<?php include APP_PATH . '/views/layout/header.php'; ?>
+<?php
+/**
+ * Transfer form data provided by FinancialAccountsController::showTransferForm().
+ *
+ * @var array{from: int, to: int}|null $settlementBranches  paying/receiving branch of a settlement, or null
+ * @var array<int, array<string, mixed>> $fromAccounts      accounts offered as the source
+ * @var array<int, array<string, mixed>> $toAccounts        accounts offered as the destination
+ * @var int|null $preselectFrom
+ * @var int|null $preselectTo
+ * @var string $pageTitle
+ */
+include APP_PATH . '/views/layout/header.php';
+?>
 
 <div class="max-w-xl mx-auto">
     <!-- Page Title -->
