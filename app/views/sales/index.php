@@ -11,6 +11,7 @@
  * @var string $dateFrom
  * @var string $dateTo
  * @var string $pageTitle
+ * @var int $totalCount
  */
 include APP_PATH . '/views/layout/header.php';
 ?>
