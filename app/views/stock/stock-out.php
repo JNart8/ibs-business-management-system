@@ -68,6 +68,20 @@
             </div>
         </div>
 
+        <!-- Batch — only for products tracked by batch & expiry -->
+        <div class="mb-5" x-show="batches.length > 0" x-cloak>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Batch</label>
+            <select name="batch_id" x-model="batchId"
+                class="w-full px-4 py-2.5 border border-gray-300 rounded-lg
+                          focus:ring-2 focus:ring-red-500 focus:border-transparent">
+                <option value="">Earliest expiry first</option>
+                <template x-for="b in batches" :key="b.id">
+                    <option :value="b.id" x-text="batchLabel(b)"></option>
+                </template>
+            </select>
+            <p class="text-xs text-gray-400 mt-1">Writing off expired or damaged stock? Pick the batch it came from.</p>
+        </div>
+
         <!-- Quantity -->
         <div class="mb-5">
             <label class="block text-sm font-medium text-gray-700 mb-1">
@@ -84,6 +98,10 @@
             <p class="text-xs text-red-500 mt-1"
                 x-show="selectedProduct && parseFloat(quantity) > parseFloat(selectedProduct?.current_stock)" x-cloak>
                 ⚠️ Quantity exceeds available stock!
+            </p>
+            <p class="text-xs text-red-500 mt-1"
+                x-show="selectedBatch() && parseFloat(quantity) > parseFloat(selectedBatch()?.quantity)" x-cloak>
+                ⚠️ Quantity exceeds what's left in this batch!
             </p>
         </div>
 
@@ -152,6 +170,31 @@
             results: [],
             showDropdown: false,
             quantity: 1,
+            batches: [],
+            batchId: '',
+            init() {
+                if (this.selectedProduct) this.loadBatches();
+            },
+            // A tracked product's batches here, to write off from one
+            loadBatches() {
+                this.batches = [];
+                this.batchId = '';
+                if (!this.selectedProduct || !Number(this.selectedProduct.track_expiry)) return;
+                fetch('<?= BASE_URL ?>/stock/batches/' + this.selectedProduct.id)
+                    .then(r => r.json())
+                    .then(data => this.batches = data);
+            },
+            selectedBatch() {
+                return this.batches.find(b => String(b.id) === String(this.batchId)) || null;
+            },
+            batchLabel(b) {
+                const expiry = b.expiry_date
+                    ? 'Exp ' + new Date(b.expiry_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                    : 'Expiry unknown';
+                return (b.batch_number ? 'Batch ' + b.batch_number : 'No batch no.') + ' · ' + expiry
+                    + (b.expiry_status === 'expired' ? ' (EXPIRED)' : '')
+                    + ' · ' + parseFloat(b.quantity) + ' ' + this.selectedProduct.unit;
+            },
             searchProducts() {
                 if (this.searchQuery.length < 1) {
                     this.results = [];
@@ -169,11 +212,14 @@
                 this.selectedId = p.id;
                 this.searchQuery = p.name;
                 this.showDropdown = false;
+                this.loadBatches();
             },
             clearProduct() {
                 this.selectedProduct = null;
                 this.selectedId = null;
                 this.searchQuery = '';
+                this.batches = [];
+                this.batchId = '';
             }
         }
     }

@@ -78,6 +78,13 @@
                         <td class="px-5 py-3 text-sm">
                             <div class="font-medium text-gray-800"><?= e($item['product_name'] ?? 'Unknown product') ?></div>
                             <div class="text-xs text-gray-400"><?= e($item['sku'] ?? '') ?></div>
+                            <?php foreach ($item['batches'] ?? [] as $batch): ?>
+                                <div class="text-xs text-gray-500">
+                                    <?= $batch['batch_number'] !== null ? 'Batch ' . e($batch['batch_number']) : 'No batch no.' ?>
+                                    · <?= $batch['expiry_date'] !== null ? 'Exp ' . formatDate($batch['expiry_date'], 'd M Y') : 'Expiry unknown' ?>
+                                    · <?= formatQty($batch['quantity']) ?> <?= e($item['unit'] ?? '') ?>
+                                </div>
+                            <?php endforeach; ?>
                         </td>
                         <td class="px-5 py-3 text-right text-sm text-gray-700">
                             <?= formatQty($item['quantity']) ?> <?= e($item['unit'] ?? '') ?>

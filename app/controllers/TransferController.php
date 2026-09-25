@@ -214,12 +214,14 @@ function storeTransfer(Database $db)
                 "INSERT INTO stock_transfer_items (transfer_id, product_id, quantity) VALUES (?, ?, ?)",
                 [$transferId, $pid, $qty]
             );
+            $transferItemId = $db->lastInsertId();
 
             // Only the source branch is affected at dispatch time — the
             // destination is credited when it confirms receipt (see
-            // receiveTransfer()), not automatically here.
+            // receiveTransfer()), not automatically here. A tracked
+            // product's batches travel with it.
             $fromPrev = getBranchStock($pid, $fromBranchId);
-            adjustBranchStock($db, $pid, $fromBranchId, -$qty);
+            dispatchTransferItemStock($db, $transferItemId, $pid, $fromBranchId, $qty);
 
             $db->query("
                 INSERT INTO stock_movements
@@ -263,6 +265,7 @@ function viewTransfer(Database $db, mixed $id)
         WHERE ti.transfer_id = ?
         ORDER BY ti.id ASC
     ", [$id]);
+    $items = withTransferItemBatches($db, $items);
 
     // Receive/cancel are each restricted to the branch that action is
     // physically about — receiving to someone actually assigned to the
@@ -328,6 +331,7 @@ function showReceiveForm(Database $db, mixed $id)
         WHERE ti.transfer_id = ?
         ORDER BY ti.id ASC
     ", [$id]);
+    $items = withTransferItemBatches($db, $items);
 
     $pageTitle = 'Receive Transfer: ' . $transfer['transfer_number'];
     include APP_PATH . '/views/transfers/receive.php';
@@ -376,7 +380,7 @@ function receiveTransfer(Database $db, mixed $id)
 
             if ($qtyReceived > 0) {
                 $toPrev = getBranchStock($pid, $toBranchId);
-                adjustBranchStock($db, $pid, $toBranchId, $qtyReceived);
+                receiveTransferItemStock($db, $item['id'], $pid, $toBranchId, $qtyReceived);
 
                 $db->query("
                     INSERT INTO stock_movements
@@ -444,7 +448,7 @@ function cancelTransfer(Database $db, mixed $id)
             $qty = (float) $item['quantity'];
 
             $fromPrev = getBranchStock($pid, $fromBranchId);
-            adjustBranchStock($db, $pid, $fromBranchId, $qty);
+            returnTransferItemStock($db, $item['id'], $pid, $fromBranchId, $qty);
 
             $db->query("
                 INSERT INTO stock_movements
@@ -470,6 +474,26 @@ function cancelTransfer(Database $db, mixed $id)
         error_log('Stock transfer cancel error: ' . $e->getMessage());
         redirect(BASE_URL . '/transfers/view/' . $id, 'error', 'Failed to cancel transfer.');
     }
+}
+
+/**
+ * Attach to each transfer line the batches it carries (tracked products
+ * only), for the transfer and receive pages.
+ */
+function withTransferItemBatches(Database $db, array $items): array
+{
+    if (!expiryTrackingEnabled()) {
+        return $items;
+    }
+    foreach ($items as &$item) {
+        $item['batches'] = $db->fetchAll("
+            SELECT batch_number, expiry_date, quantity FROM stock_transfer_item_batches
+            WHERE transfer_item_id = ?
+            ORDER BY expiry_date IS NOT NULL, expiry_date, id
+        ", [$item['id']]);
+    }
+    unset($item);
+    return $items;
 }
 
 /**

@@ -1883,9 +1883,45 @@ function expiredStockSql(mixed $branchId): array
 }
 
 /**
+ * Take up to $quantity of a product from its batches at a branch, the
+ * way stock leaves for customers and other branches: in-date batches
+ * first (unknown expiry first, as the oldest, then earliest expiry),
+ * then — only if $includeExpired — expired ones, oldest first. Returns
+ * what was taken from each batch: [['batch_id', 'batch_number',
+ * 'expiry_date', 'quantity'], ...]. Only adjusts product_batches.
+ */
+function takeFromBatchesFefo(Database $db, mixed $productId, mixed $branchId, float $quantity, bool $includeExpired): array
+{
+    $batches = $db->fetchAll("
+        SELECT id, batch_number, expiry_date, quantity, (expiry_date IS NOT NULL AND expiry_date < ?) AS expired
+        FROM product_batches
+        WHERE product_id = ? AND branch_id = ? AND quantity > 0
+        ORDER BY expired, expiry_date IS NOT NULL, expiry_date, id
+        FOR UPDATE
+    ", [date('Y-m-d'), $productId, $branchId]);
+
+    $taken  = [];
+    $toTake = $quantity;
+    foreach ($batches as $batch) {
+        if ($toTake < 0.0005 || ($batch['expired'] && !$includeExpired)) {
+            break;
+        }
+        $take = round(min($toTake, floatval($batch['quantity'])), 3);
+        $db->query("UPDATE product_batches SET quantity = ROUND(quantity - ?, 3) WHERE id = ?", [$take, $batch['id']]);
+        $taken[] = [
+            'batch_id'     => $batch['id'],
+            'batch_number' => $batch['batch_number'],
+            'expiry_date'  => $batch['expiry_date'],
+            'quantity'     => $take,
+        ];
+        $toTake = round($toTake - $take, 3);
+    }
+    return $taken;
+}
+
+/**
  * Take a sale line's stock from a branch. For a tracked product it comes
- * out of the batches earliest expiry first — in-date batches (unknown
- * expiry first, as the oldest) before any expired one, and expired ones
+ * out of the batches as takeFromBatchesFefo() orders them — expired ones
  * only when expiredSalesBlocked() allows — and each batch used is
  * recorded against the sale line (sale_item_batches), so a void can put
  * it back. Moves branch stock like adjustBranchStock().
@@ -1893,32 +1929,80 @@ function expiredStockSql(mixed $branchId): array
 function sellFromBatches(Database $db, mixed $saleItemId, mixed $productId, mixed $branchId, float $quantity): void
 {
     if (productTracksExpiry($db, $productId)) {
-        $today   = date('Y-m-d');
-        $batches = $db->fetchAll("
-            SELECT id, quantity, (expiry_date IS NOT NULL AND expiry_date < ?) AS expired
-            FROM product_batches
-            WHERE product_id = ? AND branch_id = ? AND quantity > 0
-            ORDER BY expired, expiry_date IS NOT NULL, expiry_date, id
-            FOR UPDATE
-        ", [$today, $productId, $branchId]);
-
-        $toTake = $quantity;
-        foreach ($batches as $batch) {
-            if ($toTake < 0.0005 || ($batch['expired'] && expiredSalesBlocked())) {
-                break;
-            }
-            $take = round(min($toTake, floatval($batch['quantity'])), 3);
-            $db->query("UPDATE product_batches SET quantity = ROUND(quantity - ?, 3) WHERE id = ?", [$take, $batch['id']]);
+        foreach (takeFromBatchesFefo($db, $productId, $branchId, $quantity, !expiredSalesBlocked()) as $t) {
             $db->query(
                 "INSERT INTO sale_item_batches (sale_item_id, batch_id, quantity) VALUES (?, ?, ?)",
-                [$saleItemId, $batch['id'], $take]
+                [$saleItemId, $t['batch_id'], $t['quantity']]
             );
-            $toTake = round($toTake - $take, 3);
         }
     }
 
     // Also re-syncs the batches, should they not have covered it all
     adjustBranchStock($db, $productId, $branchId, -$quantity);
+}
+
+/**
+ * Dispatch a transfer line's stock from the source branch. For a tracked
+ * product it leaves in takeFromBatchesFefo() order (in-date first,
+ * expired last), and each batch sent is recorded against the line
+ * (stock_transfer_item_batches) for receipt or cancellation.
+ */
+function dispatchTransferItemStock(Database $db, mixed $transferItemId, mixed $productId, mixed $fromBranchId, float $quantity): void
+{
+    if (productTracksExpiry($db, $productId)) {
+        foreach (takeFromBatchesFefo($db, $productId, $fromBranchId, $quantity, true) as $t) {
+            $db->query("
+                INSERT INTO stock_transfer_item_batches
+                    (transfer_item_id, source_batch_id, batch_number, expiry_date, quantity)
+                VALUES (?, ?, ?, ?, ?)
+            ", [$transferItemId, $t['batch_id'], $t['batch_number'], $t['expiry_date'], $t['quantity']]);
+        }
+    }
+    adjustBranchStock($db, $productId, $fromBranchId, -$quantity);
+}
+
+/**
+ * Credit a transfer line's received stock to the destination branch, in
+ * the same batches (number and expiry date) it was dispatched in. A
+ * shortfall is taken off the latest-expiring batches: the received
+ * quantity fills the batches earliest expiry first.
+ */
+function receiveTransferItemStock(Database $db, mixed $transferItemId, mixed $productId, mixed $toBranchId, float $quantityReceived): void
+{
+    if (productTracksExpiry($db, $productId)) {
+        $sent = $db->fetchAll("
+            SELECT batch_number, expiry_date, quantity FROM stock_transfer_item_batches
+            WHERE transfer_item_id = ?
+            ORDER BY expiry_date IS NOT NULL, expiry_date, id
+        ", [$transferItemId]);
+        $toPlace = $quantityReceived;
+        foreach ($sent as $s) {
+            $place = round(min($toPlace, floatval($s['quantity'])), 3);
+            if ($place < 0.0005) {
+                break;
+            }
+            addToBatch($db, $productId, $toBranchId, $s['batch_number'], $s['expiry_date'], $place);
+            $toPlace = round($toPlace - $place, 3);
+        }
+    }
+    // Also re-syncs: anything not recorded goes to the unknown-expiry batch
+    adjustBranchStock($db, $productId, $toBranchId, $quantityReceived);
+}
+
+/**
+ * Return a cancelled transfer line's stock to the source branch — into
+ * the batches it left, where recorded.
+ */
+function returnTransferItemStock(Database $db, mixed $transferItemId, mixed $productId, mixed $fromBranchId, float $quantity): void
+{
+    $sent = $db->fetchAll(
+        "SELECT source_batch_id, quantity FROM stock_transfer_item_batches WHERE transfer_item_id = ? AND source_batch_id IS NOT NULL",
+        [$transferItemId]
+    );
+    foreach ($sent as $s) {
+        $db->query("UPDATE product_batches SET quantity = ROUND(quantity + ?, 3) WHERE id = ?", [$s['quantity'], $s['source_batch_id']]);
+    }
+    adjustBranchStock($db, $productId, $fromBranchId, $quantity);
 }
 
 /**
