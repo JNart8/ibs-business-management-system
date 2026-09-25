@@ -236,6 +236,11 @@ function createProduct(Database $db)
 
         $productId = $db->lastInsertId();
 
+        // Before the opening stock, so it's filed as a batch
+        if (expiryTrackingEnabled() && isset($_POST['track_expiry'])) {
+            setProductTrackExpiry($db, $productId, true);
+        }
+
         if ($current_stock > 0) {
             $branchId = activeBranchId();
             // Seeds this branch's stock and keeps products.current_stock
@@ -340,6 +345,13 @@ function updateProduct(Database $db, mixed $id)
             $id
         ]);
 
+        // The checkbox is only on the form while tracking is switched on
+        // in Settings — otherwise leave the product's setting alone.
+        $trackExpiry = isset($_POST['track_expiry']);
+        if (expiryTrackingEnabled() && $trackExpiry !== !empty($product['track_expiry'])) {
+            setProductTrackExpiry($db, $id, $trackExpiry);
+        }
+
         // High-risk alert: only a big selling-price *drop* in one edit —
         // routine repricing/promotions happen far too often to flag every
         // change without burying the signal, but a 30%+ drop is big enough
@@ -440,6 +452,11 @@ function viewProduct(Database $db, mixed $id)
     // forms). See getBranchStock() in functions.php.
     $product['current_stock'] = getBranchStock($product['id']);
     $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
+
+    // This branch's batches, like the stock figure above
+    $batches = expiryTrackingEnabled() && !empty($product['track_expiry'])
+        ? productBatches($db, $product['id'], activeBranchId())
+        : null;
 
     // Calculate stock value and margin based on Weighted Moving Average Cost
     $stockValue = $product['current_stock'] * $product['average_cost'];

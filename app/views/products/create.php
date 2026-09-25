@@ -219,6 +219,24 @@
                 <p class="text-xs text-gray-500 mt-1">Alert when stock falls below this level</p>
             </div>
 
+            <?php if (expiryTrackingEnabled()): ?>
+                <!-- Batch & Expiry Tracking -->
+                <div class="md:col-span-2">
+                    <label class="flex items-start">
+                        <input
+                            type="checkbox"
+                            name="track_expiry"
+                            value="1"
+                            <?= old('track_expiry') ? 'checked' : '' ?>
+                            class="w-5 h-5 mt-0.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                        <span class="ml-3 text-sm">
+                            <span class="block font-medium text-gray-700">Track batches and expiry dates</span>
+                            <span class="text-gray-500">For goods that expire, such as medicines or food.</span>
+                        </span>
+                    </label>
+                </div>
+            <?php endif; ?>
+
         </div>
 
         <!-- Form Actions -->

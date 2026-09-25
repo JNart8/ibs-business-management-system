@@ -200,8 +200,12 @@ function exportCategories(Database $db, mixed $output)
  */
 function exportProducts(Database $db, mixed $output)
 {
+    // track_expiry only while batch tracking is on in Settings — the
+    // import ignores it otherwise
+    $withTrackExpiry = expiryTrackingEnabled();
+
     // Write headers (same as import template)
-    fputcsv($output, [
+    fputcsv($output, array_merge([
         'sku',
         'name',
         'category',
@@ -212,7 +216,7 @@ function exportProducts(Database $db, mixed $output)
         'reorder_level',
         'unit',
         'barcode'
-    ]);
+    ], $withTrackExpiry ? ['track_expiry'] : []));
 
     // Fetch all active products with category and supplier names.
     // current_stock is the active branch's quantity, not the company-wide
@@ -229,7 +233,7 @@ function exportProducts(Database $db, mixed $output)
             COALESCE(bs.quantity, 0) AS current_stock,
             p.reorder_level,
             p.unit,
-            p.barcode
+            p.barcode" . ($withTrackExpiry ? ", p.track_expiry" : "") . "
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN suppliers s ON p.supplier_id = s.id
@@ -240,7 +244,7 @@ function exportProducts(Database $db, mixed $output)
 
     // Write data rows
     foreach ($products as $prod) {
-        fputcsv($output, [
+        fputcsv($output, array_merge([
             $prod['sku'],
             $prod['name'],
             $prod['category_name'] ?? '',
@@ -251,7 +255,7 @@ function exportProducts(Database $db, mixed $output)
             $prod['reorder_level'],
             $prod['unit'],
             $prod['barcode'] ?? ''
-        ]);
+        ], $withTrackExpiry ? [$prod['track_expiry'] ? 'yes' : 'no'] : []));
     }
 }
 

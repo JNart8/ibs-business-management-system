@@ -186,6 +186,30 @@
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
             </div>
 
+            <?php if (expiryTrackingEnabled()): ?>
+                <!-- Batch & Expiry Tracking -->
+                <div class="md:col-span-2">
+                    <label class="flex items-start">
+                        <input
+                            type="checkbox"
+                            name="track_expiry"
+                            value="1"
+                            <?= $product['track_expiry'] ? 'checked' : '' ?>
+                            class="w-5 h-5 mt-0.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                        <span class="ml-3 text-sm">
+                            <span class="block font-medium text-gray-700">Track batches and expiry dates</span>
+                            <span class="text-gray-500">
+                                <?php if ($product['track_expiry']): ?>
+                                    Unticking stops keeping this product's batches up to date; its batch details are kept in case you tick it again.
+                                <?php else: ?>
+                                    Stock already on hand is recorded as one batch with an unknown expiry date, which is sold first.
+                                <?php endif; ?>
+                            </span>
+                        </span>
+                    </label>
+                </div>
+            <?php endif; ?>
+
             <!-- Active Status -->
             <div class="md:col-span-2">
                 <label class="flex items-center">

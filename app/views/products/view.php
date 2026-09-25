@@ -99,6 +99,58 @@
     </div>
 </div>
 
+<?php if ($batches !== null): ?>
+    <!-- Batches -->
+    <div class="bg-white rounded-lg shadow overflow-hidden mb-6">
+        <div class="px-5 py-4 border-b flex justify-between items-center">
+            <h2 class="font-bold text-gray-700">Batches</h2>
+            <span class="text-xs text-gray-400">
+                Earliest expiry first<?php if ($viewingBranchName ?? null): ?> · at <?= e($viewingBranchName) ?><?php endif; ?>
+            </span>
+        </div>
+        <?php if (empty($batches)): ?>
+            <div class="p-8 text-center text-gray-400 text-sm">No stock on hand.</div>
+        <?php else: ?>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+                        <tr>
+                            <th class="px-5 py-2 text-left">Batch no.</th>
+                            <th class="px-5 py-2 text-left">Expiry date</th>
+                            <th class="px-5 py-2 text-left">Status</th>
+                            <th class="px-5 py-2 text-right">Quantity</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y">
+                        <?php foreach ($batches as $batch): ?>
+                            <tr>
+                                <td class="px-5 py-3 text-gray-700"><?= $batch['batch_number'] !== null ? e($batch['batch_number']) : '<span class="text-gray-400">—</span>' ?></td>
+                                <td class="px-5 py-3 text-gray-700">
+                                    <?= $batch['expiry_date'] !== null ? formatDate($batch['expiry_date'], 'd M Y') : '<span class="text-gray-400">Unknown</span>' ?>
+                                </td>
+                                <td class="px-5 py-3">
+                                    <?php if ($batch['expiry_status'] === 'expired'): ?>
+                                        <span class="bg-red-100 text-red-700 text-xs font-semibold px-2 py-1 rounded-full">Expired</span>
+                                    <?php elseif ($batch['expiry_status'] === 'soon'): ?>
+                                        <span class="bg-yellow-100 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">
+                                            <?= $batch['days_to_expiry'] === 0 ? 'Expires today' : 'Expires in ' . $batch['days_to_expiry'] . ' ' . ($batch['days_to_expiry'] === 1 ? 'day' : 'days') ?>
+                                        </span>
+                                    <?php elseif ($batch['expiry_status'] === 'ok'): ?>
+                                        <span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-1 rounded-full">OK</span>
+                                    <?php else: ?>
+                                        <span class="text-xs text-gray-400" title="Stock from before this product was tracked, or received without an expiry date. It is sold first.">Sold first</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="px-5 py-3 text-right font-semibold text-gray-700"><?= formatQty($batch['quantity']) ?> <?= e($product['unit']) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
 <!-- Two column layout -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 

@@ -142,6 +142,9 @@
                         'customers' => ['email', 'address', 'credit_limit'],
                         'purchases' => ['invoice_number', 'payment_method', 'payment_account', 'purchase_date', 'notes', 'discount_percent', 'vat_percent']
                     ];
+                    if (expiryTrackingEnabled()) {
+                        $optional['products'][] = 'track_expiry';
+                    }
                     ?>
                     <?php foreach ($optional[$type] as $field): ?>
                         <div class="text-xs">• <?= $field ?></div>
@@ -170,6 +173,9 @@
                         <li>• Category must match by name; supplier by company name or supplier code</li>
                         <li>• <strong>current_stock</strong> is set at your active branch (<?= e(activeBranchName()) ?>)</li>
                         <li>• Blank cost_price = 0, reorder_level = 10, unit = pcs</li>
+                        <?php if (expiryTrackingEnabled()): ?>
+                            <li>• <strong>track_expiry</strong>: yes or no — tracks the product's stock by batch and expiry date. Blank = no for a new product, unchanged for an existing one. Imported stock is recorded with an unknown expiry date.</li>
+                        <?php endif; ?>
                     <?php endif; ?>
                     <?php if ($type === 'suppliers'): ?>
                         <li>• Matched by company name. A phone number is required for a new supplier and can't be one another supplier already uses.</li>

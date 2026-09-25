@@ -329,6 +329,9 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
                     return ['valid' => false, 'error' => ucwords(str_replace('_', ' ', $numCol)) . " must be a number of 0 or more"];
                 }
             }
+            if (expiryTrackingEnabled() && importHasValue($row, 'track_expiry') && importYesNo($row['track_expiry']) === null) {
+                return ['valid' => false, 'error' => "Track Expiry must be yes or no"];
+            }
             if (importHasValue($row, 'barcode')) {
                 $barcodeOwner = $db->fetchOne("SELECT sku FROM products WHERE barcode = ?", [$row['barcode']]);
                 if ($barcodeOwner && $barcodeOwner['sku'] !== trim($row['sku'])) {
@@ -478,6 +481,31 @@ function importHasValue(mixed $row, mixed $key)
 }
 
 /**
+ * A yes/no cell as a bool: yes/y/true/1 or no/n/false/0, any case.
+ * Null for anything else, so validation can reject it.
+ */
+function importYesNo(mixed $value): ?bool
+{
+    $value = strtolower(trim((string) $value));
+    if (in_array($value, ['yes', 'y', 'true', '1'], true)) return true;
+    if (in_array($value, ['no', 'n', 'false', '0'], true)) return false;
+    return null;
+}
+
+/**
+ * The track_expiry cell as a bool, or null when it should be left
+ * alone: blank, or batch tracking is off in Settings (the column is
+ * only offered while it's on, like the checkbox on the product form).
+ */
+function importTrackExpiry(mixed $row): ?bool
+{
+    if (!expiryTrackingEnabled() || !importHasValue($row, 'track_expiry')) {
+        return null;
+    }
+    return importYesNo($row['track_expiry']);
+}
+
+/**
  * Active supplier by company name or supplier code — the same match the
  * purchases import has always used, so a sheet can use either.
  */
@@ -561,6 +589,12 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
             $barcode ?? $existing['barcode'],
             $existing['id']
         ]);
+        // Before the stock, so a newly tracked product's imported stock
+        // is filed as a batch
+        $trackExpiry = importTrackExpiry($row);
+        if ($trackExpiry !== null && $trackExpiry !== !empty($existing['track_expiry'])) {
+            setProductTrackExpiry($db, $existing['id'], $trackExpiry);
+        }
         if (importHasValue($row, 'current_stock')) {
             setImportedStock($db, $existing['id'], floatval($row['current_stock']), 'adjustment', $userId);
         }
@@ -588,6 +622,9 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
         $barcode
     ]);
     $newProductId = $db->lastInsertId();
+    if (importTrackExpiry($row)) {
+        setProductTrackExpiry($db, $newProductId, true);
+    }
     $importedStock = importHasValue($row, 'current_stock') ? floatval($row['current_stock']) : 0;
     if ($importedStock > 0) {
         setImportedStock($db, $newProductId, $importedStock, 'opening', $userId);
@@ -779,6 +816,14 @@ function downloadTemplate(mixed $type)
 
     if (!isset($templates[$type])) {
         die('Invalid type');
+    }
+
+    // track_expiry is only offered while batch tracking is on in Settings
+    if (expiryTrackingEnabled()) {
+        $templates['products']['headers'][] = 'track_expiry';
+        foreach (['no', 'no', 'no', 'yes', ''] as $i => $trackExpiry) {   // blank = no on create
+            $templates['products']['sample'][$i][] = $trackExpiry;
+        }
     }
 
     $template = $templates[$type];
