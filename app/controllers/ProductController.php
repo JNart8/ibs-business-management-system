@@ -124,10 +124,21 @@ function listProducts(Database $db)
     // / branch_stock in functions.php.
     $branchId = activeBranchId();
 
+    // A tracked product's earliest expiry among the batches this branch
+    // still holds
+    $nearestExpirySql = expiryTrackingEnabled()
+        ? "CASE WHEN p.track_expiry = 1 THEN (
+               SELECT MIN(pb.expiry_date) FROM product_batches pb
+               WHERE pb.product_id = p.id AND pb.branch_id = ? AND pb.quantity > 0
+           ) END"
+        : "NULL";
+    $nearestExpiryParams = expiryTrackingEnabled() ? [$branchId] : [];
+
     $products = $db->fetchAll("
         SELECT
             p.id, p.sku, p.barcode, p.name,
             p.selling_price, p.cost_price, p.average_cost,
+            $nearestExpirySql AS nearest_expiry,
             COALESCE(bs.quantity, 0) AS current_stock, p.reorder_level, p.unit, p.is_active,
             c.name AS category_name,
             CASE
@@ -141,7 +152,7 @@ function listProducts(Database $db)
         $where
         ORDER BY p.name ASC
         LIMIT ? OFFSET ?
-    ", array_merge([$branchId], $params, [$perPage, $offset]));
+    ", array_merge($nearestExpiryParams, [$branchId], $params, [$perPage, $offset]));
 
     $stats = $db->fetchOne("
         SELECT

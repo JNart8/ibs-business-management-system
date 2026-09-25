@@ -42,6 +42,7 @@ if (!in_array($type, [
     'profit-loss',
     'top-selling',
     'low-stock',
+    'expiry',
     'dead-stock',
     'profit-margin',
     'inventory'
@@ -151,6 +152,9 @@ function exportData(Database $db, mixed $type)
             break;
         case 'top-selling':
             exportTopSelling($db, $output);
+            break;
+        case 'expiry':
+            exportExpiry($db, $output);
             break;
         case 'low-stock':
             exportLowStock($db, $output);
@@ -1895,6 +1899,56 @@ function exportLowStock(Database $db, mixed $output)
     // Summary
     fputcsv($output, []);
     fputcsv($output, ['Total Estimated Reorder Cost:', number_format($totalOrderCost, 2, '.', '')]);
+    fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
+}
+
+/**
+ * Export the expiry report — the same batches as the on-screen report
+ * (expiryReport()), for the same status/category filters
+ */
+function exportExpiry(Database $db, mixed $output)
+{
+    $status = $_GET['status'] ?? 'attention';
+    if (!in_array($status, ['attention', 'expired', 'soon', 'unknown', 'all'], true)) {
+        $status = 'attention';
+    }
+    $report = expiryReport($db, $status, (int) ($_GET['category'] ?? 0));
+
+    fputcsv($output, ['EXPIRY REPORT']);
+    fputcsv($output, ['Report Date:', date('Y-m-d H:i:s')]);
+    if (hasMultiBranch()) {
+        fputcsv($output, ['Scope:', viewingBranchLabel()]);
+    }
+    fputcsv($output, ['Expiring soon means within:', expiryWarningDays() . ' days']);
+    fputcsv($output, ['Batches:', count($report['rows'])]);
+    fputcsv($output, []);
+
+    $labels = ['expired' => 'EXPIRED', 'soon' => 'EXPIRING SOON', 'ok' => 'OK', 'unknown' => 'UNKNOWN EXPIRY'];
+    fputcsv($output, array_merge(
+        ['Product Name', 'SKU', 'Category'],
+        hasMultiBranch() ? ['Branch'] : [],
+        ['Batch No.', 'Expiry Date', 'Days to Expiry', 'Status', 'Quantity', 'Unit', 'Value at Cost (' . CURRENCY_HOLDER . ')']
+    ));
+    $total = 0;
+    foreach ($report['rows'] as $b) {
+        $total += $b['value'];
+        fputcsv($output, array_merge(
+            [$b['name'], $b['sku'], $b['category_name'] ?? 'N/A'],
+            hasMultiBranch() ? [$b['branch_name']] : [],
+            [
+                $b['batch_number'] ?? '',
+                $b['expiry_date'] ?? '',
+                $b['days_to_expiry'] ?? '',
+                $labels[$b['expiry_status']] ?? $b['expiry_status'],
+                $b['quantity'],
+                $b['unit'],
+                number_format($b['value'], 2, '.', ''),
+            ]
+        ));
+    }
+
+    fputcsv($output, []);
+    fputcsv($output, ['Total Value at Cost:', number_format($total, 2, '.', '')]);
     fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
 }
 

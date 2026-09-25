@@ -162,6 +162,13 @@
                                 <span class="text-sm font-semibold">
                                     <?= $product['current_stock'] ?> <?= e($product['unit']) ?>
                                 </span>
+                                <?php if ($product['nearest_expiry'] !== null): ?>
+                                    <?php $expiry = batchExpiryStatus($product['nearest_expiry']); ?>
+                                    <div class="text-xs mt-0.5 <?= ['expired' => 'text-red-600 font-semibold', 'soon' => 'text-yellow-700 font-semibold'][$expiry['expiry_status']] ?? 'text-gray-400' ?>"
+                                        title="Earliest expiry among the batches here">
+                                        <?= $expiry['expiry_status'] === 'expired' ? 'Expired' : 'Exp' ?> <?= formatDate($product['nearest_expiry'], 'd M Y') ?>
+                                    </div>
+                                <?php endif; ?>
                             </td>
                             <td class="px-6 py-4 text-center">
                                 <?php

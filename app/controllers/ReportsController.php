@@ -67,6 +67,9 @@ switch ($action) {
     case 'low-stock':
         lowStockReport($db);
         break;
+    case 'expiry':
+        expiryReportPage($db);
+        break;
     case 'dead-stock':
         deadStockReport($db);
         break;
@@ -1391,6 +1394,38 @@ function lowStockReport(Database $db)
     $pageTitle = 'Low Stock Alert';
     $viewingScopeLabel = hasMultiBranch() ? (isCompanyWide() ? 'All Branches' : activeBranchName()) : null;
     include APP_PATH . '/views/reports/low_stock.php';
+}
+
+// ============================================================
+// EXPIRY REPORT
+// ============================================================
+
+/**
+ * Batches of tracked products that have expired or expire soon (or any
+ * status, by filter), at the branches this viewer sees, with the value
+ * at stake. See expiryReport() in functions.php.
+ */
+function expiryReportPage(Database $db)
+{
+    if (!expiryTrackingEnabled()) {
+        redirect(BASE_URL . '/reports', 'error', 'Batch & expiry tracking is switched off in Settings.');
+    }
+
+    $status = $_GET['status'] ?? 'attention';
+    if (!in_array($status, ['attention', 'expired', 'soon', 'unknown', 'all'], true)) {
+        $status = 'attention';
+    }
+    $category = (int) ($_GET['category'] ?? 0);
+
+    $report  = expiryReport($db, $status, $category);
+    $batches = $report['rows'];
+    $summary = $report['summary'];
+
+    $categories = $db->fetchAll("SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name ASC");
+    $warningDays = expiryWarningDays();
+    $pageTitle = 'Expiry Report';
+    $viewingScopeLabel = viewingBranchLabel();
+    include APP_PATH . '/views/reports/expiry.php';
 }
 
 // ============================================================

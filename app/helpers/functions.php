@@ -2006,6 +2006,74 @@ function returnTransferItemStock(Database $db, mixed $transferItemId, mixed $pro
 }
 
 /**
+ * The expiry report: tracked products' batches with stock at the
+ * branches this viewer sees (branchViewSql()), earliest expiry first,
+ * each valued at the product's average cost. Shared by the on-screen
+ * report and its CSV export so the two can never disagree.
+ *
+ * $status: 'attention' (expired or expiring within expiryWarningDays()),
+ * 'expired', 'soon', 'unknown' (no expiry recorded) or 'all'.
+ * Returns ['rows' => [...], 'summary' => counts/quantities/values per
+ * status, over every status but the same branches and category].
+ */
+function expiryReport(Database $db, string $status, int $categoryId = 0): array
+{
+    $today     = date('Y-m-d');
+    $soonUntil = date('Y-m-d', strtotime('+' . expiryWarningDays() . ' days'));
+    [$scopeSql, $scopeParams] = branchViewSql('pb');
+
+    $where  = "WHERE pb.quantity > 0 AND p.track_expiry = 1 $scopeSql";
+    $params = $scopeParams;
+    if ($categoryId > 0) {
+        $where   .= " AND p.category_id = ?";
+        $params[] = $categoryId;
+    }
+    $statusSql = match ($status) {
+        'expired' => ["pb.expiry_date < ?", [$today]],
+        'soon'    => ["pb.expiry_date >= ? AND pb.expiry_date <= ?", [$today, $soonUntil]],
+        'unknown' => ["pb.expiry_date IS NULL", []],
+        'all'     => ["1 = 1", []],
+        default   => ["pb.expiry_date <= ?", [$soonUntil]],   // attention
+    };
+
+    $statusCase = "CASE WHEN pb.expiry_date IS NULL THEN 'unknown'
+                        WHEN pb.expiry_date < ? THEN 'expired'
+                        WHEN pb.expiry_date <= ? THEN 'soon'
+                        ELSE 'ok' END";
+
+    $rows = $db->fetchAll("
+        SELECT pb.id, pb.batch_number, pb.expiry_date, pb.quantity,
+               $statusCase AS expiry_status,
+               DATEDIFF(pb.expiry_date, ?) AS days_to_expiry,
+               p.id AS product_id, p.name, p.sku, p.unit, p.average_cost,
+               pb.quantity * p.average_cost AS value,
+               c.name AS category_name, b.name AS branch_name
+        FROM product_batches pb
+        JOIN products p ON p.id = pb.product_id
+        LEFT JOIN categories c ON c.id = p.category_id
+        LEFT JOIN branches b ON b.id = pb.branch_id
+        $where AND {$statusSql[0]}
+        ORDER BY pb.expiry_date IS NULL, pb.expiry_date, p.name, b.name
+    ", array_merge([$today, $soonUntil, $today], $params, $statusSql[1]));
+
+    $summary = $db->fetchOne("
+        SELECT
+            SUM(s = 'expired') AS expired_batches, COALESCE(SUM(CASE WHEN s = 'expired' THEN v END), 0) AS expired_value,
+            SUM(s = 'soon')    AS soon_batches,    COALESCE(SUM(CASE WHEN s = 'soon'    THEN v END), 0) AS soon_value,
+            SUM(s = 'unknown') AS unknown_batches, COALESCE(SUM(CASE WHEN s = 'unknown' THEN v END), 0) AS unknown_value,
+            COUNT(*)           AS all_batches,     COALESCE(SUM(v), 0) AS all_value
+        FROM (
+            SELECT $statusCase AS s, pb.quantity * p.average_cost AS v
+            FROM product_batches pb
+            JOIN products p ON p.id = pb.product_id
+            $where
+        ) t
+    ", array_merge([$today, $soonUntil], $params));
+
+    return ['rows' => $rows, 'summary' => array_map(fn($v) => $v ?? 0, $summary ?: [])];
+}
+
+/**
  * Put a voided sale line's stock back at a branch — into the batches it
  * was taken from, where recorded (see sellFromBatches()). Anything not
  * recorded (sold before the product was tracked) goes to the
