@@ -886,6 +886,12 @@ function customerCreditSettlementReport(Database $db)
     // adjusted) net positions ────────────────────────────────────────
     $settlementMatrix = settlementMatrix($rows);
 
+    // Positive net the matrix couldn't pair with a receiver: deposits no
+    // other branch has redeemed yet. Owed to nobody — it stays with the
+    // branch that took it until another branch redeems it.
+    $unspentCredit = array_sum(array_map(fn($r) => max(0, $r['net']), $rows))
+        - array_sum(array_column($settlementMatrix, 'amount'));
+
     $pageTitle = 'Customer Credit Settlement';
     $isPartialView = hasMultiBranch() && !isCompanyWide();
     include APP_PATH . '/views/reports/customer_credit_settlement.php';

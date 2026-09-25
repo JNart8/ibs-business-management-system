@@ -35,7 +35,8 @@
     specific deposit funded which specific sale — customer balances are pooled, shared
     company-wide money, not earmarked cash. A positive net means the branch took in more
     deposit cash than it gave away in redemptions — it's <strong>holding cash it must pay
-    out</strong> to whichever branch(es) fulfilled those redemptions. A negative net means
+    out</strong> to whichever branch(es) fulfilled those redemptions (if no other branch has
+    redeemed any, it simply holds the customer's unspent credit and owes nothing). A negative net means
     the branch gave away goods against deposits made elsewhere and collected no matching
     cash — it's <strong>owed and should receive</strong>. The suggested settlement below is
     likewise an <strong>allocation</strong> of these aggregate numbers, not a claim about
@@ -177,7 +178,7 @@
                         <td class="px-4 py-3 text-sm font-medium text-gray-800"><?= e($pair['to_branch_name']) ?></td>
                         <td class="px-4 py-3 text-right text-sm font-bold text-red-600"><?= formatMoney($pair['amount']) ?></td>
                         <td class="px-4 py-3 text-center">
-                            <a href="<?= BASE_URL ?>/financial-accounts/transfer?settlement_type=customer_credit_balancing&period_from=<?= $dateFrom ?>&period_to=<?= $dateTo ?>&amount=<?= $pair['amount'] ?>&note=<?= urlencode($pair['from_branch_name'] . ' → ' . $pair['to_branch_name'] . ' customer-credit settlement for ' . formatDate($dateFrom, 'd M Y') . ' – ' . formatDate($dateTo, 'd M Y')) ?>"
+                            <a href="<?= BASE_URL ?>/financial-accounts/transfer?settlement_type=customer_credit_balancing&period_from=<?= $dateFrom ?>&period_to=<?= $dateTo ?>&amount=<?= $pair['amount'] ?>&from_branch=<?= (int) $pair['from_branch_id'] ?>&to_branch=<?= (int) $pair['to_branch_id'] ?>&note=<?= urlencode($pair['from_branch_name'] . ' → ' . $pair['to_branch_name'] . ' customer-credit settlement for ' . formatDate($dateFrom, 'd M Y') . ' – ' . formatDate($dateTo, 'd M Y')) ?>"
                                 class="text-blue-600 hover:text-blue-800 text-sm font-medium">
                                 Record Settlement →
                             </a>
@@ -194,6 +195,13 @@
             </tbody>
         </table>
     </div>
+    <?php if (($unspentCredit ?? 0) > 0.01): ?>
+    <div class="px-4 py-3 border-t bg-gray-50 text-xs text-gray-500">
+        <strong><?= formatMoney($unspentCredit) ?></strong> of the positive net above is deposits no other
+        branch has redeemed yet. That's customer credit still held by the branch that took it, not a debt
+        to anyone, so it isn't in the suggestion. It only becomes owed once a different branch redeems it.
+    </div>
+    <?php endif; ?>
 </div>
 <?php endif; ?>
 

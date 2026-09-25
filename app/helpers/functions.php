@@ -1545,6 +1545,30 @@ function netOutSettledCustomerCredit(Database $db, array $rows, string $dateFrom
         $rowsByBranch[$row['branch_id']] = $i;
     }
 
+    // A settlement paid from (or into) a branch with no deposits or
+    // redemptions of its own this period still moved that branch's cash,
+    // so it gets a row — otherwise that half of the transfer silently
+    // vanishes and the positions no longer add up. Only for branches the
+    // user may see, same as the issued/redeemed queries.
+    $visible = visibleBranchIds();
+    $rowFor = function ($branchId) use (&$rows, &$rowsByBranch, $visible) {
+        if (!isset($rowsByBranch[$branchId])) {
+            if ($visible !== null && !in_array((int) $branchId, array_map('intval', $visible), true)) {
+                return null;
+            }
+            $rows[] = [
+                'branch_id'   => $branchId,
+                'branch_name' => branchName($branchId),
+                'issued'      => 0.0,
+                'redeemed'    => 0.0,
+                'net'         => 0.0,
+                'settled'     => 0.0,
+            ];
+            $rowsByBranch[$branchId] = array_key_last($rows);
+        }
+        return $rowsByBranch[$branchId];
+    };
+
     $totalSettled = 0.0;
     foreach ($settledTransfers as $t) {
         // A transfer to/from a company-wide account (branch_id NULL,
@@ -1558,15 +1582,15 @@ function netOutSettledCustomerCredit(Database $db, array $rows, string $dateFrom
 
         // from_account_id is where the settlement cash left FROM — the
         // payer, whose net was positive; its surplus shrinks.
-        if (isset($rowsByBranch[$t['from_branch_id']])) {
-            $rows[$rowsByBranch[$t['from_branch_id']]]['net']     -= $amount;
-            $rows[$rowsByBranch[$t['from_branch_id']]]['settled'] += $amount;
+        if (($i = $rowFor($t['from_branch_id'])) !== null) {
+            $rows[$i]['net']     -= $amount;
+            $rows[$i]['settled'] += $amount;
         }
         // to_account_id is where it landed — the receiver, whose net
         // was negative; its deficit shrinks.
-        if (isset($rowsByBranch[$t['to_branch_id']])) {
-            $rows[$rowsByBranch[$t['to_branch_id']]]['net']     += $amount;
-            $rows[$rowsByBranch[$t['to_branch_id']]]['settled'] += $amount;
+        if (($i = $rowFor($t['to_branch_id'])) !== null) {
+            $rows[$i]['net']     += $amount;
+            $rows[$i]['settled'] += $amount;
         }
     }
 

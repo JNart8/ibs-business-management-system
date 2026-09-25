@@ -1092,6 +1092,14 @@ function updateCustomerDeposit(Database $db, mixed $txId)
     $newPaymentMethod = $newAccount['type'] === 'mobile_money' ? 'mobile' : ($newAccount['type'] === 'bank' ? 'bank' : 'cash');
     $userId = $_SESSION['user_id'] ?? null;
 
+    // Moving the money to another account moves the deposit to that
+    // account's branch, exactly as recording it there would have — the
+    // credit settlement report counts deposits by this branch. Left
+    // alone when the account is unchanged, so editing just the amount or
+    // date of a deposit into a shared account doesn't re-tag it to the
+    // editor's active branch.
+    $newBranchId = $newAccountId === $oldAccountId ? $tx['branch_id'] : depositBranchId($newAccount);
+
     try {
         $db->beginTransaction();
 
@@ -1128,9 +1136,10 @@ function updateCustomerDeposit(Database $db, mixed $txId)
                     payment_method = ?,
                     balance_after = balance_before + ?,
                     user_id = ?,
+                    branch_id = ?,
                     created_at = ?
                 WHERE id = ?
-            ", [$newAmount, $newNotes ?: null, $newPaymentMethod, $newAmount, $userId, $newDepositDateSql, $txId]);
+            ", [$newAmount, $newNotes ?: null, $newPaymentMethod, $newAmount, $userId, $newBranchId, $newDepositDateSql, $txId]);
         } else {
             $db->query("
                 UPDATE customer_transactions
@@ -1138,9 +1147,10 @@ function updateCustomerDeposit(Database $db, mixed $txId)
                     notes = ?,
                     payment_method = ?,
                     balance_after = balance_before + ?,
-                    user_id = ?
+                    user_id = ?,
+                    branch_id = ?
                 WHERE id = ?
-            ", [$newAmount, $newNotes ?: null, $newPaymentMethod, $newAmount, $userId, $txId]);
+            ", [$newAmount, $newNotes ?: null, $newPaymentMethod, $newAmount, $userId, $newBranchId, $txId]);
         }
 
         $db->commit();
