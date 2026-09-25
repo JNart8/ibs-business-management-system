@@ -119,10 +119,10 @@ function showCreatePurchase(Database $db)
 
     // Financial accounts for the payment account selector
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $financialAccounts = $db->fetchAll(
+    $financialAccounts = withoutHiddenAccountBalances($db->fetchAll(
         "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
         $acctScopeParams
-    );
+    ));
 
     // Check if a product is preselected
     $preselectedProduct = null;
@@ -682,10 +682,10 @@ function showPurchasePaymentForm(Database $db, mixed $id)
 
     // Financial accounts for the payment account selector
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $accounts = $db->fetchAll(
+    $accounts = withoutHiddenAccountBalances($db->fetchAll(
         "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
         $acctScopeParams
-    );
+    ));
 
     $pageTitle = 'Record Payment';
     include APP_PATH . '/views/purchases/pay.php';
@@ -942,10 +942,10 @@ function showEditPurchase(Database $db, mixed $id)
 
     // Financial accounts for the payment account selector
     [$acctScopeSql, $acctScopeParams] = accountBranchScopeSql();
-    $financialAccounts = $db->fetchAll(
+    $financialAccounts = withoutHiddenAccountBalances($db->fetchAll(
         "SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $acctScopeSql ORDER BY type ASC, name ASC",
         $acctScopeParams
-    );
+    ));
 
     // Find if there is an active account transaction to highlight which account was used
     $oldAcctTx = $db->fetchOne("

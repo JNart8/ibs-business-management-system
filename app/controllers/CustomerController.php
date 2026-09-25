@@ -458,7 +458,7 @@ function showDepositForm(Database $db, mixed $id)
     }
 
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams);
+    $accounts = withoutHiddenAccountBalances($db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams));
     $pageTitle = 'Customer Deposit';
     include APP_PATH . '/views/customers/deposit.php';
 }
@@ -976,7 +976,7 @@ function showEditCustomerDepositForm(Database $db, mixed $txId)
     }
 
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
-    $accounts = $db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams);
+    $accounts = withoutHiddenAccountBalances($db->fetchAll("SELECT id, name, type, provider, balance FROM accounts WHERE is_active = 1 AND is_suspense = 0 $scopeSql ORDER BY name ASC", $scopeParams));
 
     // Retrieve financial account linked to this deposit
     $acctTx = $db->fetchOne("SELECT * FROM account_transactions WHERE reference_type = 'customer_deposit' AND reference_id = ?", [$txId]);

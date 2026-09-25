@@ -200,6 +200,35 @@ function canManageAnything()
 }
 
 /**
+ * May the current user see how much each financial account holds where
+ * an account is picked (POS, purchases, expenses, deposits...)? Always,
+ * unless Settings → show_account_balances_to_all is off — then only
+ * users who can open Financial Accounts, where the balances live anyway.
+ */
+function canSeeAccountBalances(): bool
+{
+    static $toAll = null;
+    if ($toAll === null) {
+        $row = Database::getInstance()->fetchOne("SELECT * FROM settings ORDER BY id ASC LIMIT 1");
+        $toAll = (bool) ($row['show_account_balances_to_all'] ?? 1);
+    }
+    return $toAll || can('financial_accounts.access');
+}
+
+/**
+ * Drop the balance from account rows headed for a page when the current
+ * user mustn't see it, so it isn't in the page source either.
+ */
+function withoutHiddenAccountBalances(array $accounts): array
+{
+    if (canSeeAccountBalances()) return $accounts;
+    return array_map(function ($account) {
+        unset($account['balance']);
+        return $account;
+    }, $accounts);
+}
+
+/**
  * Does the current user have this permission?
  * Usage: if (can('products.manage')) { ... }
  */

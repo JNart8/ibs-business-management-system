@@ -31,9 +31,13 @@
                         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                         <option value="">-- Select Account --</option>
                         <?php foreach ($accounts as $account): ?>
-                            <option value="<?= $account['id'] ?>" data-balance="<?= $account['balance'] ?>">
-                                <?= e($account['name']) ?> (Balance: <?= formatMoney($account['balance']) ?>)
-                            </option>
+                            <?php if (isset($account['balance'])): ?>
+                                <option value="<?= $account['id'] ?>" data-balance="<?= $account['balance'] ?>">
+                                    <?= e($account['name']) ?> (Balance: <?= formatMoney($account['balance']) ?>)
+                                </option>
+                            <?php else: ?>
+                                <option value="<?= $account['id'] ?>"><?= e($account['name']) ?></option>
+                            <?php endif; ?>
                         <?php endforeach; ?>
                     </select>
                     <div class="text-xs text-gray-500 mt-1" id="account_balance_text"></div>
@@ -106,7 +110,8 @@
         const selectedOption = select.options[select.selectedIndex];
         const balanceText = document.getElementById('account_balance_text');
         
-        if (selectedOption.value) {
+        // No data-balance when this user mustn't see account balances
+        if (selectedOption.value && selectedOption.hasAttribute('data-balance')) {
             const balance = parseFloat(selectedOption.getAttribute('data-balance'));
             balanceText.innerText = "Available Balance: GHS " + balance.toFixed(2);
         } else {

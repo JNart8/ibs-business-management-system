@@ -93,6 +93,26 @@
         </fieldset>
 
         <fieldset class="mt-6 pt-6 border-t">
+            <legend class="font-semibold text-gray-800">Account balances</legend>
+            <p class="text-sm text-gray-500 mt-1 mb-3">
+                Wherever staff choose an account to pay into or out of — the POS, purchases, expenses,
+                customer and supplier deposits — each account is listed with how much it holds. Turn
+                this off if you'd rather cashiers and other staff didn't see that. They can still
+                choose the account; only people whose role can open Financial Accounts keep seeing
+                the balances.
+            </p>
+            <label class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer">
+                <input type="checkbox" name="show_account_balances_to_all" value="1"
+                    <?= ($settings['show_account_balances_to_all'] ?? 1) ? 'checked' : '' ?>
+                    class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                <span>
+                    <span class="block font-medium">Show account balances to all staff</span>
+                    <span class="text-sm text-gray-500">Uncheck to show them only to roles with Financial Accounts access.</span>
+                </span>
+            </label>
+        </fieldset>
+
+        <fieldset class="mt-6 pt-6 border-t">
             <legend class="font-semibold text-gray-800">Batch &amp; expiry tracking</legend>
             <p class="text-sm text-gray-500 mt-1 mb-3">
                 For businesses selling goods that expire — medicines, food, agro-chemicals. Once on,

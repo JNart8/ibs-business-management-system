@@ -21,6 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect(BASE_URL . '/settings', 'error', 'Invalid discount type.');
     }
     $posDefaultWalkin = isset($_POST['pos_default_walkin']) ? 1 : 0;
+    $balancesToAll    = isset($_POST['show_account_balances_to_all']) ? 1 : 0;
     $trackExpiry      = isset($_POST['track_expiry']) ? 1 : 0;
     $warningDays      = (int) ($_POST['expiry_warning_days'] ?? 90);
     if ($warningDays < 1 || $warningDays > 730) {
@@ -49,15 +50,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $db->query(
         "UPDATE settings
-         SET sale_discount_type = ?, pos_default_walkin = ?, timezone = ?,
-             track_expiry = ?, expiry_warning_days = ?, expired_sales = ?
+         SET sale_discount_type = ?, pos_default_walkin = ?, show_account_balances_to_all = ?,
+             timezone = ?, track_expiry = ?, expiry_warning_days = ?, expired_sales = ?
          ORDER BY id ASC LIMIT 1",
-        [$discountType, $posDefaultWalkin, $timezone, $trackExpiry, $warningDays, $expiredSales]
+        [$discountType, $posDefaultWalkin, $balancesToAll, $timezone, $trackExpiry, $warningDays, $expiredSales]
     );
 
     logAudit('settings.update', 'settings', null, [
         'sale_discount_type'  => $discountType,
         'pos_default_walkin'  => (bool) $posDefaultWalkin,
+        'show_account_balances_to_all' => (bool) $balancesToAll,
         'timezone'            => $timezone,
         'track_expiry'        => (bool) $trackExpiry,
         'expiry_warning_days' => $warningDays,
