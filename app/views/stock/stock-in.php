@@ -109,6 +109,32 @@
             </div>
         </div>
 
+        <!-- Batch — only for products tracked by batch & expiry -->
+        <template x-if="selectedProduct && Number(selectedProduct.track_expiry)">
+            <div class="grid grid-cols-2 gap-5 mb-5">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Batch No. <span class="text-gray-400 font-normal">(Optional)</span>
+                    </label>
+                    <input type="text" name="batch_number" maxlength="50"
+                        value="<?= e(old('batch_number')) ?>"
+                        placeholder="e.g. A1234"
+                        class="w-full px-4 py-2.5 border border-gray-300 rounded-lg
+                                  focus:ring-2 focus:ring-green-500 focus:border-transparent">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Expiry Date <span class="text-red-500">*</span>
+                    </label>
+                    <input type="date" name="expiry_date" required
+                        min="<?= date('Y-m-d') ?>"
+                        value="<?= e(old('expiry_date')) ?>"
+                        class="w-full px-4 py-2.5 border border-gray-300 rounded-lg
+                                  focus:ring-2 focus:ring-green-500 focus:border-transparent">
+                </div>
+            </div>
+        </template>
+
         <!-- New stock preview -->
         <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-5"
             x-show="selectedProduct && quantity > 0" x-cloak>

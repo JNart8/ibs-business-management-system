@@ -251,6 +251,13 @@
                                 <?php if (!empty($movement['notes'])): ?>
                                     <div class="text-xs text-gray-400 italic"><?= e($movement['notes']) ?></div>
                                 <?php endif; ?>
+                                <?php if ($movement['batch_number'] !== null || $movement['expiry_date'] !== null): ?>
+                                    <div class="text-xs text-gray-500">
+                                        <?= $movement['batch_number'] !== null ? 'Batch ' . e($movement['batch_number']) : '' ?>
+                                        <?= $movement['batch_number'] !== null && $movement['expiry_date'] !== null ? ' · ' : '' ?>
+                                        <?= $movement['expiry_date'] !== null ? 'Expires ' . formatDate($movement['expiry_date'], 'd M Y') : '' ?>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="text-right">
                                 <div class="font-bold text-gray-700">

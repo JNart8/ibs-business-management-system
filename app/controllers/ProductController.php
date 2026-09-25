@@ -209,6 +209,16 @@ function createProduct(Database $db)
         $errors[] = 'Barcode already exists';
     }
 
+    $trackExpiry  = expiryTrackingEnabled() && isset($_POST['track_expiry']);
+    $openingBatch = null;
+    if ($trackExpiry && $current_stock > 0) {
+        $parsed = parseBatchInput($_POST['opening_batch_number'] ?? '', $_POST['opening_expiry_date'] ?? '', true);
+        if ($parsed['error']) {
+            $errors[] = 'Opening stock: ' . $parsed['error'];
+        }
+        $openingBatch = $parsed['batch'];
+    }
+
     if (!empty($errors)) {
         $_SESSION['old_input'] = $_POST;
         redirect(BASE_URL . '/products/create', 'error', implode(', ', $errors));
@@ -237,7 +247,7 @@ function createProduct(Database $db)
         $productId = $db->lastInsertId();
 
         // Before the opening stock, so it's filed as a batch
-        if (expiryTrackingEnabled() && isset($_POST['track_expiry'])) {
+        if ($trackExpiry) {
             setProductTrackExpiry($db, $productId, true);
         }
 
@@ -245,14 +255,18 @@ function createProduct(Database $db)
             $branchId = activeBranchId();
             // Seeds this branch's stock and keeps products.current_stock
             // (the maintained total) in sync automatically.
-            setBranchStock($db, $productId, $branchId, $current_stock);
+            setBranchStock($db, $productId, $branchId, $current_stock, $openingBatch);
 
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     previous_stock, new_stock, notes, user_id, branch_id)
-                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?, ?)
-            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null, $branchId]);
+                     previous_stock, new_stock, notes, batch_number, expiry_date, user_id, branch_id)
+                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?, ?, ?, ?)
+            ", [
+                $productId, $current_stock, $current_stock,
+                $openingBatch['batch_number'] ?? null, $openingBatch['expiry_date'] ?? null,
+                $_SESSION['user_id'] ?? null, $branchId
+            ]);
         }
 
         redirect(BASE_URL . '/products', 'success', 'Product created successfully');
@@ -520,6 +534,8 @@ function viewProduct(Database $db, mixed $id)
             sm.previous_stock,
             sm.new_stock,
             sm.notes,
+            sm.batch_number,
+            sm.expiry_date,
             sm.created_at,
             u.username as recorded_by,
             s.company_name as supplier_name
@@ -597,7 +613,7 @@ function searchProducts(Database $db)
 
     $products = $db->fetchAll("
         SELECT p.id, p.sku, p.barcode, p.name, p.selling_price, p.unit, p.cost_price,
-               COALESCE(bs.quantity, 0) AS current_stock
+               COALESCE(bs.quantity, 0) AS current_stock, " . trackExpirySql() . " AS track_expiry
         FROM products p
         LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where

@@ -143,7 +143,8 @@
                         'purchases' => ['invoice_number', 'payment_method', 'payment_account', 'purchase_date', 'notes', 'discount_percent', 'vat_percent']
                     ];
                     if (expiryTrackingEnabled()) {
-                        $optional['products'][] = 'track_expiry';
+                        array_push($optional['products'], 'track_expiry', 'batch_number', 'expiry_date');
+                        array_push($optional['purchases'], 'batch_number', 'expiry_date');
                     }
                     ?>
                     <?php foreach ($optional[$type] as $field): ?>
@@ -174,7 +175,8 @@
                         <li>• <strong>current_stock</strong> is set at your active branch (<?= e(activeBranchName()) ?>)</li>
                         <li>• Blank cost_price = 0, reorder_level = 10, unit = pcs</li>
                         <?php if (expiryTrackingEnabled()): ?>
-                            <li>• <strong>track_expiry</strong>: yes or no — tracks the product's stock by batch and expiry date. Blank = no for a new product, unchanged for an existing one. Imported stock is recorded with an unknown expiry date.</li>
+                            <li>• <strong>track_expiry</strong>: yes or no — tracks the product's stock by batch and expiry date. Blank = no for a new product, unchanged for an existing one.</li>
+                            <li>• <strong>batch_number</strong> / <strong>expiry_date</strong> (YYYY-MM-DD): the batch of the stock this row adds, for tracked products only. Blank = unknown expiry.</li>
                         <?php endif; ?>
                     <?php endif; ?>
                     <?php if ($type === 'suppliers'): ?>
@@ -191,6 +193,9 @@
                         <li>• <strong>payment_account</strong>: account name <em>or</em> account number to pay from. If empty, uses your branch's account for the payment method. The suspense account can't be used.</li>
                         <li>• <strong>purchase_date</strong>: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS, or empty for now.</li>
                         <li>• Stock is received at your active branch (<?= e(activeBranchName()) ?>).</li>
+                        <?php if (expiryTrackingEnabled()): ?>
+                            <li>• <strong>batch_number</strong> / <strong>expiry_date</strong> (YYYY-MM-DD): the batch each row delivers, for products tracked by batch only. Blank = unknown expiry. The same product can be on several rows of one invoice, one per batch.</li>
+                        <?php endif; ?>
                     <?php endif; ?>
                 </ul>
             </div>

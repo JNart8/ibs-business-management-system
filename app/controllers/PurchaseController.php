@@ -102,6 +102,7 @@ function showCreatePurchase(Database $db)
     $quickProducts = $db->fetchAll("
         SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, 
                COALESCE(bs.quantity, 0) AS current_stock, p.unit, p.supplier_id,
+               " . trackExpirySql() . " AS track_expiry,
                s.company_name AS supplier_name
         FROM products p
         LEFT JOIN suppliers s ON p.supplier_id = s.id
@@ -130,6 +131,7 @@ function showCreatePurchase(Database $db)
         $preselectedProduct = $db->fetchOne("
             SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, 
                    COALESCE(bs.quantity, 0) AS current_stock, p.unit, p.supplier_id,
+               " . trackExpirySql() . " AS track_expiry,
                    s.company_name AS supplier_name
             FROM products p
             LEFT JOIN suppliers s ON p.supplier_id = s.id
@@ -220,6 +222,12 @@ function completePurchase(Database $db)
             return;
         }
 
+        [$batch, $batchError] = purchaseLineBatch($product, $item, $purchaseDate ?? date('Y-m-d'));
+        if ($batchError) {
+            echo json_encode(['success' => false, 'message' => $batchError]);
+            return;
+        }
+
         $lineTotal        = ($unitCost * $qty) * (1 - $itemDisc / 100);
         $subtotal        += $lineTotal;
         $validatedItems[] = [
@@ -228,6 +236,7 @@ function completePurchase(Database $db)
             'unitCost'  => $unitCost,
             'discount'  => $itemDisc,
             'lineTotal' => $lineTotal,
+            'batch'     => $batch,
         ];
 
         $itemsData[] = [
@@ -238,6 +247,8 @@ function completePurchase(Database $db)
             'unit_cost'        => $unitCost,
             'discount_percent' => $itemDisc,
             'line_total'       => $lineTotal,
+            'batch_number'     => $batch['batch_number'] ?? null,
+            'expiry_date'      => $batch['expiry_date'] ?? null,
         ];
     }
 
@@ -335,14 +346,17 @@ function completePurchase(Database $db)
 
         // 2. Insert purchase items, update stock & costs
         foreach ($validatedItems as $vi) {
-            $p = $vi['product'];
+            // Fresh, not $vi['product']: with one line per batch, an
+            // earlier line of this purchase may already have moved this
+            // product's stock and average cost
+            $p = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$vi['product']['id']]);
 
             // Insert line item
             $db->query("
                 INSERT INTO purchase_items
                     (purchase_id, product_id, product_name, quantity,
-                     unit_cost, discount_percent, line_total)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                     unit_cost, discount_percent, line_total, batch_number, expiry_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $purchaseId,
                 $p['id'],
@@ -350,7 +364,9 @@ function completePurchase(Database $db)
                 $vi['qty'],
                 $vi['unitCost'],
                 $vi['discount'],
-                $vi['lineTotal']
+                $vi['lineTotal'],
+                $vi['batch']['batch_number'] ?? null,
+                $vi['batch']['expiry_date'] ?? null
             ]);
 
             // Calculate new weighted average cost — this is a company-wide
@@ -386,15 +402,19 @@ function completePurchase(Database $db)
             $branchIdForPurchase = activeBranchId();
             $branchPrevStock = getBranchStock($p['id'], $branchIdForPurchase);
             $branchNewStock  = $branchPrevStock + $newQty;
-            adjustBranchStock($db, $p['id'], $branchIdForPurchase, $newQty);
+            adjustBranchStock($db, $p['id'], $branchIdForPurchase, $newQty, $vi['batch']);
 
             // Log stock movement
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, user_id, branch_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
-            ", [$p['id'], $newQty, $purchaseId, $branchPrevStock, $branchNewStock, $userId, $branchIdForPurchase]);
+                     reference_id, previous_stock, new_stock, batch_number, expiry_date, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?, ?)
+            ", [
+                $p['id'], $newQty, $purchaseId, $branchPrevStock, $branchNewStock,
+                $vi['batch']['batch_number'] ?? null, $vi['batch']['expiry_date'] ?? null,
+                $userId, $branchIdForPurchase
+            ]);
 
             // Log cost history
             $changePercent = $currentAvgCost > 0
@@ -619,7 +639,8 @@ function viewPurchase(Database $db, mixed $id)
     }
 
     $items = $db->fetchAll("
-        SELECT pi.*, p.sku, p.unit, COALESCE(bs.quantity, 0) AS current_stock
+        SELECT pi.*, p.sku, p.unit, COALESCE(bs.quantity, 0) AS current_stock,
+               " . trackExpirySql() . " AS track_expiry
         FROM purchase_items pi
         LEFT JOIN products p ON pi.product_id = p.id
         LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
@@ -842,6 +863,22 @@ function printPurchaseReceipt(Database $db, mixed $id)
 // HELPERS
 // ============================================================
 
+/**
+ * The batch a purchase line delivers, from its batch_number /
+ * expiry_date: [$batch, $error]. Asked only for products tracked by
+ * batch (while tracking is on in Settings), where the expiry date is
+ * required unless $expiryRequired is false; $batch is null for every
+ * other product.
+ */
+function purchaseLineBatch(array $product, array $item, string $receivedOn, bool $expiryRequired = true): array
+{
+    if (!expiryTrackingEnabled() || empty($product['track_expiry'])) {
+        return [null, null];
+    }
+    $parsed = parseBatchInput($item['batch_number'] ?? '', $item['expiry_date'] ?? '', $expiryRequired, substr($receivedOn, 0, 10));
+    return [$parsed['batch'], $parsed['error'] ? "{$product['name']}: {$parsed['error']}" : null];
+}
+
 function generatePurchaseNumber(Database $db)
 {
     $prefix = 'PUR-' . date('Ymd') . '-';
@@ -868,7 +905,8 @@ function showEditPurchase(Database $db, mixed $id)
     }
 
     $purchaseItems = $db->fetchAll("
-        SELECT pi.*, p.sku, p.unit, COALESCE(bs.quantity, 0) AS current_stock
+        SELECT pi.*, p.sku, p.unit, COALESCE(bs.quantity, 0) AS current_stock,
+               " . trackExpirySql() . " AS track_expiry
         FROM purchase_items pi
         LEFT JOIN products p ON pi.product_id = p.id
         LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
@@ -887,6 +925,7 @@ function showEditPurchase(Database $db, mixed $id)
     $quickProducts = $db->fetchAll("
         SELECT p.id, p.name, p.sku, p.cost_price, p.average_cost, 
                COALESCE(bs.quantity, 0) AS current_stock, p.unit, p.supplier_id,
+               " . trackExpirySql() . " AS track_expiry,
                s.company_name AS supplier_name
         FROM products p
         LEFT JOIN suppliers s ON p.supplier_id = s.id
@@ -966,14 +1005,28 @@ function updatePurchase(Database $db, mixed $id)
         return;
     }
 
-    // Load old items for comparison
+    // Load old items for comparison, per product: a product can be on
+    // more than one line (one per batch received), so quantity is the
+    // lines' total and unit_cost their quantity-weighted average —
+    // quantity × unit_cost is then the product's total value, which is
+    // what the cost calculations below need.
     $oldItems = $db->fetchAll("SELECT * FROM purchase_items WHERE purchase_id = ?", [$id]);
     $oldItemsMap = [];
     foreach ($oldItems as $oi) {
-        $oldItemsMap[intval($oi['product_id'])] = $oi;
+        $pid = intval($oi['product_id']);
+        $oldItemsMap[$pid]['lines'][]  = $oi;
+        $oldItemsMap[$pid]['quantity'] = ($oldItemsMap[$pid]['quantity'] ?? 0) + floatval($oi['quantity']);
+        $oldItemsMap[$pid]['value']    = ($oldItemsMap[$pid]['value'] ?? 0) + floatval($oi['quantity']) * floatval($oi['unit_cost']);
+        // Received before the product was tracked: don't insist on an
+        // expiry date just because the purchase is being corrected
+        $oldItemsMap[$pid]['undated']  = ($oldItemsMap[$pid]['undated'] ?? false) || $oi['expiry_date'] === null;
     }
+    foreach ($oldItemsMap as &$old) {
+        $old['unit_cost'] = $old['quantity'] > 0 ? $old['value'] / $old['quantity'] : 0;
+    }
+    unset($old);
 
-    // Map new items
+    // Map new items (same per-product shape: qty, cost, lines)
     $newItemsMap = [];
     $validatedItems = [];
     $subtotal = 0;
@@ -993,10 +1046,20 @@ function updatePurchase(Database $db, mixed $id)
             return;
         }
 
-        $newItemsMap[$productId] = [
-            'qty' => $qty,
-            'cost' => $unitCost
+        [$batch, $batchError] = purchaseLineBatch($product, $item, $purchase['purchase_date'], !($oldItemsMap[$productId]['undated'] ?? false));
+        if ($batchError) {
+            echo json_encode(['success' => false, 'message' => $batchError]);
+            return;
+        }
+
+        $newItemsMap[$productId]['lines'][] = [
+            'quantity'     => $qty,
+            'batch_number' => $batch['batch_number'] ?? null,
+            'expiry_date'  => $batch['expiry_date'] ?? null,
         ];
+        $newItemsMap[$productId]['qty']   = ($newItemsMap[$productId]['qty'] ?? 0) + $qty;
+        $newItemsMap[$productId]['value'] = ($newItemsMap[$productId]['value'] ?? 0) + $qty * $unitCost;
+        $newItemsMap[$productId]['cost']  = $newItemsMap[$productId]['value'] / $newItemsMap[$productId]['qty'];
 
         $lineTotal        = ($unitCost * $qty) * (1 - $itemDisc / 100);
         $subtotal        += $lineTotal;
@@ -1006,6 +1069,7 @@ function updatePurchase(Database $db, mixed $id)
             'unitCost'  => $unitCost,
             'discount'  => $itemDisc,
             'lineTotal' => $lineTotal,
+            'batch'     => $batch,
         ];
 
         $itemsData[] = [
@@ -1016,6 +1080,8 @@ function updatePurchase(Database $db, mixed $id)
             'unit_cost'        => $unitCost,
             'discount_percent' => $itemDisc,
             'line_total'       => $lineTotal,
+            'batch_number'     => $batch['batch_number'] ?? null,
+            'expiry_date'      => $batch['expiry_date'] ?? null,
         ];
     }
 
@@ -1113,14 +1179,16 @@ function updatePurchase(Database $db, mixed $id)
                 WHERE id = ?
             ", [($newQty > 0 ? $newCost : $p['cost_price']), $newAverageCost, ($newQty > 0 ? $newCost : $p['last_purchase_cost']), $pid]);
 
-            // Apply the actual quantity delta to the branch this purchase
+            // Apply the actual quantity change to the branch this purchase
             // belongs to (not the editor's current active branch, and not
             // a global figure) — this is the only place stock quantity
-            // actually moves in this function.
-            $qtyDelta = $newQty - $oldQty;
-            if (abs($qtyDelta) > 0.0001) {
-                adjustBranchStock($db, $pid, $purchaseBranchId, $qtyDelta);
-            }
+            // actually moves in this function. Batch by batch, for a
+            // product tracked by batch.
+            restockPurchaseLines(
+                $db, $pid, $purchaseBranchId,
+                $oldItemsMap[$pid]['lines'] ?? [],
+                $newItemsMap[$pid]['lines'] ?? []
+            );
         }
 
         // 2. Delete old items & stock movements & cost history
@@ -1135,8 +1203,8 @@ function updatePurchase(Database $db, mixed $id)
             $db->query("
                 INSERT INTO purchase_items
                     (purchase_id, product_id, product_name, quantity,
-                     unit_cost, discount_percent, line_total)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                     unit_cost, discount_percent, line_total, batch_number, expiry_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ", [
                 $id,
                 $p['id'],
@@ -1144,7 +1212,9 @@ function updatePurchase(Database $db, mixed $id)
                 $vi['qty'],
                 $vi['unitCost'],
                 $vi['discount'],
-                $vi['lineTotal']
+                $vi['lineTotal'],
+                $vi['batch']['batch_number'] ?? null,
+                $vi['batch']['expiry_date'] ?? null
             ]);
 
             // Log stock movement — using this branch's actual current
@@ -1156,9 +1226,13 @@ function updatePurchase(Database $db, mixed $id)
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     reference_id, previous_stock, new_stock, user_id, branch_id)
-                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
-            ", [$p['id'], $vi['qty'], $id, $currentStockBefore, $currentStockAfter, $userId, $purchaseBranchId]);
+                     reference_id, previous_stock, new_stock, batch_number, expiry_date, user_id, branch_id)
+                VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?, ?)
+            ", [
+                $p['id'], $vi['qty'], $id, $currentStockBefore, $currentStockAfter,
+                $vi['batch']['batch_number'] ?? null, $vi['batch']['expiry_date'] ?? null,
+                $userId, $purchaseBranchId
+            ]);
 
             // Log cost history — $newAverageCostByProduct was populated per
             // product id in the loop above (§1, where the same value was
@@ -1358,13 +1432,17 @@ function voidPurchase(Database $db, mixed $id)
     $purchaseBranchId = $purchase['branch_id'] ?? activeBranchId();
 
     // Validate that deducting the purchased stock will not result in negative stock
-    // at the branch this purchase actually belongs to.
+    // at the branch this purchase actually belongs to. Per product, not per
+    // line — a product can be on several lines (one per batch).
+    $qtyByProduct = [];
     foreach ($items as $item) {
-        $p = $db->fetchOne("SELECT name FROM products WHERE id = ?", [$item['product_id']]);
+        $qtyByProduct[$item['product_id']] = ($qtyByProduct[$item['product_id']] ?? 0) + floatval($item['quantity']);
+    }
+    foreach ($qtyByProduct as $productId => $qty) {
+        $p = $db->fetchOne("SELECT name FROM products WHERE id = ?", [$productId]);
         if (!$p) continue;
 
-        $branchStock = getBranchStock($item['product_id'], $purchaseBranchId);
-        $qty = floatval($item['quantity']);
+        $branchStock = getBranchStock($productId, $purchaseBranchId);
         if ($branchStock - $qty < 0) {
             redirect(BASE_URL . '/purchases/view/' . $id, 'error', "Cannot void purchase. Deducting {$qty} from '{$p['name']}' would reduce " . branchName($purchaseBranchId) . "'s stock below zero (Current stock: {$branchStock}).");
             return;
@@ -1414,8 +1492,10 @@ function voidPurchase(Database $db, mixed $id)
             ", [$newAverageCost, $prevCost, $prevDate, $pid]);
 
             // Deduct the actual quantity from the branch this purchase
-            // belongs to (also keeps products.current_stock, used above, in sync)
-            adjustBranchStock($db, $pid, $purchaseBranchId, -$oldQty);
+            // belongs to (also keeps products.current_stock, used above, in
+            // sync) — out of the batch this line delivered, for a product
+            // tracked by batch
+            restockPurchaseLines($db, $pid, $purchaseBranchId, [$item], []);
         }
 
         // 2. Revert supplier balance and total purchases
