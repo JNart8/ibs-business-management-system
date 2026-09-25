@@ -611,15 +611,17 @@ function searchProducts(Database $db)
         $params[] = $catId;
     }
 
+    [$expiredSql, $expiredParams] = expiredStockSql($branchId);
     $products = $db->fetchAll("
         SELECT p.id, p.sku, p.barcode, p.name, p.selling_price, p.unit, p.cost_price,
-               COALESCE(bs.quantity, 0) AS current_stock, " . trackExpirySql() . " AS track_expiry
+               COALESCE(bs.quantity, 0) AS current_stock, " . trackExpirySql() . " AS track_expiry,
+               $expiredSql AS expired_stock
         FROM products p
         LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where
         ORDER BY p.name ASC
         LIMIT 20
-    ", $params);
+    ", array_merge($expiredParams, $params));
 
     echo json_encode($products);
 }

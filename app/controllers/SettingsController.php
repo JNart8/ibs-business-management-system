@@ -26,6 +26,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($warningDays < 1 || $warningDays > 730) {
         redirect(BASE_URL . '/settings', 'error', 'The expiring-soon warning must be between 1 and 730 days.');
     }
+    $expiredSales = $_POST['expired_sales'] ?? 'block';
+    if (!in_array($expiredSales, ['block', 'warn'], true)) {
+        redirect(BASE_URL . '/settings', 'error', 'Invalid choice for selling expired stock.');
+    }
 
     // Must be a real IANA identifier (the Settings form only ever offers
     // ones from this same list) — never trust it blind, since it's about
@@ -46,9 +50,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $db->query(
         "UPDATE settings
          SET sale_discount_type = ?, pos_default_walkin = ?, timezone = ?,
-             track_expiry = ?, expiry_warning_days = ?
+             track_expiry = ?, expiry_warning_days = ?, expired_sales = ?
          ORDER BY id ASC LIMIT 1",
-        [$discountType, $posDefaultWalkin, $timezone, $trackExpiry, $warningDays]
+        [$discountType, $posDefaultWalkin, $timezone, $trackExpiry, $warningDays, $expiredSales]
     );
 
     logAudit('settings.update', 'settings', null, [
@@ -57,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'timezone'            => $timezone,
         'track_expiry'        => (bool) $trackExpiry,
         'expiry_warning_days' => $warningDays,
+        'expired_sales'       => $expiredSales,
     ], true);
 
     // Takes effect immediately for everyone from their NEXT request — this

@@ -99,15 +99,17 @@ function showPOS(Database $db)
     }
 
     // Recent products for quick access (last 12 most sold)
+    [$expiredSql, $expiredParams] = expiredStockSql(activeBranchId());
     $quickProducts = $db->fetchAll("
     SELECT p.id, p.name, p.sku, p.selling_price, p.unit,
-           COALESCE(bs.quantity, 0) AS current_stock
+           COALESCE(bs.quantity, 0) AS current_stock,
+           $expiredSql AS expired_stock
     FROM products p
     LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
     WHERE p.is_active = 1 AND COALESCE(bs.quantity, 0) > 0
     ORDER BY p.id DESC
     LIMIT 12
-    ", [activeBranchId()]);
+    ", array_merge($expiredParams, [activeBranchId()]));
 
 
     // Most-sold products (top 12 by sales volume)
@@ -313,6 +315,29 @@ function completeSale(Database $db)
         return;
     }
 
+    // Expired batches don't count as available while Settings blocks
+    // selling them. Per product, since a product can be on several lines.
+    if (expiredSalesBlocked()) {
+        $qtyByProduct = [];
+        foreach ($validatedItems as $vi) {
+            $qtyByProduct[$vi['product']['id']] = ($qtyByProduct[$vi['product']['id']] ?? 0) + $vi['qty'];
+        }
+        foreach ($validatedItems as $vi) {
+            $p = $vi['product'];
+            if (!isset($qtyByProduct[$p['id']]) || empty($p['track_expiry'])) continue;
+            $split = batchStockSplit($db, $p['id'], activeBranchId());
+            if ($qtyByProduct[$p['id']] > $split['in_date'] + 0.0005) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => "Only " . formatQty($split['in_date']) . " {$p['unit']} of {$p['name']} at " . activeBranchName()
+                        . " is within its expiry date (" . formatQty($split['expired']) . " expired). Expired stock can't be sold."
+                ]);
+                return;
+            }
+            unset($qtyByProduct[$p['id']]);
+        }
+    }
+
     if ($discountType === 'percentage' && $discountValue > 100) {
         echo json_encode(['success' => false, 'message' => 'Percentage discount cannot exceed 100%']);
         return;
@@ -446,14 +471,17 @@ function completeSale(Database $db)
                 $vi['discountAmount'],
                 $vi['lineTotal']
             ]);
+            $saleItemId = $db->lastInsertId();
 
             $branchIdForSale = activeBranchId();
             $prevStock = getBranchStock($p['id'], $branchIdForSale);
             $newStock  = $prevStock - $vi['qty'];
 
             // Update this branch's stock (also keeps products.current_stock,
-            // the company-wide total, in sync automatically)
-            adjustBranchStock($db, $p['id'], $branchIdForSale, -$vi['qty']);
+            // the company-wide total, in sync automatically) — earliest
+            // expiry first, recording the batches used, for a product
+            // tracked by batch
+            sellFromBatches($db, $saleItemId, $p['id'], $branchIdForSale, $vi['qty']);
 
             // Log movement
             if (!empty($saleDate)) {
@@ -860,6 +888,21 @@ function viewSale(Database $db, mixed $id)
         LEFT JOIN products p ON si.product_id = p.id
         WHERE si.sale_id = ?
     ", [$id]);
+
+    // The batches each line was sold from (tracked products only), so the
+    // sale can be traced to what the customer actually received
+    if (expiryTrackingEnabled()) {
+        foreach ($items as &$item) {
+            $item['batches'] = $db->fetchAll("
+                SELECT pb.batch_number, pb.expiry_date, sib.quantity
+                FROM sale_item_batches sib
+                JOIN product_batches pb ON pb.id = sib.batch_id
+                WHERE sib.sale_item_id = ?
+                ORDER BY pb.expiry_date IS NOT NULL, pb.expiry_date, pb.id
+            ", [$item['id']]);
+        }
+        unset($item);
+    }
 
     // Payment history for this sale
     $payments = $db->fetchAll("
@@ -1633,7 +1676,7 @@ function voidSale(Database $db, mixed $id)
             $prevStock = getBranchStock($item['product_id'], $voidBranchId);
             $newStock  = $prevStock + $item['quantity'];
 
-            adjustBranchStock($db, $item['product_id'], $voidBranchId, $item['quantity']);
+            returnSaleItemStock($db, $item, $voidBranchId);
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,

@@ -131,7 +131,7 @@
                                             hover:bg-green-50 cursor-pointer border-b last:border-0">
                                     <div>
                                         <div class="font-medium text-gray-800 text-sm" x-text="p.name"></div>
-                                        <div class="text-xs text-gray-400" x-text="'SKU: ' + p.sku + ' · Stock: ' + p.current_stock + ' ' + p.unit"></div>
+                                        <div class="text-xs text-gray-400" x-text="'SKU: ' + p.sku + ' · Stock: ' + p.current_stock + ' ' + p.unit + (parseFloat(p.expired_stock) > 0 ? ' (' + parseFloat(p.expired_stock) + ' expired)' : '')"></div>
                                     </div>
                                     <div class="text-right ml-4">
                                         <div class="font-bold text-green-600 text-sm"
@@ -164,7 +164,7 @@
             <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
                 <template x-for="p in quickProducts" :key="p.id">
                     <button @click="addToCart(p)"
-                        :disabled="p.current_stock <= 0"
+                        :disabled="sellable(p) <= 0"
                         class="bg-white rounded-lg shadow p-2 text-left hover:shadow-md
                                    hover:border-blue-400 border-2 border-transparent transition
                                    disabled:opacity-50 disabled:cursor-not-allowed">
@@ -177,6 +177,8 @@
                                 x-text="p.current_stock + ' ' + p.unit">
                             </span>
                         </div>
+                        <div x-show="parseFloat(p.expired_stock) > 0" class="text-[10px] text-red-600 mt-0.5"
+                            x-text="parseFloat(p.expired_stock) + ' ' + p.unit + ' expired'"></div>
                     </button>
                 </template>
             </div>
@@ -232,6 +234,9 @@
                                 <div class="flex-1 min-w-0">
                                     <div class="font-medium text-gray-800 text-xs truncate" x-text="item.name"></div>
                                     <div class="text-[10px] text-gray-400" x-text="formatMoney(item.price)"></div>
+                                    <div x-show="item.quantity > item.inDate" class="text-[10px] font-semibold text-red-600">
+                                        ⚠ Includes expired stock
+                                    </div>
                                 </div>
 
                                 <!-- Wider quantity control for high-volume products -->
@@ -665,6 +670,8 @@
             selectedCustomer: <?= json_encode($walkIn) ?>,
             saleDiscount: 0,
             discountType: <?= json_encode(($settings['sale_discount_type'] ?? 'percentage') === 'flat' ? 'flat' : 'percentage') ?>,
+            // Settings → expired batches can't be sold (else sold with a warning)
+            blockExpired: <?= expiredSalesBlocked() ? 'true' : 'false' ?>,
             paymentMethod: 'cash',
             amountPaid: 0,
             saleNotes: '',
@@ -727,14 +734,24 @@
             },
 
             // ── Cart ────────────────────────────────────────
+            // How much of a product can be sold: all its stock, less any
+            // expired batches while Settings blocks selling them
+            sellable(product) {
+                const expired = this.blockExpired ? (parseFloat(product.expired_stock) || 0) : 0;
+                return parseFloat(product.current_stock) - expired;
+            },
+
             addToCart(product) {
-                if (product.current_stock <= 0) {
-                    alert(product.name + ' is out of stock!');
+                const sellable = this.sellable(product);
+                if (sellable <= 0) {
+                    alert(product.current_stock > 0
+                        ? product.name + ': all stock here is expired and can\'t be sold.'
+                        : product.name + ' is out of stock!');
                     return;
                 }
                 const existing = this.cart.find(i => i.product_id === product.id);
                 if (existing) {
-                    if (existing.quantity < product.current_stock) existing.quantity++;
+                    if (existing.quantity < sellable) existing.quantity++;
                     else alert('Maximum stock reached for ' + product.name);
                 } else {
                     this.cart.push({
@@ -744,7 +761,9 @@
                         unit: product.unit,
                         price: parseFloat(product.selling_price),
                         quantity: 1,
-                        stock: parseFloat(product.current_stock),
+                        stock: sellable,
+                        // In-date stock: selling more dips into expired batches (warn mode)
+                        inDate: parseFloat(product.current_stock) - (parseFloat(product.expired_stock) || 0),
                         discount: 0,
                     });
                 }

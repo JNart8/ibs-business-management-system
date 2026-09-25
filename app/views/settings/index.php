@@ -121,6 +121,19 @@
             <p class="text-xs text-gray-400 mt-1">
                 90 days suits most pharmacies — suppliers often only take returns up to 3 months before expiry.
             </p>
+
+            <?php $expiredSales = $settings['expired_sales'] ?? 'block'; ?>
+            <div class="text-sm font-medium text-gray-700 mt-4 mb-2">Selling expired stock</div>
+            <div class="space-y-3">
+                <label class="flex gap-3 rounded-lg border p-4 cursor-pointer">
+                    <input type="radio" name="expired_sales" value="block" <?= $expiredSales !== 'warn' ? 'checked' : '' ?>>
+                    <span><span class="block font-medium">Don't allow it</span><span class="text-sm text-gray-500">Expired batches can't be sold at the POS. Recommended — and what pharmacies need.</span></span>
+                </label>
+                <label class="flex gap-3 rounded-lg border p-4 cursor-pointer">
+                    <input type="radio" name="expired_sales" value="warn" <?= $expiredSales === 'warn' ? 'checked' : '' ?>>
+                    <span><span class="block font-medium">Allow, with a warning</span><span class="text-sm text-gray-500">In-date stock is still sold first; expired stock only once it runs out, flagged in the cart.</span></span>
+                </label>
+            </div>
         </fieldset>
         <div class="mt-6 flex justify-end">
             <button class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2 rounded-lg">Save setting</button>

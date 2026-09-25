@@ -73,6 +73,13 @@
                                 <?php if (!empty($item['sku'])): ?>
                                     <div class="text-xs text-gray-400"><?= e($item['sku']) ?></div>
                                 <?php endif; ?>
+                                <?php foreach ($item['batches'] ?? [] as $batch): ?>
+                                    <div class="text-xs text-gray-500">
+                                        <?= $batch['batch_number'] !== null ? 'Batch ' . e($batch['batch_number']) : 'No batch no.' ?>
+                                        · <?= $batch['expiry_date'] !== null ? 'Exp ' . formatDate($batch['expiry_date'], 'd M Y') : 'Expiry unknown' ?>
+                                        <?php if (count($item['batches']) > 1): ?>· <?= formatQty($batch['quantity']) ?> <?= e($item['unit'] ?? '') ?><?php endif; ?>
+                                    </div>
+                                <?php endforeach; ?>
                             </td>
                             <td class="px-4 py-3 text-center text-sm">
                                 <?= $item['quantity'] ?> <?= e($item['unit'] ?? '') ?>
