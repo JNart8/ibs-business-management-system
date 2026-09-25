@@ -152,10 +152,71 @@ function storeAccount(Database $db)
     }
 }
 
+/**
+ * The paying and receiving branch of a customer-credit settlement opened
+ * from the settlement report's "Record Settlement" link, or null for an
+ * ordinary transfer (or a settlement with no branches named).
+ */
+function settlementBranchPair(array $input): ?array
+{
+    if (($input['settlement_type'] ?? '') !== 'customer_credit_balancing') {
+        return null;
+    }
+    $from = (int) ($input['from_branch'] ?? 0);
+    $to   = (int) ($input['to_branch']   ?? 0);
+    return ($from > 0 && $to > 0 && $from !== $to) ? ['from' => $from, 'to' => $to] : null;
+}
+
+/**
+ * A branch's own accounts a settlement can move money through, cash
+ * first then by name. Only accounts owned by that branch count:
+ * netOutSettledCustomerCredit() ignores transfers touching a
+ * company-wide account (branch_id NULL), so a settlement paid through
+ * one would never net out of the report.
+ */
+function settlementAccountsFor(array $accounts, int $branchId): array
+{
+    $own = array_values(array_filter($accounts, fn($a) =>
+        (int) $a['branch_id'] === $branchId && empty($a['is_suspense'])));
+    usort($own, fn($a, $b) => [$a['type'] !== 'cash', $a['name']] <=> [$b['type'] !== 'cash', $b['name']]);
+    return $own;
+}
+
+/**
+ * Back to the transfer form after a failed submit — keeping a
+ * settlement's period, branches, amount and note, which otherwise live
+ * only in the report link's query string.
+ */
+function transferFormUrl(): string
+{
+    if (($_POST['settlement_type'] ?? '') !== 'customer_credit_balancing') {
+        return BASE_URL . '/financial-accounts/transfer';
+    }
+    return BASE_URL . '/financial-accounts/transfer?' . http_build_query([
+        'settlement_type' => 'customer_credit_balancing',
+        'period_from'     => $_POST['settles_period_from'] ?? '',
+        'period_to'       => $_POST['settles_period_to'] ?? '',
+        'from_branch'     => $_POST['from_branch'] ?? '',
+        'to_branch'       => $_POST['to_branch'] ?? '',
+        'amount'          => $_POST['amount'] ?? '',
+        'note'            => $_POST['notes'] ?? '',
+    ]);
+}
+
 function showTransferForm(Database $db)
 {
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
     $accounts = $db->fetchAll("SELECT * FROM accounts WHERE is_active = 1 $scopeSql ORDER BY name ASC", $scopeParams);
+
+    // A settlement between two named branches offers only those branches'
+    // own accounts on each side — any of them (cash, bank, MoMo), so a
+    // branch short of cash can pay from its bank — cash pre-selected.
+    $settlementBranches = settlementBranchPair($_GET);
+    $fromAccounts = $settlementBranches ? settlementAccountsFor($accounts, $settlementBranches['from']) : $accounts;
+    $toAccounts   = $settlementBranches ? settlementAccountsFor($accounts, $settlementBranches['to'])   : $accounts;
+    $preselectFrom = $settlementBranches && $fromAccounts ? (int) $fromAccounts[0]['id'] : null;
+    $preselectTo   = $settlementBranches && $toAccounts   ? (int) $toAccounts[0]['id']   : null;
+
     $pageTitle = 'Transfer Funds';
     include APP_PATH . '/views/financial_accounts/transfer.php';
 }
@@ -198,15 +259,15 @@ function executeTransfer(Database $db)
     }
 
     if ($fromAccountId === $toAccountId) {
-        redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Source and destination accounts must be different.');
+        redirect(transferFormUrl(), 'error', 'Source and destination accounts must be different.');
     }
 
     if ($amount <= 0) {
-        redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Transfer amount must be greater than zero.');
+        redirect(transferFormUrl(), 'error', 'Transfer amount must be greater than zero.');
     }
 
     if ($charges < 0) {
-        redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Charges cannot be negative.');
+        redirect(transferFormUrl(), 'error', 'Charges cannot be negative.');
     }
 
     [$scopeSql, $scopeParams] = accountBranchScopeSql();
@@ -214,12 +275,25 @@ function executeTransfer(Database $db)
     $toAccount   = $db->fetchOne("SELECT * FROM accounts WHERE id = ? AND is_active = 1 $scopeSql", array_merge([$toAccountId], $scopeParams));
 
     if (!$fromAccount || !$toAccount) {
-        redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'One or both selected accounts are invalid or inactive.');
+        redirect(transferFormUrl(), 'error', 'One or both selected accounts are invalid or inactive.');
+    }
+
+    // Same rule as the form: a settlement between two named branches must
+    // leave one of the paying branch's own accounts and land in one of the
+    // receiving branch's, or the report nets it against the wrong branches.
+    $settlementBranches = settlementBranchPair($_POST);
+    if ($settlementBranches) {
+        if (!settlementAccountsFor([$fromAccount], $settlementBranches['from'])) {
+            redirect(transferFormUrl(), 'error', 'Pay this settlement from one of ' . branchName($settlementBranches['from']) . "'s own accounts.");
+        }
+        if (!settlementAccountsFor([$toAccount], $settlementBranches['to'])) {
+            redirect(transferFormUrl(), 'error', 'Pay this settlement into one of ' . branchName($settlementBranches['to']) . "'s own accounts.");
+        }
     }
 
     $totalDeduction = $amount + $charges;
     if ($fromAccount['balance'] < $totalDeduction) {
-        redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Insufficient balance in the source account.');
+        redirect(transferFormUrl(), 'error', 'Insufficient balance in the source account.');
     }
 
     try {
@@ -279,7 +353,7 @@ function executeTransfer(Database $db)
         redirect(BASE_URL . '/financial-accounts', 'success', 'Funds transferred successfully.');
     } catch (Exception $e) {
         $db->rollback();
-        redirect(BASE_URL . '/financial-accounts/transfer', 'error', 'Transfer failed: ' . $e->getMessage());
+        redirect(transferFormUrl(), 'error', 'Transfer failed: ' . $e->getMessage());
     }
 }
 

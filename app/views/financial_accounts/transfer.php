@@ -19,7 +19,15 @@
     <?php if ($settlementType === 'customer_credit_balancing'): ?>
         <div class="bg-blue-50 border border-blue-200 text-blue-800 text-sm rounded-lg p-4 mb-4">
             🔁 <strong>Recording a customer-credit branch settlement.</strong>
-            Pick the accounts this settlement actually moves money between, then confirm.
+            <?php if ($settlementBranches): ?>
+                <strong><?= e(branchName($settlementBranches['from'])) ?></strong> pays
+                <strong><?= e(branchName($settlementBranches['to'])) ?></strong>. Pay from any of
+                <?= e(branchName($settlementBranches['from'])) ?>'s accounts into any of
+                <?= e(branchName($settlementBranches['to'])) ?>'s. Shared company-wide accounts aren't
+                listed because the report can't tell which branch they belong to.
+            <?php else: ?>
+                Pick the accounts this settlement actually moves money between, then confirm.
+            <?php endif; ?>
             <?php if ($settlesPeriodFrom && $settlesPeriodTo): ?>
                 <br>Settling the <strong><?= formatDate($settlesPeriodFrom, 'd M Y') ?> – <?= formatDate($settlesPeriodTo, 'd M Y') ?></strong>
                 imbalance — once recorded, the settlement report will net this back out of that period.
@@ -37,15 +45,19 @@
                     <input type="hidden" name="settles_period_from" value="<?= e($settlesPeriodFrom) ?>">
                     <input type="hidden" name="settles_period_to" value="<?= e($settlesPeriodTo) ?>">
                 <?php endif; ?>
+                <?php if ($settlementBranches): ?>
+                    <input type="hidden" name="from_branch" value="<?= $settlementBranches['from'] ?>">
+                    <input type="hidden" name="to_branch" value="<?= $settlementBranches['to'] ?>">
+                <?php endif; ?>
             <?php endif; ?>
 
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1">Source Account (From) *</label>
                 <select name="from_account_id" id="from_account_id" required onchange="updateSourceBalance()"
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                    <option value="">-- Select Source Account --</option>
-                    <?php foreach ($accounts as $account): ?>
-                        <option value="<?= $account['id'] ?>" data-balance="<?= $account['balance'] ?>">
+                    <option value=""><?= $settlementBranches && !$fromAccounts ? '-- ' . e(branchName($settlementBranches['from'])) . ' has no accounts --' : '-- Select Source Account --' ?></option>
+                    <?php foreach ($fromAccounts as $account): ?>
+                        <option value="<?= $account['id'] ?>" data-balance="<?= $account['balance'] ?>" <?= (int) $account['id'] === $preselectFrom ? 'selected' : '' ?>>
                             <?= e($account['name']) ?> (Balance: <?= formatMoney($account['balance']) ?>)
                         </option>
                     <?php endforeach; ?>
@@ -57,9 +69,9 @@
                 <label class="block text-sm font-semibold text-gray-700 mb-1">Destination Account (To) *</label>
                 <select name="to_account_id" required
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                    <option value="">-- Select Destination Account --</option>
-                    <?php foreach ($accounts as $account): ?>
-                        <option value="<?= $account['id'] ?>">
+                    <option value=""><?= $settlementBranches && !$toAccounts ? '-- ' . e(branchName($settlementBranches['to'])) . ' has no accounts --' : '-- Select Destination Account --' ?></option>
+                    <?php foreach ($toAccounts as $account): ?>
+                        <option value="<?= $account['id'] ?>" <?= (int) $account['id'] === $preselectTo ? 'selected' : '' ?>>
                             <?= e($account['name']) ?> (Balance: <?= formatMoney($account['balance']) ?>)
                         </option>
                     <?php endforeach; ?>
@@ -117,6 +129,7 @@
             balanceText.innerText = "";
         }
     }
+    updateSourceBalance();
 </script>
 
 <?php include APP_PATH . '/views/layout/footer.php'; ?>
