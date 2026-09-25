@@ -302,6 +302,11 @@
                                 <a href="<?= BASE_URL ?>/reports/low-stock" class="dropdown-item">
                                     ⚠️ Low Stock Alert
                                 </a>
+                                <?php if (expiryTrackingEnabled()): ?>
+                                <a href="<?= BASE_URL ?>/reports/expiry" class="dropdown-item">
+                                    ⏳ Expiry Report
+                                </a>
+                                <?php endif; ?>
                                 <?php if (planAllows('advanced_reports')): ?>
                                 <div class="border-t my-1"></div>
                                 <a href="<?= BASE_URL ?>/reports/receivables" class="dropdown-item">
@@ -636,6 +641,13 @@
                                     @click="mobileOpen = false">
                                     ⚠️ Low Stock Alert
                                 </a>
+                                <?php if (expiryTrackingEnabled()): ?>
+                                <a href="<?= BASE_URL ?>/reports/expiry"
+                                    class="nav-link block"
+                                    @click="mobileOpen = false">
+                                    ⏳ Expiry Report
+                                </a>
+                                <?php endif; ?>
                                 <?php if (planAllows('advanced_reports')): ?>
                                 <a href="<?= BASE_URL ?>/reports/receivables"
                                     class="nav-link block"

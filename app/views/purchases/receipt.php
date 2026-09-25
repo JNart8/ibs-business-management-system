@@ -452,6 +452,13 @@
                             <td>
                                 <div class="product-name"><?= e($item['product_name']) ?></div>
                                 <div class="product-sku">SKU: <?= e($item['sku']) ?></div>
+                                <?php if (($item['batch_number'] ?? null) !== null || ($item['expiry_date'] ?? null) !== null): ?>
+                                    <div class="product-sku">
+                                        <?= $item['batch_number'] !== null ? 'Batch ' . e($item['batch_number']) : '' ?>
+                                        <?= $item['batch_number'] !== null && $item['expiry_date'] !== null ? ' · ' : '' ?>
+                                        <?= $item['expiry_date'] !== null ? 'Exp ' . formatDate($item['expiry_date'], 'd M Y') : '' ?>
+                                    </div>
+                                <?php endif; ?>
                             </td>
                             <td class="text-center">
                                 <strong><?= formatQty($item['quantity']) ?></strong> <?= e($item['unit'] ?? 'pcs') ?>

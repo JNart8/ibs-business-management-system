@@ -60,6 +60,15 @@ switch ($action) {
         lowStockAlerts($db);
         break;
 
+    case 'batches':
+        // JSON: a tracked product's batches here, for the Stock Out form
+        if (!$id) {
+            http_response_code(400);
+            break;
+        }
+        productBatchesJson($db, $id);
+        break;
+
     case 'product':
         // View movements for a single product
         if (!$id) redirect(BASE_URL . '/stock', 'error', 'Product ID required');
@@ -198,14 +207,15 @@ function showStockInForm(Database $db)
     // Restore from old input after a validation error
     $oldProductId = intval($_SESSION['old_input']['product_id'] ?? 0);
 
+    $trackExpiry = trackExpirySql('products');
     if ($oldProductId > 0) {
         $preProduct = $db->fetchOne(
-            "SELECT id, sku, name, current_stock, unit, cost_price FROM products WHERE id = ? AND is_active = 1",
+            "SELECT id, sku, name, current_stock, unit, cost_price, $trackExpiry AS track_expiry FROM products WHERE id = ? AND is_active = 1",
             [$oldProductId]
         );
     } elseif (!empty($_GET['product'])) {
         $preProduct = $db->fetchOne(
-            "SELECT id, sku, name, current_stock, unit, cost_price FROM products WHERE id = ? AND is_active = 1",
+            "SELECT id, sku, name, current_stock, unit, cost_price, $trackExpiry AS track_expiry FROM products WHERE id = ? AND is_active = 1",
             [(int)$_GET['product']]
         );
     }
@@ -252,6 +262,13 @@ function processStockIn(Database $db)
     $product = $db->fetchOne("SELECT * FROM products WHERE id = ? AND is_active = 1", [$productId]);
     if (!$product) $errors[] = 'Product not found';
 
+    $batch = null;
+    if ($product && expiryTrackingEnabled() && $product['track_expiry']) {
+        $parsed = parseBatchInput($_POST['batch_number'] ?? '', $_POST['expiry_date'] ?? '', true);
+        if ($parsed['error']) $errors[] = $parsed['error'];
+        $batch = $parsed['batch'];
+    }
+
     if (!empty($errors)) {
         $_SESSION['old_input'] = $_POST;
         redirect(BASE_URL . '/stock/in', 'error', implode(' | ', $errors));
@@ -267,7 +284,7 @@ function processStockIn(Database $db)
 
         // Update this branch's stock (also keeps products.current_stock,
         // the company-wide total, in sync automatically)
-        adjustBranchStock($db, $productId, $branchId, $quantity);
+        adjustBranchStock($db, $productId, $branchId, $quantity, $batch);
 
         // Cost price is a product-level (not branch-level) field
         if ($costPrice > 0) {
@@ -278,14 +295,16 @@ function processStockIn(Database $db)
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 previous_stock, new_stock, notes, user_id, branch_id)
-            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?)
+                 previous_stock, new_stock, notes, batch_number, expiry_date, user_id, branch_id)
+            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?, ?)
         ", [
             $productId,
             $quantity,
             $prevStock,
             $newStock,
             trim(($reference ? "Ref: $reference. " : '') . $notes),
+            $batch['batch_number'] ?? null,
+            $batch['expiry_date'] ?? null,
             $userId,
             $branchId
         ]);
@@ -304,6 +323,20 @@ function processStockIn(Database $db)
 }
 
 /**
+ * JSON list of a product's batches with stock at the active branch,
+ * earliest expiry first, each with its expiry_status — empty for an
+ * untracked product or while tracking is off in Settings.
+ */
+function productBatchesJson(Database $db, mixed $productId)
+{
+    header('Content-Type: application/json');
+    $product = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$productId]);
+    echo json_encode(expiryTrackingEnabled() && !empty($product['track_expiry'])
+        ? productBatches($db, $productId, activeBranchId())
+        : []);
+}
+
+/**
  * Show Stock Out form (manual — sales handle this automatically)
  */
 function showStockOutForm(Database $db)
@@ -311,7 +344,7 @@ function showStockOutForm(Database $db)
     $preProduct = null;
     if (!empty($_GET['product'])) {
         $preProduct = $db->fetchOne(
-            "SELECT id, sku, name, current_stock, unit FROM products WHERE id = ? AND is_active = 1",
+            "SELECT id, sku, name, current_stock, unit, " . trackExpirySql('products') . " AS track_expiry FROM products WHERE id = ? AND is_active = 1",
             [(int)$_GET['product']]
         );
         if ($preProduct) {
@@ -353,6 +386,23 @@ function processStockOut(Database $db)
         $errors[] = "Not enough stock at " . branchName($branchId) . ". Available: {$branchStockAvailable} {$product['unit']}";
     }
 
+    // A tracked product's stock can be taken from one chosen batch (say,
+    // the expired one being written off); none chosen = earliest expiry
+    // first, like any other stock leaving
+    $batch   = null;
+    $batchId = intval($_POST['batch_id'] ?? 0);
+    if ($product && $batchId > 0 && expiryTrackingEnabled() && $product['track_expiry']) {
+        $batch = $db->fetchOne(
+            "SELECT * FROM product_batches WHERE id = ? AND product_id = ? AND branch_id = ? AND quantity > 0",
+            [$batchId, $productId, $branchId]
+        );
+        if (!$batch) {
+            $errors[] = 'That batch has no stock left here';
+        } elseif ($quantity > floatval($batch['quantity'])) {
+            $errors[] = 'Only ' . formatQty($batch['quantity']) . " {$product['unit']} left in that batch";
+        }
+    }
+
     if (!empty($errors)) {
         $_SESSION['old_input'] = $_POST;
         redirect(BASE_URL . '/stock/out', 'error', implode(' | ', $errors));
@@ -365,19 +415,24 @@ function processStockOut(Database $db)
     try {
         $db->beginTransaction();
 
+        if ($batch) {
+            takeFromBatch($db, $productId, $branchId, $batch['batch_number'], $batch['expiry_date'], $quantity);
+        }
         adjustBranchStock($db, $productId, $branchId, -$quantity);
 
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 previous_stock, new_stock, notes, user_id, branch_id)
-            VALUES (?, 'out', ?, 'adjustment', ?, ?, ?, ?, ?)
+                 previous_stock, new_stock, notes, batch_number, expiry_date, user_id, branch_id)
+            VALUES (?, 'out', ?, 'adjustment', ?, ?, ?, ?, ?, ?, ?)
         ", [
             $productId,
             $quantity,
             $prevStock,
             $newStock,
             trim("Reason: $reason" . ($notes ? ". $notes" : '')),
+            $batch['batch_number'] ?? null,
+            $batch['expiry_date'] ?? null,
             $userId,
             $branchId
         ]);

@@ -1450,9 +1450,14 @@ function getBranchStock(mixed $productId, mixed $branchId = null)
  * products.current_stock directly, or the two will drift apart.
  *
  * Upserts the branch_stock row (a product may not have had any
- * recorded stock at this branch yet).
+ * recorded stock at this branch yet). For a product tracked by batch,
+ * also brings its batches at this branch back in line — see
+ * syncBranchBatches(). Stock received ($delta > 0) goes into $batch
+ * (['batch_number' => ?string, 'expiry_date' => ?'Y-m-d']) when given,
+ * else into the unknown-expiry batch; $batch is ignored for removals,
+ * which always take the earliest expiry first.
  */
-function adjustBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $delta)
+function adjustBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $delta, ?array $batch = null)
 {
     $db->query("
         INSERT INTO branch_stock (product_id, branch_id, quantity)
@@ -1461,6 +1466,12 @@ function adjustBranchStock(Database $db, mixed $productId, mixed $branchId, mixe
     ", [$productId, $branchId, $delta]);
 
     recalcProductTotalStock($db, $productId);
+    if (productTracksExpiry($db, $productId)) {
+        if ($batch !== null && $delta > 0) {
+            addToBatch($db, $productId, $branchId, $batch['batch_number'] ?? null, $batch['expiry_date'] ?? null, (float) $delta);
+        }
+        syncBranchBatches($db, $productId, $branchId);
+    }
 
     return getBranchStock($productId, $branchId);
 }
@@ -1469,10 +1480,12 @@ function adjustBranchStock(Database $db, mixed $productId, mixed $branchId, mixe
  * Set a product's stock at a specific branch to an absolute value
  * (used by manual stock adjustment, not by sales/purchases, which
  * should use adjustBranchStock() with a relative delta instead).
- * Also keeps products.current_stock in sync.
+ * Also keeps products.current_stock in sync. Any increase goes into
+ * $batch when given, as in adjustBranchStock().
  */
-function setBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $newQuantity)
+function setBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $newQuantity, ?array $batch = null)
 {
+    $increase = $newQuantity - getBranchStock($productId, $branchId);
     $db->query("
         INSERT INTO branch_stock (product_id, branch_id, quantity)
         VALUES (?, ?, ?)
@@ -1480,6 +1493,12 @@ function setBranchStock(Database $db, mixed $productId, mixed $branchId, mixed $
     ", [$productId, $branchId, $newQuantity]);
 
     recalcProductTotalStock($db, $productId);
+    if (productTracksExpiry($db, $productId)) {
+        if ($batch !== null && $increase > 0) {
+            addToBatch($db, $productId, $branchId, $batch['batch_number'] ?? null, $batch['expiry_date'] ?? null, (float) $increase);
+        }
+        syncBranchBatches($db, $productId, $branchId);
+    }
 }
 
 /**
@@ -1497,6 +1516,579 @@ function recalcProductTotalStock(Database $db, mixed $productId)
     $totalValue = floatval($total['total'] ?? 0);
     $db->query("UPDATE products SET current_stock = ? WHERE id = ?", [$totalValue, $productId]);
     return $totalValue;
+}
+
+// ============================================================
+// BATCH & EXPIRY TRACKING
+// ============================================================
+// A tracked product's stock at a branch is split into batches
+// (product_batches: batch number, expiry date, quantity) that always
+// add up to its branch_stock quantity. branch_stock stays the source
+// of truth for "how much is here"; the batches only say which expiry
+// dates that stock carries. adjustBranchStock()/setBranchStock() keep
+// the two in step via syncBranchBatches(), so no stock-changing action
+// has to know about batches to leave them consistent.
+//
+// The bookkeeping follows products.track_expiry alone. The company-wide
+// settings.track_expiry switch only decides whether any of it is shown
+// or asked for — so switching it off and on again never leaves batches
+// out of date.
+
+/**
+ * Is batch & expiry tracking switched on for this install (Settings)?
+ * Reads SELECT * so this is safely false before the migration has run.
+ * Cached per request like currentPlan().
+ */
+function expiryTrackingEnabled(): bool
+{
+    static $enabled = null;
+    if ($enabled === null) {
+        $row = Database::getInstance()->fetchOne("SELECT * FROM settings ORDER BY id ASC LIMIT 1");
+        $enabled = !empty($row['track_expiry']);
+    }
+    return $enabled;
+}
+
+/**
+ * Batches expiring within this many days count as "expiring soon".
+ */
+function expiryWarningDays(): int
+{
+    static $days = null;
+    if ($days === null) {
+        $row = Database::getInstance()->fetchOne("SELECT * FROM settings ORDER BY id ASC LIMIT 1");
+        $days = max(1, (int) ($row['expiry_warning_days'] ?? 90));
+    }
+    return $days;
+}
+
+/**
+ * Is this product's stock tracked by batch? SELECT * so stock changes
+ * keep working on a database the migration hasn't reached yet.
+ */
+function productTracksExpiry(Database $db, mixed $productId): bool
+{
+    $row = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$productId]);
+    return !empty($row['track_expiry']);
+}
+
+/**
+ * Switch batch tracking on or off for a product. Switching it on files
+ * the stock already at each branch as an unknown-expiry batch (or, if
+ * it was tracked before, reconciles its old batches with today's stock).
+ * Switching it off leaves the batches as they are, just no longer kept
+ * up to date — switching back on reconciles them again.
+ */
+function setProductTrackExpiry(Database $db, mixed $productId, bool $track): void
+{
+    $db->query("UPDATE products SET track_expiry = ? WHERE id = ?", [$track ? 1 : 0, $productId]);
+    if ($track) {
+        syncProductBatches($db, $productId);
+    }
+}
+
+/**
+ * syncBranchBatches() for every branch that has stock or batches of
+ * this product.
+ */
+function syncProductBatches(Database $db, mixed $productId): void
+{
+    $branches = $db->fetchAll("
+        SELECT branch_id FROM branch_stock WHERE product_id = ?
+        UNION
+        SELECT branch_id FROM product_batches WHERE product_id = ?
+    ", [$productId, $productId]);
+    foreach ($branches as $b) {
+        syncBranchBatches($db, $productId, $b['branch_id']);
+    }
+}
+
+/**
+ * Make a product's batches at a branch add up to its branch_stock
+ * quantity again. Stock that isn't in any batch yet goes into the
+ * unknown-expiry batch; stock that has left is taken from the batches
+ * earliest expiry first (unknown expiry counts as earliest — it's the
+ * oldest stock). Negative branch stock counts as zero, since a batch
+ * can't hold less than nothing.
+ */
+function syncBranchBatches(Database $db, mixed $productId, mixed $branchId): void
+{
+    $target  = max(0.0, getBranchStock($productId, $branchId));
+    $batches = $db->fetchAll("
+        SELECT id, quantity FROM product_batches
+        WHERE product_id = ? AND branch_id = ? AND quantity > 0
+        ORDER BY expiry_date IS NOT NULL, expiry_date, id
+        FOR UPDATE
+    ", [$productId, $branchId]);
+    $inBatches = array_sum(array_map('floatval', array_column($batches, 'quantity')));
+
+    $diff = round($target - $inBatches, 3);
+    if (abs($diff) < 0.0005) {
+        return;
+    }
+    if ($diff > 0) {
+        addToBatch($db, $productId, $branchId, null, null, $diff);
+        return;
+    }
+
+    $toTake = -$diff;
+    foreach ($batches as $batch) {
+        $take = min($toTake, floatval($batch['quantity']));
+        $db->query(
+            "UPDATE product_batches SET quantity = ROUND(quantity - ?, 3) WHERE id = ?",
+            [$take, $batch['id']]
+        );
+        $toTake = round($toTake - $take, 3);
+        if ($toTake < 0.0005) {
+            break;
+        }
+    }
+}
+
+/**
+ * Add stock to the batch with this batch number and expiry date at a
+ * branch, creating it if it doesn't exist yet. Nulls mean unknown.
+ * Only adjusts product_batches — callers go through adjustBranchStock()
+ * for the stock itself.
+ */
+function addToBatch(Database $db, mixed $productId, mixed $branchId, ?string $batchNumber, ?string $expiryDate, float $quantity): void
+{
+    $existing = $db->fetchOne("
+        SELECT id FROM product_batches
+        WHERE product_id = ? AND branch_id = ? AND batch_number <=> ? AND expiry_date <=> ?
+        ORDER BY id LIMIT 1
+    ", [$productId, $branchId, $batchNumber, $expiryDate]);
+
+    if ($existing) {
+        $db->query(
+            "UPDATE product_batches SET quantity = ROUND(quantity + ?, 3) WHERE id = ?",
+            [$quantity, $existing['id']]
+        );
+        return;
+    }
+    $db->query("
+        INSERT INTO product_batches (product_id, branch_id, batch_number, expiry_date, quantity)
+        VALUES (?, ?, ?, ?, ?)
+    ", [$productId, $branchId, $batchNumber, $expiryDate, round($quantity, 3)]);
+}
+
+/**
+ * A product's batches with stock at a branch, earliest expiry first
+ * (unknown expiry first of all), each with its expiry_status — see
+ * batchExpiryStatus().
+ */
+function productBatches(Database $db, mixed $productId, mixed $branchId): array
+{
+    $rows = $db->fetchAll("
+        SELECT id, batch_number, expiry_date, quantity, created_at
+        FROM product_batches
+        WHERE product_id = ? AND branch_id = ? AND quantity > 0
+        ORDER BY expiry_date IS NOT NULL, expiry_date, id
+    ", [$productId, $branchId]);
+    foreach ($rows as &$row) {
+        $row += batchExpiryStatus($row['expiry_date']);
+    }
+    return $rows;
+}
+
+/**
+ * Where an expiry date stands today: ['expiry_status' => 'unknown' |
+ * 'expired' | 'soon' | 'ok', 'days_to_expiry' => int|null]. A batch is
+ * still usable on its expiry date and expired from the day after.
+ * "Soon" means within expiryWarningDays().
+ */
+function batchExpiryStatus(?string $expiryDate): array
+{
+    if ($expiryDate === null || $expiryDate === '') {
+        return ['expiry_status' => 'unknown', 'days_to_expiry' => null];
+    }
+    $days = (int) (new DateTime('today'))->diff(new DateTime($expiryDate))->format('%r%a');
+    $status = match (true) {
+        $days < 0                     => 'expired',
+        $days <= expiryWarningDays()  => 'soon',
+        default                       => 'ok',
+    };
+    return ['expiry_status' => $status, 'days_to_expiry' => $days];
+}
+
+/**
+ * SELECT expression for a product's track_expiry flag, for lists and
+ * searches that tell forms which products need batch fields. A plain 0
+ * while tracking is off in Settings, so no form asks for batches then
+ * (and the query still runs before the migration).
+ */
+function trackExpirySql(string $productAlias = 'p'): string
+{
+    return expiryTrackingEnabled() ? "{$productAlias}.track_expiry" : '0';
+}
+
+/**
+ * Validate a batch number and expiry date typed or imported for stock
+ * received. Returns ['batch' => ['batch_number' => ?string,
+ * 'expiry_date' => ?string], 'error' => ?string]. The batch number is
+ * optional (not every supplier prints one); the expiry date is required
+ * when $expiryRequired, must be a real YYYY-MM-DD date, and can't be
+ * before $receivedOn ('Y-m-d') — stock can't arrive already expired.
+ */
+function parseBatchInput(mixed $batchNumber, mixed $expiryDate, bool $expiryRequired, ?string $receivedOn = null): array
+{
+    $batchNumber = trim((string) $batchNumber);
+    $expiryDate  = trim((string) $expiryDate);
+    $fail = fn(string $error) => ['batch' => null, 'error' => $error];
+
+    if (mb_strlen($batchNumber) > 50) {
+        return $fail('Batch number can be at most 50 characters');
+    }
+    if ($expiryDate === '') {
+        if ($expiryRequired) {
+            return $fail('Expiry date is required');
+        }
+    } else {
+        $date = DateTime::createFromFormat('!Y-m-d', $expiryDate);
+        if (!$date || $date->format('Y-m-d') !== $expiryDate) {
+            return $fail("Expiry date '{$expiryDate}' must be a date in YYYY-MM-DD format");
+        }
+        $receivedOn ??= date('Y-m-d');
+        if ($expiryDate < $receivedOn) {
+            return $fail('Expiry date ' . formatDate($expiryDate, 'd M Y') . ' is before the stock was received');
+        }
+    }
+
+    return [
+        'batch' => [
+            'batch_number' => $batchNumber !== '' ? $batchNumber : null,
+            'expiry_date'  => $expiryDate !== '' ? $expiryDate : null,
+        ],
+        'error' => null,
+    ];
+}
+
+/**
+ * Take up to $quantity from one batch at a branch (as much as it still
+ * holds). Returns how much was taken. Only adjusts product_batches.
+ */
+function takeFromBatch(Database $db, mixed $productId, mixed $branchId, ?string $batchNumber, ?string $expiryDate, float $quantity): float
+{
+    $batch = $db->fetchOne("
+        SELECT id, quantity FROM product_batches
+        WHERE product_id = ? AND branch_id = ? AND batch_number <=> ? AND expiry_date <=> ? AND quantity > 0
+        ORDER BY id LIMIT 1
+        FOR UPDATE
+    ", [$productId, $branchId, $batchNumber, $expiryDate]);
+    if (!$batch) {
+        return 0.0;
+    }
+    $take = round(min($quantity, floatval($batch['quantity'])), 3);
+    $db->query("UPDATE product_batches SET quantity = ROUND(quantity - ?, 3) WHERE id = ?", [$take, $batch['id']]);
+    return $take;
+}
+
+/**
+ * Replace the stock one product's purchase lines delivered at a branch:
+ * $oldLines (being edited away or voided) with $newLines (each
+ * ['quantity' => float, 'batch_number' => ?string, 'expiry_date' =>
+ * ?string]). Moves branch stock by the difference, like
+ * adjustBranchStock().
+ *
+ * For a tracked product, whatever is left of each old line's batch is
+ * taken back out and the new lines' batches are filled — except that
+ * stock already sold from the old batches stays sold: that much is
+ * held back from the new lines, earliest expiry first. So correcting a
+ * mistyped expiry date on a half-sold delivery relabels the half that
+ * is still on the shelf, and voiding it removes that half plus, from
+ * the earliest-expiring other stock, as much again as was sold.
+ */
+function restockPurchaseLines(Database $db, mixed $productId, mixed $branchId, array $oldLines, array $newLines): void
+{
+    $sum   = fn(array $lines) => array_sum(array_map(fn($l) => floatval($l['quantity']), $lines));
+    $delta = round($sum($newLines) - $sum($oldLines), 3);
+
+    if (productTracksExpiry($db, $productId)) {
+        $sold = 0.0;
+        foreach ($oldLines as $line) {
+            $qty   = floatval($line['quantity']);
+            $sold += $qty - takeFromBatch($db, $productId, $branchId, $line['batch_number'] ?? null, $line['expiry_date'] ?? null, $qty);
+        }
+
+        usort($newLines, fn($a, $b) => [$a['expiry_date'] !== null, $a['expiry_date']] <=> [$b['expiry_date'] !== null, $b['expiry_date']]);
+        foreach ($newLines as $line) {
+            $qty      = floatval($line['quantity']);
+            $heldBack = min($sold, $qty);
+            $sold     = round($sold - $heldBack, 3);
+            if ($qty - $heldBack > 0.0005) {
+                addToBatch($db, $productId, $branchId, $line['batch_number'] ?? null, $line['expiry_date'] ?? null, $qty - $heldBack);
+            }
+        }
+    }
+
+    // Also re-syncs the batches, covering anything the lines above
+    // couldn't place (e.g. more sold than the new lines bring in)
+    if (abs($delta) > 0.0005) {
+        adjustBranchStock($db, $productId, $branchId, $delta);
+    } elseif (productTracksExpiry($db, $productId)) {
+        syncBranchBatches($db, $productId, $branchId);
+    }
+}
+
+/**
+ * Does the POS refuse to sell expired batches? Settings → expired_sales
+ * ('block', the default, or 'warn'). Never while batch tracking is off
+ * in Settings — nothing about expiry is enforced then.
+ */
+function expiredSalesBlocked(): bool
+{
+    static $blocked = null;
+    if ($blocked === null) {
+        $row = Database::getInstance()->fetchOne("SELECT * FROM settings ORDER BY id ASC LIMIT 1");
+        $blocked = ($row['expired_sales'] ?? 'block') !== 'warn';
+    }
+    return expiryTrackingEnabled() && $blocked;
+}
+
+/**
+ * A tracked product's stock at a branch split into in date (unknown
+ * expiry counts as in date) and expired. Both 0 for an untracked
+ * product, whose stock has no expiry.
+ */
+function batchStockSplit(Database $db, mixed $productId, mixed $branchId): array
+{
+    if (!productTracksExpiry($db, $productId)) {
+        return ['in_date' => 0.0, 'expired' => 0.0];
+    }
+    $row = $db->fetchOne("
+        SELECT
+            COALESCE(SUM(CASE WHEN expiry_date IS NOT NULL AND expiry_date < ? THEN 0 ELSE quantity END), 0) AS in_date,
+            COALESCE(SUM(CASE WHEN expiry_date IS NOT NULL AND expiry_date < ? THEN quantity ELSE 0 END), 0) AS expired
+        FROM product_batches
+        WHERE product_id = ? AND branch_id = ? AND quantity > 0
+    ", [date('Y-m-d'), date('Y-m-d'), $productId, $branchId]);
+    return ['in_date' => floatval($row['in_date']), 'expired' => floatval($row['expired'])];
+}
+
+/**
+ * SELECT expression (and its params) for how much of a product's stock
+ * at a branch is expired, for product lists the POS reads — 0 for
+ * untracked products and while tracking is off in Settings. Needs the
+ * product aliased as p.
+ */
+function expiredStockSql(mixed $branchId): array
+{
+    if (!expiryTrackingEnabled()) {
+        return ['0', []];
+    }
+    return ["CASE WHEN p.track_expiry = 1 THEN COALESCE((
+                SELECT SUM(pb.quantity) FROM product_batches pb
+                WHERE pb.product_id = p.id AND pb.branch_id = ? AND pb.quantity > 0 AND pb.expiry_date < ?
+            ), 0) ELSE 0 END", [$branchId, date('Y-m-d')]];
+}
+
+/**
+ * Take up to $quantity of a product from its batches at a branch, the
+ * way stock leaves for customers and other branches: in-date batches
+ * first (unknown expiry first, as the oldest, then earliest expiry),
+ * then — only if $includeExpired — expired ones, oldest first. Returns
+ * what was taken from each batch: [['batch_id', 'batch_number',
+ * 'expiry_date', 'quantity'], ...]. Only adjusts product_batches.
+ */
+function takeFromBatchesFefo(Database $db, mixed $productId, mixed $branchId, float $quantity, bool $includeExpired): array
+{
+    $batches = $db->fetchAll("
+        SELECT id, batch_number, expiry_date, quantity, (expiry_date IS NOT NULL AND expiry_date < ?) AS expired
+        FROM product_batches
+        WHERE product_id = ? AND branch_id = ? AND quantity > 0
+        ORDER BY expired, expiry_date IS NOT NULL, expiry_date, id
+        FOR UPDATE
+    ", [date('Y-m-d'), $productId, $branchId]);
+
+    $taken  = [];
+    $toTake = $quantity;
+    foreach ($batches as $batch) {
+        if ($toTake < 0.0005 || ($batch['expired'] && !$includeExpired)) {
+            break;
+        }
+        $take = round(min($toTake, floatval($batch['quantity'])), 3);
+        $db->query("UPDATE product_batches SET quantity = ROUND(quantity - ?, 3) WHERE id = ?", [$take, $batch['id']]);
+        $taken[] = [
+            'batch_id'     => $batch['id'],
+            'batch_number' => $batch['batch_number'],
+            'expiry_date'  => $batch['expiry_date'],
+            'quantity'     => $take,
+        ];
+        $toTake = round($toTake - $take, 3);
+    }
+    return $taken;
+}
+
+/**
+ * Take a sale line's stock from a branch. For a tracked product it comes
+ * out of the batches as takeFromBatchesFefo() orders them — expired ones
+ * only when expiredSalesBlocked() allows — and each batch used is
+ * recorded against the sale line (sale_item_batches), so a void can put
+ * it back. Moves branch stock like adjustBranchStock().
+ */
+function sellFromBatches(Database $db, mixed $saleItemId, mixed $productId, mixed $branchId, float $quantity): void
+{
+    if (productTracksExpiry($db, $productId)) {
+        foreach (takeFromBatchesFefo($db, $productId, $branchId, $quantity, !expiredSalesBlocked()) as $t) {
+            $db->query(
+                "INSERT INTO sale_item_batches (sale_item_id, batch_id, quantity) VALUES (?, ?, ?)",
+                [$saleItemId, $t['batch_id'], $t['quantity']]
+            );
+        }
+    }
+
+    // Also re-syncs the batches, should they not have covered it all
+    adjustBranchStock($db, $productId, $branchId, -$quantity);
+}
+
+/**
+ * Dispatch a transfer line's stock from the source branch. For a tracked
+ * product it leaves in takeFromBatchesFefo() order (in-date first,
+ * expired last), and each batch sent is recorded against the line
+ * (stock_transfer_item_batches) for receipt or cancellation.
+ */
+function dispatchTransferItemStock(Database $db, mixed $transferItemId, mixed $productId, mixed $fromBranchId, float $quantity): void
+{
+    if (productTracksExpiry($db, $productId)) {
+        foreach (takeFromBatchesFefo($db, $productId, $fromBranchId, $quantity, true) as $t) {
+            $db->query("
+                INSERT INTO stock_transfer_item_batches
+                    (transfer_item_id, source_batch_id, batch_number, expiry_date, quantity)
+                VALUES (?, ?, ?, ?, ?)
+            ", [$transferItemId, $t['batch_id'], $t['batch_number'], $t['expiry_date'], $t['quantity']]);
+        }
+    }
+    adjustBranchStock($db, $productId, $fromBranchId, -$quantity);
+}
+
+/**
+ * Credit a transfer line's received stock to the destination branch, in
+ * the same batches (number and expiry date) it was dispatched in. A
+ * shortfall is taken off the latest-expiring batches: the received
+ * quantity fills the batches earliest expiry first.
+ */
+function receiveTransferItemStock(Database $db, mixed $transferItemId, mixed $productId, mixed $toBranchId, float $quantityReceived): void
+{
+    if (productTracksExpiry($db, $productId)) {
+        $sent = $db->fetchAll("
+            SELECT batch_number, expiry_date, quantity FROM stock_transfer_item_batches
+            WHERE transfer_item_id = ?
+            ORDER BY expiry_date IS NOT NULL, expiry_date, id
+        ", [$transferItemId]);
+        $toPlace = $quantityReceived;
+        foreach ($sent as $s) {
+            $place = round(min($toPlace, floatval($s['quantity'])), 3);
+            if ($place < 0.0005) {
+                break;
+            }
+            addToBatch($db, $productId, $toBranchId, $s['batch_number'], $s['expiry_date'], $place);
+            $toPlace = round($toPlace - $place, 3);
+        }
+    }
+    // Also re-syncs: anything not recorded goes to the unknown-expiry batch
+    adjustBranchStock($db, $productId, $toBranchId, $quantityReceived);
+}
+
+/**
+ * Return a cancelled transfer line's stock to the source branch — into
+ * the batches it left, where recorded.
+ */
+function returnTransferItemStock(Database $db, mixed $transferItemId, mixed $productId, mixed $fromBranchId, float $quantity): void
+{
+    $sent = $db->fetchAll(
+        "SELECT source_batch_id, quantity FROM stock_transfer_item_batches WHERE transfer_item_id = ? AND source_batch_id IS NOT NULL",
+        [$transferItemId]
+    );
+    foreach ($sent as $s) {
+        $db->query("UPDATE product_batches SET quantity = ROUND(quantity + ?, 3) WHERE id = ?", [$s['quantity'], $s['source_batch_id']]);
+    }
+    adjustBranchStock($db, $productId, $fromBranchId, $quantity);
+}
+
+/**
+ * The expiry report: tracked products' batches with stock at the
+ * branches this viewer sees (branchViewSql()), earliest expiry first,
+ * each valued at the product's average cost. Shared by the on-screen
+ * report and its CSV export so the two can never disagree.
+ *
+ * $status: 'attention' (expired or expiring within expiryWarningDays()),
+ * 'expired', 'soon', 'unknown' (no expiry recorded) or 'all'.
+ * Returns ['rows' => [...], 'summary' => counts/quantities/values per
+ * status, over every status but the same branches and category].
+ */
+function expiryReport(Database $db, string $status, int $categoryId = 0): array
+{
+    $today     = date('Y-m-d');
+    $soonUntil = date('Y-m-d', strtotime('+' . expiryWarningDays() . ' days'));
+    [$scopeSql, $scopeParams] = branchViewSql('pb');
+
+    $where  = "WHERE pb.quantity > 0 AND p.track_expiry = 1 $scopeSql";
+    $params = $scopeParams;
+    if ($categoryId > 0) {
+        $where   .= " AND p.category_id = ?";
+        $params[] = $categoryId;
+    }
+    $statusSql = match ($status) {
+        'expired' => ["pb.expiry_date < ?", [$today]],
+        'soon'    => ["pb.expiry_date >= ? AND pb.expiry_date <= ?", [$today, $soonUntil]],
+        'unknown' => ["pb.expiry_date IS NULL", []],
+        'all'     => ["1 = 1", []],
+        default   => ["pb.expiry_date <= ?", [$soonUntil]],   // attention
+    };
+
+    $statusCase = "CASE WHEN pb.expiry_date IS NULL THEN 'unknown'
+                        WHEN pb.expiry_date < ? THEN 'expired'
+                        WHEN pb.expiry_date <= ? THEN 'soon'
+                        ELSE 'ok' END";
+
+    $rows = $db->fetchAll("
+        SELECT pb.id, pb.batch_number, pb.expiry_date, pb.quantity,
+               $statusCase AS expiry_status,
+               DATEDIFF(pb.expiry_date, ?) AS days_to_expiry,
+               p.id AS product_id, p.name, p.sku, p.unit, p.average_cost,
+               pb.quantity * p.average_cost AS value,
+               c.name AS category_name, b.name AS branch_name
+        FROM product_batches pb
+        JOIN products p ON p.id = pb.product_id
+        LEFT JOIN categories c ON c.id = p.category_id
+        LEFT JOIN branches b ON b.id = pb.branch_id
+        $where AND {$statusSql[0]}
+        ORDER BY pb.expiry_date IS NULL, pb.expiry_date, p.name, b.name
+    ", array_merge([$today, $soonUntil, $today], $params, $statusSql[1]));
+
+    $summary = $db->fetchOne("
+        SELECT
+            SUM(s = 'expired') AS expired_batches, COALESCE(SUM(CASE WHEN s = 'expired' THEN v END), 0) AS expired_value,
+            SUM(s = 'soon')    AS soon_batches,    COALESCE(SUM(CASE WHEN s = 'soon'    THEN v END), 0) AS soon_value,
+            SUM(s = 'unknown') AS unknown_batches, COALESCE(SUM(CASE WHEN s = 'unknown' THEN v END), 0) AS unknown_value,
+            COUNT(*)           AS all_batches,     COALESCE(SUM(v), 0) AS all_value
+        FROM (
+            SELECT $statusCase AS s, pb.quantity * p.average_cost AS v
+            FROM product_batches pb
+            JOIN products p ON p.id = pb.product_id
+            $where
+        ) t
+    ", array_merge([$today, $soonUntil], $params));
+
+    return ['rows' => $rows, 'summary' => array_map(fn($v) => $v ?? 0, $summary ?: [])];
+}
+
+/**
+ * Put a voided sale line's stock back at a branch — into the batches it
+ * was taken from, where recorded (see sellFromBatches()). Anything not
+ * recorded (sold before the product was tracked) goes to the
+ * unknown-expiry batch, as any stock received without a batch does.
+ */
+function returnSaleItemStock(Database $db, array $saleItem, mixed $branchId): void
+{
+    $taken = $db->fetchAll(
+        "SELECT batch_id, quantity FROM sale_item_batches WHERE sale_item_id = ?",
+        [$saleItem['id']]
+    );
+    foreach ($taken as $t) {
+        $db->query("UPDATE product_batches SET quantity = ROUND(quantity + ?, 3) WHERE id = ?", [$t['quantity'], $t['batch_id']]);
+    }
+    adjustBranchStock($db, $saleItem['product_id'], $branchId, floatval($saleItem['quantity']));
 }
 
 /**

@@ -124,10 +124,21 @@ function listProducts(Database $db)
     // / branch_stock in functions.php.
     $branchId = activeBranchId();
 
+    // A tracked product's earliest expiry among the batches this branch
+    // still holds
+    $nearestExpirySql = expiryTrackingEnabled()
+        ? "CASE WHEN p.track_expiry = 1 THEN (
+               SELECT MIN(pb.expiry_date) FROM product_batches pb
+               WHERE pb.product_id = p.id AND pb.branch_id = ? AND pb.quantity > 0
+           ) END"
+        : "NULL";
+    $nearestExpiryParams = expiryTrackingEnabled() ? [$branchId] : [];
+
     $products = $db->fetchAll("
         SELECT
             p.id, p.sku, p.barcode, p.name,
             p.selling_price, p.cost_price, p.average_cost,
+            $nearestExpirySql AS nearest_expiry,
             COALESCE(bs.quantity, 0) AS current_stock, p.reorder_level, p.unit, p.is_active,
             c.name AS category_name,
             CASE
@@ -141,7 +152,7 @@ function listProducts(Database $db)
         $where
         ORDER BY p.name ASC
         LIMIT ? OFFSET ?
-    ", array_merge([$branchId], $params, [$perPage, $offset]));
+    ", array_merge($nearestExpiryParams, [$branchId], $params, [$perPage, $offset]));
 
     $stats = $db->fetchOne("
         SELECT
@@ -209,6 +220,16 @@ function createProduct(Database $db)
         $errors[] = 'Barcode already exists';
     }
 
+    $trackExpiry  = expiryTrackingEnabled() && isset($_POST['track_expiry']);
+    $openingBatch = null;
+    if ($trackExpiry && $current_stock > 0) {
+        $parsed = parseBatchInput($_POST['opening_batch_number'] ?? '', $_POST['opening_expiry_date'] ?? '', true);
+        if ($parsed['error']) {
+            $errors[] = 'Opening stock: ' . $parsed['error'];
+        }
+        $openingBatch = $parsed['batch'];
+    }
+
     if (!empty($errors)) {
         $_SESSION['old_input'] = $_POST;
         redirect(BASE_URL . '/products/create', 'error', implode(', ', $errors));
@@ -236,18 +257,27 @@ function createProduct(Database $db)
 
         $productId = $db->lastInsertId();
 
+        // Before the opening stock, so it's filed as a batch
+        if ($trackExpiry) {
+            setProductTrackExpiry($db, $productId, true);
+        }
+
         if ($current_stock > 0) {
             $branchId = activeBranchId();
             // Seeds this branch's stock and keeps products.current_stock
             // (the maintained total) in sync automatically.
-            setBranchStock($db, $productId, $branchId, $current_stock);
+            setBranchStock($db, $productId, $branchId, $current_stock, $openingBatch);
 
             $db->query("
                 INSERT INTO stock_movements
                     (product_id, movement_type, quantity, reference_type,
-                     previous_stock, new_stock, notes, user_id, branch_id)
-                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?, ?)
-            ", [$productId, $current_stock, $current_stock, $_SESSION['user_id'] ?? null, $branchId]);
+                     previous_stock, new_stock, notes, batch_number, expiry_date, user_id, branch_id)
+                VALUES (?, 'in', ?, 'opening', 0, ?, 'Opening stock', ?, ?, ?, ?)
+            ", [
+                $productId, $current_stock, $current_stock,
+                $openingBatch['batch_number'] ?? null, $openingBatch['expiry_date'] ?? null,
+                $_SESSION['user_id'] ?? null, $branchId
+            ]);
         }
 
         redirect(BASE_URL . '/products', 'success', 'Product created successfully');
@@ -339,6 +369,13 @@ function updateProduct(Database $db, mixed $id)
             $is_active,
             $id
         ]);
+
+        // The checkbox is only on the form while tracking is switched on
+        // in Settings — otherwise leave the product's setting alone.
+        $trackExpiry = isset($_POST['track_expiry']);
+        if (expiryTrackingEnabled() && $trackExpiry !== !empty($product['track_expiry'])) {
+            setProductTrackExpiry($db, $id, $trackExpiry);
+        }
 
         // High-risk alert: only a big selling-price *drop* in one edit —
         // routine repricing/promotions happen far too often to flag every
@@ -441,6 +478,11 @@ function viewProduct(Database $db, mixed $id)
     $product['current_stock'] = getBranchStock($product['id']);
     $viewingBranchName = hasMultiBranch() ? activeBranchName() : null;
 
+    // This branch's batches, like the stock figure above
+    $batches = expiryTrackingEnabled() && !empty($product['track_expiry'])
+        ? productBatches($db, $product['id'], activeBranchId())
+        : null;
+
     // Calculate stock value and margin based on Weighted Moving Average Cost
     $stockValue = $product['current_stock'] * $product['average_cost'];
     $margin = $product['selling_price'] > 0
@@ -503,6 +545,8 @@ function viewProduct(Database $db, mixed $id)
             sm.previous_stock,
             sm.new_stock,
             sm.notes,
+            sm.batch_number,
+            sm.expiry_date,
             sm.created_at,
             u.username as recorded_by,
             s.company_name as supplier_name
@@ -578,15 +622,17 @@ function searchProducts(Database $db)
         $params[] = $catId;
     }
 
+    [$expiredSql, $expiredParams] = expiredStockSql($branchId);
     $products = $db->fetchAll("
         SELECT p.id, p.sku, p.barcode, p.name, p.selling_price, p.unit, p.cost_price,
-               COALESCE(bs.quantity, 0) AS current_stock
+               COALESCE(bs.quantity, 0) AS current_stock, " . trackExpirySql() . " AS track_expiry,
+               $expiredSql AS expired_stock
         FROM products p
         LEFT JOIN branch_stock bs ON bs.product_id = p.id AND bs.branch_id = ?
         $where
         ORDER BY p.name ASC
         LIMIT 20
-    ", $params);
+    ", array_merge($expiredParams, $params));
 
     echo json_encode($products);
 }

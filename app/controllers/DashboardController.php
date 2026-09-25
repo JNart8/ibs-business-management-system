@@ -147,7 +147,9 @@ $alerts = [
     'out_of_stock' => 0,
     'low_stock' => 0,
     'overdue_receivables' => 0,
-    'overdue_payables' => 0
+    'overdue_payables' => 0,
+    'expired_batches' => 0,
+    'expiring_batches' => 0,
 ];
 
 try {
@@ -213,6 +215,14 @@ try {
           $opScopeSql
     ", $opScopeParams);
     $alerts['overdue_payables'] = intval($result['count'] ?? 0);
+
+    // Expired / soon-to-expire batches at visible branches (same basis
+    // as the expiry report)
+    if (expiryTrackingEnabled()) {
+        $expirySummary = expiryReport($db, 'expired')['summary'];
+        $alerts['expired_batches']  = intval($expirySummary['expired_batches'] ?? 0);
+        $alerts['expiring_batches'] = intval($expirySummary['soon_batches'] ?? 0);
+    }
 } catch (Exception $e) {
     error_log('Dashboard alerts error: ' . $e->getMessage());
 }

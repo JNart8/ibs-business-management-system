@@ -19,7 +19,8 @@
      ══════════════════════════════════════════════════════════════════════════════ -->
 
 <?php
-$totalAlerts = $alerts['out_of_stock'] + $alerts['low_stock'] + $alerts['overdue_receivables'] + $alerts['overdue_payables'];
+$totalAlerts = $alerts['out_of_stock'] + $alerts['low_stock'] + $alerts['overdue_receivables'] + $alerts['overdue_payables']
+    + $alerts['expired_batches'] + $alerts['expiring_batches'];
 if ($totalAlerts > 0):
 ?>
     <div class="bg-red-50 border-l-4 border-red-500 rounded-lg p-4 mb-6">
@@ -46,6 +47,16 @@ if ($totalAlerts > 0):
                     <?php if ($alerts['overdue_payables'] > 0): ?>
                         <a href="<?= BASE_URL ?>/reports/payables" class="text-sm bg-white rounded px-3 py-2 hover:shadow transition">
                             <span class="font-semibold text-purple-600"><?= $alerts['overdue_payables'] ?></span> Overdue Payables
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($alerts['expired_batches'] > 0): ?>
+                        <a href="<?= BASE_URL ?>/reports/expiry?status=expired" class="text-sm bg-white rounded px-3 py-2 hover:shadow transition">
+                            <span class="font-semibold text-red-600"><?= $alerts['expired_batches'] ?></span> Expired Batch<?= $alerts['expired_batches'] === 1 ? '' : 'es' ?>
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($alerts['expiring_batches'] > 0): ?>
+                        <a href="<?= BASE_URL ?>/reports/expiry?status=soon" class="text-sm bg-white rounded px-3 py-2 hover:shadow transition">
+                            <span class="font-semibold text-yellow-600"><?= $alerts['expiring_batches'] ?></span> Expiring within <?= expiryWarningDays() ?> days
                         </a>
                     <?php endif; ?>
                 </div>

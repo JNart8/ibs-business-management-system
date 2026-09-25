@@ -165,7 +165,7 @@
                         <p class="text-xs mt-1">Search or click a product to add</p>
                     </div>
 
-                    <template x-for="(item, idx) in cart" :key="item.product_id">
+                    <template x-for="(item, idx) in cart" :key="item.key">
                         <div class="px-2 py-1.5">
                             <div class="flex items-center gap-1.5">
                                 <!-- Product Name -->
@@ -222,6 +222,25 @@
                                     &times;
                                 </button>
                             </div>
+
+                            <!-- Batch — only for products tracked by batch & expiry -->
+                            <template x-if="Number(item.track_expiry)">
+                                <div class="flex items-center gap-1.5 mt-1">
+                                    <span class="text-[10px] text-gray-500">Batch</span>
+                                    <input type="text"
+                                        x-model="item.batch_number"
+                                        maxlength="50" placeholder="No. (optional)"
+                                        class="w-24 text-[10px] px-1 py-0.5 border rounded focus:outline-none">
+                                    <span class="text-[10px] text-gray-500">Expiry<span x-show="!item.undated" class="text-red-500">*</span></span>
+                                    <input type="date"
+                                        x-model="item.expiry_date"
+                                        :class="!item.expiry_date && !item.undated ? 'border-red-400' : ''"
+                                        class="text-[10px] px-1 py-0.5 border rounded focus:outline-none">
+                                    <button type="button" @click="addBatchLine(idx)"
+                                        title="Received in more than one batch? Add a line for the next batch."
+                                        class="ml-auto text-[10px] text-blue-600 hover:underline">+ batch</button>
+                                </div>
+                            </template>
                         </div>
                     </template>
                 </div>
@@ -427,6 +446,7 @@
             customPurchaseDate: '',
             activeCategory: null,
             isProcessing: false,
+            nextKey: 1,
             allAccounts: <?= json_encode($financialAccounts) ?>,
             selectedAccountId: 0,
             preselectedProduct: <?= json_encode($preselectedProduct) ?>,
@@ -520,10 +540,29 @@
                         avgCost: parseFloat(product.average_cost) || 0,
                         quantity: 1,
                         discount: 0,
+                        key: this.nextKey++,
+                        track_expiry: Number(product.track_expiry) || 0,
+                        batch_number: '',
+                        expiry_date: '',
+                        undated: false,
                     });
                 }
                 this.productSearch = '';
                 this.productResults = [];
+                this.updateAmountPaid();
+            },
+
+            // Another line for the same product, for stock received in a
+            // second batch
+            addBatchLine(idx) {
+                const line = this.cart[idx];
+                this.cart.splice(idx + 1, 0, {
+                    ...line,
+                    key: this.nextKey++,
+                    quantity: 1,
+                    batch_number: '',
+                    expiry_date: '',
+                });
                 this.updateAmountPaid();
             },
 
@@ -612,6 +651,12 @@
                     return;
                 }
 
+                const missingExpiry = this.cart.find(i => Number(i.track_expiry) && !i.undated && !i.expiry_date);
+                if (missingExpiry) {
+                    alert('Enter the expiry date for ' + missingExpiry.name);
+                    return;
+                }
+
                 this.isProcessing = true;
 
                 const payload = {
@@ -621,6 +666,8 @@
                         quantity: i.quantity,
                         cost: i.cost,
                         discount: i.discount || 0,
+                        batch_number: i.batch_number || '',
+                        expiry_date: i.expiry_date || '',
                     })),
                     discount_pct: this.purchaseDiscount,
                     vat_pct: this.vatPercent,

@@ -329,6 +329,13 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
                     return ['valid' => false, 'error' => ucwords(str_replace('_', ' ', $numCol)) . " must be a number of 0 or more"];
                 }
             }
+            if (expiryTrackingEnabled() && importHasValue($row, 'track_expiry') && importYesNo($row['track_expiry']) === null) {
+                return ['valid' => false, 'error' => "Track Expiry must be yes or no"];
+            }
+            $batchError = importRowBatch($row, importProductWillTrack($db, $row), date('Y-m-d'))['error'];
+            if ($batchError) {
+                return ['valid' => false, 'error' => $batchError];
+            }
             if (importHasValue($row, 'barcode')) {
                 $barcodeOwner = $db->fetchOne("SELECT sku FROM products WHERE barcode = ?", [$row['barcode']]);
                 if ($barcodeOwner && $barcodeOwner['sku'] !== trim($row['sku'])) {
@@ -390,7 +397,7 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
             if (empty($skuVal)) {
                 return ['valid' => false, 'error' => 'SKU is required'];
             }
-            $product = $db->fetchOne("SELECT id FROM products WHERE sku = ? AND is_active = 1", [$skuVal]);
+            $product = $db->fetchOne("SELECT * FROM products WHERE sku = ? AND is_active = 1", [$skuVal]);
             if (!$product) {
                 return ['valid' => false, 'error' => "Product SKU '{$skuVal}' not found or inactive"];
             }
@@ -425,6 +432,12 @@ function validateRow(mixed $type, mixed $row, mixed $mode, Database $db)
                 if (strtotime($dateVal) === false) {
                     return ['valid' => false, 'error' => "Invalid purchase date format '{$dateVal}'"];
                 }
+            }
+
+            $receivedOn = $dateVal !== '' ? date('Y-m-d', strtotime($dateVal)) : date('Y-m-d');
+            $batchError = importRowBatch($row, !empty($product['track_expiry']), $receivedOn)['error'];
+            if ($batchError) {
+                return ['valid' => false, 'error' => $batchError];
             }
 
             $discountPct = floatval($row['discount_percent'] ?? 0);
@@ -475,6 +488,64 @@ function importRow(Database $db, mixed $type, mixed $row, mixed $mode)
 function importHasValue(mixed $row, mixed $key)
 {
     return isset($row[$key]) && $row[$key] !== '';
+}
+
+/**
+ * A yes/no cell as a bool: yes/y/true/1 or no/n/false/0, any case.
+ * Null for anything else, so validation can reject it.
+ */
+function importYesNo(mixed $value): ?bool
+{
+    $value = strtolower(trim((string) $value));
+    if (in_array($value, ['yes', 'y', 'true', '1'], true)) return true;
+    if (in_array($value, ['no', 'n', 'false', '0'], true)) return false;
+    return null;
+}
+
+/**
+ * The track_expiry cell as a bool, or null when it should be left
+ * alone: blank, or batch tracking is off in Settings (the column is
+ * only offered while it's on, like the checkbox on the product form).
+ */
+function importTrackExpiry(mixed $row): ?bool
+{
+    if (!expiryTrackingEnabled() || !importHasValue($row, 'track_expiry')) {
+        return null;
+    }
+    return importYesNo($row['track_expiry']);
+}
+
+/**
+ * The batch an imported row's stock goes into, from its optional
+ * batch_number / expiry_date columns: ['batch' => ?array, 'error' =>
+ * ?string]. Both blank = unknown expiry (a batch can be dated later
+ * through Stock In). Ignored while batch tracking is off in Settings,
+ * like track_expiry. Rejected for a product that isn't tracked, rather
+ * than silently dropped.
+ */
+function importRowBatch(mixed $row, bool $productTracked, string $receivedOn): array
+{
+    if (!expiryTrackingEnabled() || (!importHasValue($row, 'batch_number') && !importHasValue($row, 'expiry_date'))) {
+        return ['batch' => null, 'error' => null];
+    }
+    if (!$productTracked) {
+        return ['batch' => null, 'error' => "Batch number / expiry date given, but this product isn't tracked by batch (set track_expiry to yes on the product)"];
+    }
+    return parseBatchInput($row['batch_number'] ?? '', $row['expiry_date'] ?? '', false, $receivedOn);
+}
+
+/**
+ * Will this products-import row leave the product tracked by batch?
+ * Its track_expiry cell if given, else the product's current setting.
+ */
+function importProductWillTrack(Database $db, mixed $row): bool
+{
+    $trackExpiry = importTrackExpiry($row);
+    if ($trackExpiry !== null) {
+        return $trackExpiry;
+    }
+    $existing = $db->fetchOne("SELECT * FROM products WHERE sku = ?", [trim($row['sku'])]);
+    return !empty($existing['track_expiry']);
 }
 
 /**
@@ -561,8 +632,15 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
             $barcode ?? $existing['barcode'],
             $existing['id']
         ]);
+        // Before the stock, so a newly tracked product's imported stock
+        // is filed as a batch
+        $trackExpiry = importTrackExpiry($row);
+        if ($trackExpiry !== null && $trackExpiry !== !empty($existing['track_expiry'])) {
+            setProductTrackExpiry($db, $existing['id'], $trackExpiry);
+        }
         if (importHasValue($row, 'current_stock')) {
-            setImportedStock($db, $existing['id'], floatval($row['current_stock']), 'adjustment', $userId);
+            $batch = importRowBatch($row, productTracksExpiry($db, $existing['id']), date('Y-m-d'))['batch'];
+            setImportedStock($db, $existing['id'], floatval($row['current_stock']), 'adjustment', $userId, $batch);
         }
         return ['success' => true, 'action' => 'updated'];
     }
@@ -588,9 +666,13 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
         $barcode
     ]);
     $newProductId = $db->lastInsertId();
+    if (importTrackExpiry($row)) {
+        setProductTrackExpiry($db, $newProductId, true);
+    }
     $importedStock = importHasValue($row, 'current_stock') ? floatval($row['current_stock']) : 0;
     if ($importedStock > 0) {
-        setImportedStock($db, $newProductId, $importedStock, 'opening', $userId);
+        $batch = importRowBatch($row, productTracksExpiry($db, $newProductId), date('Y-m-d'))['batch'];
+        setImportedStock($db, $newProductId, $importedStock, 'opening', $userId, $batch);
     }
     return ['success' => true, 'action' => 'created'];
 }
@@ -599,22 +681,24 @@ function importProduct(Database $db, mixed $row, mixed $mode, mixed $userId)
  * Set a product's stock at the importer's active branch to an exact
  * quantity and log the change as a stock movement, so stock history can
  * explain where imported stock came from ('opening' for a new product,
- * 'adjustment' when an update changes it).
+ * 'adjustment' when an update changes it). Stock added goes into $batch
+ * when given (see setBranchStock()).
  */
-function setImportedStock(Database $db, mixed $productId, float $newQty, string $referenceType, mixed $userId)
+function setImportedStock(Database $db, mixed $productId, float $newQty, string $referenceType, mixed $userId, ?array $batch = null)
 {
     $branchId = activeBranchId();
     $prevQty  = getBranchStock($productId, $branchId);
     if (abs($newQty - $prevQty) < 0.0005) {
         return;
     }
-    setBranchStock($db, $productId, $branchId, $newQty);
+    setBranchStock($db, $productId, $branchId, $newQty, $batch);
+    $batch = $newQty > $prevQty ? $batch : null;   // a reduction takes earliest expiry first, not this batch
 
     $db->query("
         INSERT INTO stock_movements
             (product_id, movement_type, quantity, reference_type,
-             previous_stock, new_stock, notes, user_id, branch_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             previous_stock, new_stock, notes, batch_number, expiry_date, user_id, branch_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ", [
         $productId,
         $newQty > $prevQty ? 'in' : 'out',
@@ -623,6 +707,8 @@ function setImportedStock(Database $db, mixed $productId, float $newQty, string 
         $prevQty,
         $newQty,
         'Stock set by CSV import',
+        $batch['batch_number'] ?? null,
+        $batch['expiry_date'] ?? null,
         $userId,
         $branchId
     ]);
@@ -779,6 +865,28 @@ function downloadTemplate(mixed $type)
 
     if (!isset($templates[$type])) {
         die('Invalid type');
+    }
+
+    // Batch columns are only offered while batch tracking is on in Settings
+    if (expiryTrackingEnabled()) {
+        array_push($templates['products']['headers'], 'track_expiry', 'batch_number', 'expiry_date');
+        $expiry = date('Y-m-d', strtotime('+1 year'));
+        foreach ([
+            ['no', '', ''],
+            ['no', '', ''],
+            ['no', '', ''],
+            ['yes', 'CW-2201', $expiry],   // tracked: its stock is this batch
+            ['', '', ''],                  // blank track_expiry = no on create
+        ] as $i => $cells) {
+            array_push($templates['products']['sample'][$i], ...$cells);
+        }
+
+        array_push($templates['purchases']['headers'], 'batch_number', 'expiry_date');
+        foreach ($templates['purchases']['sample'] as $i => $sampleRow) {
+            // PROD-004 is the tracked product in the products template
+            $cells = $sampleRow[1] === 'PROD-004' ? ['CW-2305', $expiry] : ['', ''];
+            array_push($templates['purchases']['sample'][$i], ...$cells);
+        }
     }
 
     $template = $templates[$type];
@@ -1008,24 +1116,30 @@ function importPurchaseGroup(Database $db, mixed $group)
 
     // 3. Insert purchase items, update stock & WMA cost
     foreach ($group['items'] as $item) {
-        $p = $item['_product'];
+        // Fresh, not $item['_product']: an earlier row of this invoice may
+        // be the same product (another batch) and have moved its stock
+        // and average cost already
+        $p = $db->fetchOne("SELECT * FROM products WHERE id = ?", [$item['_product']['id']]);
         $qty = floatval($item['quantity']);
         $unitCost = floatval($item['unit_cost']);
         $lineTotal = $qty * $unitCost;
+        $batch = importRowBatch($item, !empty($p['track_expiry']), substr($purchaseDate, 0, 10))['batch'];
 
         // Insert line item
         $db->query("
             INSERT INTO purchase_items
                 (purchase_id, product_id, product_name, quantity,
-                 unit_cost, discount_percent, line_total)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
+                 unit_cost, discount_percent, line_total, batch_number, expiry_date)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
         ", [
             $purchaseId,
             $p['id'],
             $p['name'],
             $qty,
             $unitCost,
-            $lineTotal
+            $lineTotal,
+            $batch['batch_number'] ?? null,
+            $batch['expiry_date'] ?? null
         ]);
 
         // Calculate new weighted average cost — company-wide, using the
@@ -1055,15 +1169,19 @@ function importPurchaseGroup(Database $db, mixed $group)
         $branchIdForImport = activeBranchId();
         $branchPrevStock = getBranchStock($p['id'], $branchIdForImport);
         $branchNewStock  = $branchPrevStock + $qty;
-        adjustBranchStock($db, $p['id'], $branchIdForImport, $qty);
+        adjustBranchStock($db, $p['id'], $branchIdForImport, $qty, $batch);
 
         // Log stock movement
         $db->query("
             INSERT INTO stock_movements
                 (product_id, movement_type, quantity, reference_type,
-                 reference_id, previous_stock, new_stock, user_id, branch_id, created_at)
-            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?)
-        ", [$p['id'], $qty, $purchaseId, $branchPrevStock, $branchNewStock, $userId, $branchIdForImport, $purchaseDate]);
+                 reference_id, previous_stock, new_stock, batch_number, expiry_date, user_id, branch_id, created_at)
+            VALUES (?, 'in', ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, ?)
+        ", [
+            $p['id'], $qty, $purchaseId, $branchPrevStock, $branchNewStock,
+            $batch['batch_number'] ?? null, $batch['expiry_date'] ?? null,
+            $userId, $branchIdForImport, $purchaseDate
+        ]);
 
         // Log cost history
         $changePercent = $currentAvgCost > 0

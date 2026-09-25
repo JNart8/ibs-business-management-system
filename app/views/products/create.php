@@ -198,6 +198,7 @@
                     type="number"
                     name="current_stock"
                     value="<?= e(old('current_stock', '0')) ?>"
+                    x-model.number="openingStock"
                     min="0" step="0.01"
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="0">
@@ -219,6 +220,55 @@
                 <p class="text-xs text-gray-500 mt-1">Alert when stock falls below this level</p>
             </div>
 
+            <?php if (expiryTrackingEnabled()): ?>
+                <!-- Batch & Expiry Tracking -->
+                <div class="md:col-span-2">
+                    <label class="flex items-start">
+                        <input
+                            type="checkbox"
+                            name="track_expiry"
+                            value="1"
+                            x-model="trackExpiry"
+                            class="w-5 h-5 mt-0.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                        <span class="ml-3 text-sm">
+                            <span class="block font-medium text-gray-700">Track batches and expiry dates</span>
+                            <span class="text-gray-500">For goods that expire, such as medicines or food.</span>
+                        </span>
+                    </label>
+                </div>
+
+                <!-- Opening stock's batch — only asked for a tracked product with opening stock -->
+                <template x-if="trackExpiry && openingStock > 0">
+                    <div class="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Opening stock batch no.</label>
+                            <input
+                                type="text"
+                                name="opening_batch_number"
+                                value="<?= e(old('opening_batch_number')) ?>"
+                                maxlength="50"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                placeholder="Optional">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">
+                                Opening stock expiry date <span class="text-red-500">*</span>
+                            </label>
+                            <input
+                                type="date"
+                                name="opening_expiry_date"
+                                value="<?= e(old('opening_expiry_date')) ?>"
+                                min="<?= date('Y-m-d') ?>"
+                                required
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        </div>
+                        <p class="md:col-span-2 text-xs text-gray-500 -mt-3">
+                            Opening stock from more than one batch? Enter one batch here, then add the rest with Stock In.
+                        </p>
+                    </div>
+                </template>
+            <?php endif; ?>
+
         </div>
 
         <!-- Form Actions -->
@@ -239,6 +289,8 @@
     function productForm() {
         return {
             costPrice: <?= old('cost_price', 0) ?>,
+            openingStock: <?= json_encode((float) old('current_stock', 0)) ?>,
+            trackExpiry: <?= old('track_expiry') ? 'true' : 'false' ?>,
             sellingPrice: <?= old('selling_price', 0) ?>,
             profitMargin: null,
 

@@ -110,6 +110,13 @@
                                                 <span>Current Stock: <?= number_format($item['current_stock']) ?> <?= e($item['unit']) ?></span>
                                             <?php endif; ?>
                                         </div>
+                                        <?php if (($item['batch_number'] ?? null) !== null || ($item['expiry_date'] ?? null) !== null): ?>
+                                            <div class="text-xs text-gray-500">
+                                                <?php if ($item['batch_number'] !== null): ?>Batch <?= e($item['batch_number']) ?><?php endif; ?>
+                                                <?php if ($item['batch_number'] !== null && $item['expiry_date'] !== null): ?><span class="mx-1">•</span><?php endif; ?>
+                                                <?php if ($item['expiry_date'] !== null): ?>Expires <?= formatDate($item['expiry_date'], 'd M Y') ?><?php endif; ?>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="px-4 py-3 text-center">
                                         <span class="font-semibold"><?= formatQty($item['quantity']) ?></span>

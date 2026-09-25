@@ -91,6 +91,50 @@
                 </span>
             </label>
         </fieldset>
+
+        <fieldset class="mt-6 pt-6 border-t">
+            <legend class="font-semibold text-gray-800">Batch &amp; expiry tracking</legend>
+            <p class="text-sm text-gray-500 mt-1 mb-3">
+                For businesses selling goods that expire — medicines, food, agro-chemicals. Once on,
+                you choose which products to track (on each product's edit page), and their stock is
+                kept by batch with its expiry date. Products you don't track work exactly as before.
+                Leave this off if nothing you sell expires.
+            </p>
+            <label class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer">
+                <input type="checkbox" name="track_expiry" value="1"
+                    <?= !empty($settings['track_expiry']) ? 'checked' : '' ?>
+                    class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                <span>
+                    <span class="block font-medium">Track batches and expiry dates</span>
+                    <span class="text-sm text-gray-500">Turning this off hides batch details but keeps them; turning it back on picks up where you left off.</span>
+                </span>
+            </label>
+            <label class="block text-sm font-medium text-gray-700 mt-4 mb-1" for="expiry_warning_days">
+                Warn about batches expiring within
+            </label>
+            <div class="flex items-center gap-2">
+                <input type="number" id="expiry_warning_days" name="expiry_warning_days" min="1" max="730" required
+                    value="<?= (int) ($settings['expiry_warning_days'] ?? 90) ?>"
+                    class="w-28 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <span class="text-sm text-gray-600">days</span>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">
+                90 days suits most pharmacies — suppliers often only take returns up to 3 months before expiry.
+            </p>
+
+            <?php $expiredSales = $settings['expired_sales'] ?? 'block'; ?>
+            <div class="text-sm font-medium text-gray-700 mt-4 mb-2">Selling expired stock</div>
+            <div class="space-y-3">
+                <label class="flex gap-3 rounded-lg border p-4 cursor-pointer">
+                    <input type="radio" name="expired_sales" value="block" <?= $expiredSales !== 'warn' ? 'checked' : '' ?>>
+                    <span><span class="block font-medium">Don't allow it</span><span class="text-sm text-gray-500">Expired batches can't be sold at the POS. Recommended — and what pharmacies need.</span></span>
+                </label>
+                <label class="flex gap-3 rounded-lg border p-4 cursor-pointer">
+                    <input type="radio" name="expired_sales" value="warn" <?= $expiredSales === 'warn' ? 'checked' : '' ?>>
+                    <span><span class="block font-medium">Allow, with a warning</span><span class="text-sm text-gray-500">In-date stock is still sold first; expired stock only once it runs out, flagged in the cart.</span></span>
+                </label>
+            </div>
+        </fieldset>
         <div class="mt-6 flex justify-end">
             <button class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2 rounded-lg">Save setting</button>
         </div>

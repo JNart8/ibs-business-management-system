@@ -42,6 +42,7 @@ if (!in_array($type, [
     'profit-loss',
     'top-selling',
     'low-stock',
+    'expiry',
     'dead-stock',
     'profit-margin',
     'inventory'
@@ -152,6 +153,9 @@ function exportData(Database $db, mixed $type)
         case 'top-selling':
             exportTopSelling($db, $output);
             break;
+        case 'expiry':
+            exportExpiry($db, $output);
+            break;
         case 'low-stock':
             exportLowStock($db, $output);
             break;
@@ -200,8 +204,12 @@ function exportCategories(Database $db, mixed $output)
  */
 function exportProducts(Database $db, mixed $output)
 {
+    // track_expiry only while batch tracking is on in Settings — the
+    // import ignores it otherwise
+    $withTrackExpiry = expiryTrackingEnabled();
+
     // Write headers (same as import template)
-    fputcsv($output, [
+    fputcsv($output, array_merge([
         'sku',
         'name',
         'category',
@@ -212,7 +220,7 @@ function exportProducts(Database $db, mixed $output)
         'reorder_level',
         'unit',
         'barcode'
-    ]);
+    ], $withTrackExpiry ? ['track_expiry'] : []));
 
     // Fetch all active products with category and supplier names.
     // current_stock is the active branch's quantity, not the company-wide
@@ -229,7 +237,7 @@ function exportProducts(Database $db, mixed $output)
             COALESCE(bs.quantity, 0) AS current_stock,
             p.reorder_level,
             p.unit,
-            p.barcode
+            p.barcode" . ($withTrackExpiry ? ", p.track_expiry" : "") . "
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN suppliers s ON p.supplier_id = s.id
@@ -240,7 +248,7 @@ function exportProducts(Database $db, mixed $output)
 
     // Write data rows
     foreach ($products as $prod) {
-        fputcsv($output, [
+        fputcsv($output, array_merge([
             $prod['sku'],
             $prod['name'],
             $prod['category_name'] ?? '',
@@ -251,7 +259,7 @@ function exportProducts(Database $db, mixed $output)
             $prod['reorder_level'],
             $prod['unit'],
             $prod['barcode'] ?? ''
-        ]);
+        ], $withTrackExpiry ? [$prod['track_expiry'] ? 'yes' : 'no'] : []));
     }
 }
 
@@ -1891,6 +1899,56 @@ function exportLowStock(Database $db, mixed $output)
     // Summary
     fputcsv($output, []);
     fputcsv($output, ['Total Estimated Reorder Cost:', number_format($totalOrderCost, 2, '.', '')]);
+    fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
+}
+
+/**
+ * Export the expiry report — the same batches as the on-screen report
+ * (expiryReport()), for the same status/category filters
+ */
+function exportExpiry(Database $db, mixed $output)
+{
+    $status = $_GET['status'] ?? 'attention';
+    if (!in_array($status, ['attention', 'expired', 'soon', 'unknown', 'all'], true)) {
+        $status = 'attention';
+    }
+    $report = expiryReport($db, $status, (int) ($_GET['category'] ?? 0));
+
+    fputcsv($output, ['EXPIRY REPORT']);
+    fputcsv($output, ['Report Date:', date('Y-m-d H:i:s')]);
+    if (hasMultiBranch()) {
+        fputcsv($output, ['Scope:', viewingBranchLabel()]);
+    }
+    fputcsv($output, ['Expiring soon means within:', expiryWarningDays() . ' days']);
+    fputcsv($output, ['Batches:', count($report['rows'])]);
+    fputcsv($output, []);
+
+    $labels = ['expired' => 'EXPIRED', 'soon' => 'EXPIRING SOON', 'ok' => 'OK', 'unknown' => 'UNKNOWN EXPIRY'];
+    fputcsv($output, array_merge(
+        ['Product Name', 'SKU', 'Category'],
+        hasMultiBranch() ? ['Branch'] : [],
+        ['Batch No.', 'Expiry Date', 'Days to Expiry', 'Status', 'Quantity', 'Unit', 'Value at Cost (' . CURRENCY_HOLDER . ')']
+    ));
+    $total = 0;
+    foreach ($report['rows'] as $b) {
+        $total += $b['value'];
+        fputcsv($output, array_merge(
+            [$b['name'], $b['sku'], $b['category_name'] ?? 'N/A'],
+            hasMultiBranch() ? [$b['branch_name']] : [],
+            [
+                $b['batch_number'] ?? '',
+                $b['expiry_date'] ?? '',
+                $b['days_to_expiry'] ?? '',
+                $labels[$b['expiry_status']] ?? $b['expiry_status'],
+                $b['quantity'],
+                $b['unit'],
+                number_format($b['value'], 2, '.', ''),
+            ]
+        ));
+    }
+
+    fputcsv($output, []);
+    fputcsv($output, ['Total Value at Cost:', number_format($total, 2, '.', '')]);
     fputcsv($output, ['Currency:', CURRENCY_HOLDER]);
 }
 
