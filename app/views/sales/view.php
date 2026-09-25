@@ -158,12 +158,14 @@
             </div>
         <?php endif; ?>
 
-        <a href="<?= BASE_URL ?>/sales/void/<?= $sale['id'] ?>"
-            onclick="return confirmDelete('Void sale <?= e($sale['sale_number']) ?>? This will reverse stock changes.')"
-            class="block text-center bg-red-50 hover:bg-red-100 text-red-600 border border-red-200
-              px-4 py-3 rounded-lg text-sm font-semibold transition">
-            ⚠️ Void Sale
-        </a>
+        <?php if (!$isVoided): ?>
+            <a href="<?= BASE_URL ?>/sales/void/<?= $sale['id'] ?>"
+                onclick="return confirmDelete('Void sale <?= e($sale['sale_number']) ?>? This will reverse stock changes.')"
+                class="block text-center bg-red-50 hover:bg-red-100 text-red-600 border border-red-200
+                  px-4 py-3 rounded-lg text-sm font-semibold transition">
+                ⚠️ Void Sale
+            </a>
+        <?php endif; ?>
     </div>
 </div>
 

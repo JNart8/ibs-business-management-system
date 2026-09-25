@@ -1663,12 +1663,27 @@ function voidSale(Database $db, mixed $id)
         redirect(BASE_URL . '/sales', 'error', 'Sale not found');
         return;
     }
+    // Voiding again would return the stock and reverse the payment a
+    // second time
+    if (strpos($sale['notes'] ?? '', '[VOIDED]') !== false) {
+        redirect(BASE_URL . '/sales/view/' . $id, 'error', 'Sale #' . $sale['sale_number'] . ' has already been voided');
+        return;
+    }
 
     $items  = $db->fetchAll("SELECT * FROM sale_items WHERE sale_id = ?", [$id]);
     $userId = $_SESSION['user_id'] ?? null;
 
     try {
         $db->beginTransaction();
+
+        // Again under a row lock, so two void requests at once (a double
+        // click) can't both get past the check above
+        $locked = $db->fetchOne("SELECT notes FROM sales WHERE id = ? FOR UPDATE", [$id]);
+        if (strpos($locked['notes'] ?? '', '[VOIDED]') !== false) {
+            $db->rollback();
+            redirect(BASE_URL . '/sales/view/' . $id, 'error', 'Sale #' . $sale['sale_number'] . ' has already been voided');
+            return;
+        }
 
         // Reverse stock for each item
         $voidBranchId = $sale['branch_id'] ?? activeBranchId();
